@@ -1,0 +1,22 @@
+# Default values for vpc-native.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+CNIMode: vpc-secondary-ip-auto-detect # CNI 模式
+Region:   # 集群地域
+ClusterID: # 集群id
+VPCID:    # 集群 vpc id
+ContainerNetworkCIDRIPv4: # 集群 IPv4 容器网络网段
+ContainerNetworkCIDRIPv6: # 集群 IPv6 容器网络网段
+ENISubnetList: # 弹性网卡子网列表
+SecurityGroupList: # 弹性网卡安全组列表
+CCEGatewayEndpoint:
+BCCEndpoint:
+BBCEndpoint:
+ServiceCIDR: # 集群 ClusterIP 网段
+CCECNIImage: registry.baidubce.com/cce-plugin-dev/cce-cni:test
+
+# Route Controller
+EnableVPCRoute: true
+EnableStaticRoute: false
+

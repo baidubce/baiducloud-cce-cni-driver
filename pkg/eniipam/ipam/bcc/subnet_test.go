@@ -271,8 +271,8 @@ func TestIPAM_ensureSubnetCRDExists(t *testing.T) {
 				informerResyncPeriod:  tt.fields.informerResyncPeriod,
 				gcPeriod:              tt.fields.gcPeriod,
 			}
-			if err := ipam.ensureSubnetCRDExists(tt.args.ctx, tt.args.name); (err != nil) != tt.wantErr {
-				t.Errorf("ensureSubnetCRDExists() error = %v, wantErr %v", err, tt.wantErr)
+			if err := ipam.ensureSubnetCRExists(tt.args.ctx, tt.args.name); (err != nil) != tt.wantErr {
+				t.Errorf("ensureSubnetCRExists() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

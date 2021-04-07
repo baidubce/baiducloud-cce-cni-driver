@@ -23,7 +23,7 @@ VERSION := v1.2.1
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.16.8
 
-#
+# build info
 GIT_COMMIT := $(shell git rev-parse HEAD)
 Git_SUMMARY := $(shell git describe --tags --dirty --always)
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
@@ -62,6 +62,7 @@ build:
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/unnumbered-ptp $(HOMEDIR)/cni/unnumbered-ptp
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cce-ipam $(HOMEDIR)/cmd/eni-ipam
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cni-node-agent $(HOMEDIR)/cmd/node-agent
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/ip-masq-agent $(HOMEDIR)/cmd/ip-masq-agent
 
 # make test, test your code
 test: prepare test-case
@@ -82,6 +83,7 @@ package-bin:
 	# package components
 	mv $(HOMEDIR)/cce-ipam $(OUTDIR)
 	mv $(HOMEDIR)/cni-node-agent $(OUTDIR)
+	mv $(HOMEDIR)/ip-masq-agent $(OUTDIR)
 
 debian-iptables-image:
 	@echo "===> Building debian iptables base image <==="

@@ -37,7 +37,6 @@ import (
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
@@ -104,56 +103,68 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 	}
 
 	run := func(ctx context.Context) {
-		var ipamd ipam.Interface
+		var ipamds [2]ipam.Interface
 		var err error
-		var ipType rpc.IPType
+
+		bccipamd, err := bccipam.NewIPAM(
+			kubeClient,
+			crdClient,
+			bceClient,
+			opts.CNIMode,
+			opts.VPCID,
+			opts.ClusterID,
+			bccipam.SubnetSelectionPolicy(opts.SubnetSelectionPolicy),
+			opts.IPMutatingRate,
+			opts.IPMutatingBurst,
+			opts.ResyncPeriod,
+			opts.ENISyncPeriod,
+			opts.GCPeriod,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create bcc ipamd: %v", err)
+		}
+
+		bbcipamd, err := bbcipam.NewIPAM(
+			kubeClient,
+			crdClient,
+			bceClient,
+			opts.CNIMode,
+			opts.VPCID,
+			opts.ClusterID,
+			opts.ResyncPeriod,
+			opts.GCPeriod,
+			opts.BatchAddIPNum,
+			opts.IPMutatingRate,
+			opts.IPMutatingBurst,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create bbc ipamd: %v", err)
+		}
 
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
 
-		switch opts.CNIMode {
-		case types.CCEModeSecondaryIPVeth, types.CCEModeSecondaryIPIPVlan:
-			ipamd, err = bccipam.NewIPAM(
-				kubeClient,
-				crdClient,
-				bceClient,
-				opts.CNIMode,
-				opts.VPCID,
-				opts.ClusterID,
-				bccipam.SubnetSelectionPolicy(opts.SubnetSelectionPolicy),
-				opts.IPMutatingRate,
-				opts.IPMutatingBurst,
-				opts.ResyncPeriod,
-				opts.ENISyncPeriod,
-				opts.GCPeriod,
-			)
-			ipType = rpc.IPType_BCCMultiENIMultiIPType
-		case types.CCEModeBBCSecondaryIPVeth, types.CCEModeBBCSecondaryIPIPVlan:
-			ipamd, err = bbcipam.NewIPAM(
-				kubeClient,
-				crdClient,
-				bceClient,
-				opts.CNIMode,
-				opts.VPCID,
-				opts.ClusterID,
-				opts.ResyncPeriod,
-				opts.GCPeriod,
-				opts.BatchAddIPNum,
-				opts.IPMutatingRate,
-				opts.IPMutatingBurst,
-			)
-			ipType = rpc.IPType_BBCPrimaryENIMultiIPType
+		switch {
+		case types.IsCCECNIModeBasedOnBCCSecondaryIP(opts.CNIMode):
+			ipamds = [2]ipam.Interface{bccipamd, nil}
+		case types.IsCCECNIModeBasedOnBBCSecondaryIP(opts.CNIMode):
+			ipamds = [2]ipam.Interface{bccipamd, bbcipamd}
+		default:
+			log.Fatalf(ctx, "unsupported cni mode: %v", opts.CNIMode)
 		}
 
-		if err != nil {
-			log.Fatalf(ctx, "failed to create ipamd: %v", err)
-		}
-		go func() {
-			if err := ipamd.Run(ctx, opts.stopCh); err != nil {
-				log.Fatalf(ctx, "ipamd failed to run: %v", err)
+		for _, ipamd := range ipamds {
+			if ipamd == nil {
+				continue
 			}
-		}()
+			go func(ipamd ipam.Interface) {
+				ctx := log.NewContext()
+				if err := ipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "ipamd failed to run: %v", err)
+				}
+			}(ipamd)
+		}
 
-		ipamGrpcBackend := grpc.New(ipamd, ipType, opts.Port)
+		ipamGrpcBackend := grpc.New(ipamds[0], ipamds[1], opts.Port)
 
 		err = ipamGrpcBackend.RunRPCHandler(ctx)
 		if err != nil {

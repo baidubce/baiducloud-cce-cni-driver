@@ -91,9 +91,8 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 				defer tt.fields.ctrl.Finish()
 			}
 			cb := &ENIIPAMGrpcServer{
-				ipamd:  tt.fields.ipamd,
-				port:   tt.fields.port,
-				ipType: tt.fields.ipType,
+				bccipamd: tt.fields.ipamd,
+				port:     tt.fields.port,
 			}
 			got, err := cb.AllocateIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {
@@ -169,9 +168,8 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 		}
 		t.Run(tt.name, func(t *testing.T) {
 			cb := &ENIIPAMGrpcServer{
-				ipamd:  tt.fields.ipamd,
-				port:   tt.fields.port,
-				ipType: tt.fields.ipType,
+				bccipamd: tt.fields.ipamd,
+				port:     tt.fields.port,
 			}
 			got, err := cb.ReleaseIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {

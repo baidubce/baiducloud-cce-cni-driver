@@ -18,6 +18,7 @@ package cniconf
 import (
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	crdlisters "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
@@ -49,6 +50,7 @@ var (
 // Controller updates cni config file on the node
 type Controller struct {
 	kubeClient    kubernetes.Interface
+	metaClient    metadata.Interface
 	ippoolLister  crdlisters.IPPoolLister
 	cniMode       types.ContainerNetworkMode
 	nodeName      string
@@ -68,6 +70,7 @@ type CNIConfigData struct {
 	VethMTU         int
 	MasterInterface string
 	LocalDNSAddress string
+	InstanceType    string
 
 	Subnet string
 }

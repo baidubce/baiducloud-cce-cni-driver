@@ -130,6 +130,8 @@ func (o *Options) loadConfigFromFile(ctx context.Context, file string) (*agentco
 		return nil, err
 	}
 
+	log.Infof(ctx, "node agent config: %v", string(json))
+
 	return c, nil
 }
 
@@ -199,7 +201,7 @@ func (o *Options) applyCNIConfigDefaults(config *agentconfig.CNIConfigController
 }
 
 func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
-	log.Infof(ctx, "cni mode is %v, assume agent runs in CCE", o.config.CNIMode)
+	log.Infof(ctx, "cni mode is %v", o.config.CNIMode)
 
 	var err error
 
@@ -263,21 +265,18 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 		return errors.New("failed to get vpc id from metadata and open api")
 	}
 
-	// route mode
-	if types.IsCCECNIModeBasedOnVPCRoute(o.config.CNIMode) {
-
+	if o.config.CCE.ENIController.ENISyncPeriod <= 0 {
+		o.config.CCE.ENIController.ENISyncPeriod = types.Duration(defaultENISyncPeriod)
 	}
 
-	// secondary ip mode
-	if types.IsCCECNIModeBasedOnBCCSecondaryIP(o.config.CNIMode) {
-		if o.config.CCE.ENIController.ENISyncPeriod <= 0 {
-			o.config.CCE.ENIController.ENISyncPeriod = types.Duration(defaultENISyncPeriod)
-		}
+	if o.config.CCE.ENIController.RouteTableOffset == 0 {
+		o.config.CCE.ENIController.RouteTableOffset = 127
 	}
 
 	return nil
 }
 
+// TODO:
 func (o *Options) validateCCE() error {
 	return nil
 }

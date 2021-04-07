@@ -35,11 +35,6 @@ import (
 )
 
 const (
-	StsType   = "StatefulSet"
-	PodType   = "Pod"
-	OwnerKey  = "cce.io/owner"
-	SubnetKey = "cce.io/subnet-id"
-
 	StsPodAnnotationEnableFixIP       = "cce.io/sts-enable-fix-ip"
 	EnableFixIPTrue                   = "True"
 	StsPodAnnotationFixIPDeletePolicy = "cce.io/sts-pod-fix-ip-delete-policy"

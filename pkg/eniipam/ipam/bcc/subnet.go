@@ -36,12 +36,18 @@ import (
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
+const (
+	// periodically update subnet cr status
+	subnetSyncPeriod = 15 * time.Second
+)
+
 func (ipam *IPAM) syncSubnets(stopCh <-chan struct{}) {
+	// ensure subnet cr is created if ippool changed.
 	watcher := k8swatcher.NewIPPoolWatcher(ipam.crdInformer.Cce().V1alpha1().IPPools(), ipam.informerResyncPeriod)
 	watcher.RegisterEventHandler(ipam)
 	go watcher.Run(1, stopCh)
 
-	err := wait.PollImmediateUntil(10*time.Second, func() (done bool, err error) {
+	err := wait.PollImmediateUntil(subnetSyncPeriod, func() (done bool, err error) {
 		ctx := log.NewContext()
 		_ = ipam.updateSubnetStatus(ctx)
 		return false, nil
@@ -68,7 +74,7 @@ func (ipam *IPAM) SyncIPPool(poolKey string, poolLister crdlisters.IPPoolLister)
 
 	var errs []error
 	for _, s := range pool.Spec.ENI.Subnets {
-		err := ipam.ensureSubnetCRDExists(ctx, s)
+		err := ipam.ensureSubnetCRExists(ctx, s)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -106,13 +112,14 @@ func (ipam *IPAM) updateSubnetStatus(ctx context.Context) error {
 	return nil
 }
 
-func (ipam *IPAM) ensureSubnetCRDExists(ctx context.Context, name string) error {
+func (ipam *IPAM) ensureSubnetCRExists(ctx context.Context, name string) error {
 	subnet, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(name)
 	if err != nil {
 		if !kerrors.IsNotFound(err) {
 			return err
 		}
 
+		// subnet cr not found, start to create
 		resp, err := ipam.cloud.DescribeSubnet(ctx, name)
 		if err != nil {
 			log.Errorf(ctx, "failed to describe vpc subnet %v: %v", name, err)
@@ -150,8 +157,8 @@ func (ipam *IPAM) ensureSubnetCRDExists(ctx context.Context, name string) error 
 	if isSubnetHasNoMoreIP(subnet) {
 		ipam.eventRecorder.Eventf(&v1.ObjectReference{
 			Kind: "Subnet",
-			Name: "SubnetOnceHasNoMoreIP",
-		}, v1.EventTypeWarning, "SubnetOnceHasNoMoreIP", "Subnet %v(%v) once has no more ip to allocate, consider disable it to prevent new eni creation", subnet.Spec.ID, subnet.Spec.CIDR)
+			Name: "SubnetHasNoMoreIP",
+		}, v1.EventTypeWarning, "SubnetHasNoMoreIP", "Subnet %v(%v) once has no more ip to allocate, consider disable it to prevent new eni creation", subnet.Spec.ID, subnet.Spec.CIDR)
 	}
 
 	return nil

@@ -17,6 +17,7 @@ package cniconf
 
 import (
 	"context"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"os"
 
 	"reflect"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	mockmetadata "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
@@ -148,6 +150,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 	type fields struct {
 		ctrl          *gomock.Controller
 		kubeClient    kubernetes.Interface
+		metaClient    metadata.Interface
 		cniMode       types.ContainerNetworkMode
 		nodeName      string
 		config        *v1alpha1.CNIConfigControllerConfiguration
@@ -171,6 +174,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				kernelhandler := mockkernel.NewMockInterface(ctrl)
 				netutil := mockutilnetwork.NewMockInterface(ctrl)
 				kubeClient := kubefake.NewSimpleClientset()
+				metaClient := mockmetadata.NewMockInterface(ctrl)
 
 				kubeClient.CoreV1().Services(IPAMServiceNamespace).Create(&v1.Service{
 					ObjectMeta: metav1.ObjectMeta{
@@ -190,6 +194,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				gomock.InOrder(
 					kernelhandler.EXPECT().DetectKernelVersion(gomock.Any()).Return("4.18.0-240.1.1.el8_3.x86_64", nil),
 					kernelhandler.EXPECT().GetModules(gomock.Any(), gomock.Any()).Return([]string{"ipvlan"}, nil),
+					metaClient.EXPECT().GetInstanceTypeEx().Return(metadata.InstanceTypeExBCC, nil),
 					netutil.EXPECT().DetectDefaultRouteInterfaceName().Return("eth0", nil),
 					netutil.EXPECT().DetectInterfaceMTU(gomock.Any()).Return(1400, nil),
 				)
@@ -197,6 +202,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				return fields{
 					ctrl:       ctrl,
 					kubeClient: kubeClient,
+					metaClient: metaClient,
 					cniMode:    types.CCEModeSecondaryIPAutoDetect,
 					nodeName:   "",
 					config: &v1alpha1.CNIConfigControllerConfiguration{
@@ -217,6 +223,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				IPAMEndPoint:    "10.0.0.2:80",
 				VethMTU:         1400,
 				MasterInterface: "eth0",
+				InstanceType:    "bcc",
 			},
 			wantErr: false,
 		},
@@ -228,6 +235,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 			}
 			c := &Controller{
 				kubeClient:    tt.fields.kubeClient,
+				metaClient:    tt.fields.metaClient,
 				cniMode:       tt.fields.cniMode,
 				nodeName:      tt.fields.nodeName,
 				config:        tt.fields.config,

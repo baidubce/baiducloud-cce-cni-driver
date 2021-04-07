@@ -27,6 +27,7 @@ import (
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore"
+	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -271,6 +272,9 @@ func TestIPAM_Allocate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "busybox",
 					Namespace: "default",
+					Labels: map[string]string{
+						ipamtypes.WepLabelInstanceTypeKey: "bbc",
+					},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
 					IP:       "10.1.1.1",
@@ -1197,7 +1201,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 				cacheHasSynced: tt.fields.cacheHasSynced,
 				clock:          clock.NewFakeClock(time.Unix(0, 0)),
 			}
-			err := ipam.buildAllocatedCache()
+			err := ipam.buildAllocatedCache(context.TODO())
 			if (err != nil) != tt.wantErr {
 				t.Errorf("buildAllocatedCache() error = %v, wantErr %v", err, tt.wantErr)
 				return

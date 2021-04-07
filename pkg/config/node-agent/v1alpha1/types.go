@@ -75,26 +75,22 @@ type CNIConfigControllerConfiguration struct {
 
 // RouteControllerConfiguration contains route-controller configuration
 type RouteControllerConfiguration struct {
-	// EnableVPCRoute 创建到节点上容器的 VPC 路由
-	// default true
+	// EnableVPCRoute whether to create VPC route for each node, default true
 	EnableVPCRoute bool `json:"enableVPCRoute"`
-	// EnableStaticRoute 创建到其他节点容器的静态路由
-	// default false
+	// EnableStaticRoute whether to create route on node, default false
 	EnableStaticRoute bool `json:"enableStaticRoute"`
 }
 
 // ENIControllerConfiguration contains eni-controller configuration
 type ENIControllerConfiguration struct {
-	// ENISubnetList 创建 ENI 的子网，采用','分隔多个子网
-	// 可以为空，由用户自己指定每个节点的 ENI 子网
-	// 例如 sbn-g53sb5a5ircf,sbn-30f9qg2ekcrm
-	// 从用户全局配置中筛选相同可用区，更新至 ENISpec
+	// ENISubnetList are subnets that ENIs are created in
+	// e.g. sbn-g53sb5a5ircf,sbn-30f9qg2ekcrm
 	ENISubnetList []string `json:"eniSubnetList"`
-	// SecurityGroupList 给 ENI 绑定的安全组，采用','分隔多个子网
-	// 例如 g-twh19p9zcuqr,g-5yhyct307p98
+	// SecurityGroupList are security groups that bound to ENIs
+	// e.g. g-twh19p9zcuqr,g-5yhyct307p98
 	SecurityGroupList []string `json:"securityGroupList"`
 	// ENISyncPeriod how often to reconcile eni status
 	ENISyncPeriod types.Duration `json:"eniSyncPeriod"`
-	// RouteTableOffset 给 ENI 创建策略路由的偏移
+	// RouteTableOffset route policy offset, default 127
 	RouteTableOffset int `json:"routeTableOffset"`
 }

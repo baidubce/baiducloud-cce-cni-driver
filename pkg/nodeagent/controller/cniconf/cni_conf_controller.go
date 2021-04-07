@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	v1alpha1network "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
@@ -55,6 +56,7 @@ func New(
 ) *Controller {
 	return &Controller{
 		kubeClient:    kubeClient,
+		metaClient:    metadata.NewClient(),
 		ippoolLister:  ippoolLister,
 		cniMode:       cniMode,
 		nodeName:      nodeName,
@@ -175,12 +177,22 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 	}
 
 	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) {
+		// assemble ipam endpoint from clusterip
 		svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(IPAMServiceName, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
 		if len(svc.Spec.Ports) != 0 {
 			configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
+		}
+
+		// get instance type from meta
+		if configData.InstanceType == "" {
+			insType, err := c.metaClient.GetInstanceTypeEx()
+			if err != nil {
+				log.Errorf(ctx, "failed to get instance type via metadata: %v", err)
+			}
+			configData.InstanceType = string(insType)
 		}
 	}
 

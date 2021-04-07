@@ -21,6 +21,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
 
+const (
+	WepTypeSts          = "StatefulSet"
+	WepTypePod          = "Pod"
+	WepLabelStsOwnerKey = "cce.io/owner"
+	WepLabelSubnetIDKey = "cce.io/subnet-id"
+	WepLabelInstanceTypeKey = "cce.io/instance-type"
+)
+
 type Interface interface {
 	Allocate(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error)
 	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error)

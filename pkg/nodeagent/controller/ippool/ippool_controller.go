@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,11 +55,12 @@ type Controller struct {
 	cniMode       types.ContainerNetworkMode
 	instanceID    string
 	nodeName      string
+	instance      *bccapi.InstanceModel
 	// ENI
-	cloudClient      cloud.Interface
-	availabilityZone string   // node azone
-	subnets          []string // cluster-level candidate subnets
-	securityGroups   []string
+	cloudClient         cloud.Interface
+	eniSubnetCandidates []string // cluster-level candidate subnets
+	eniSecurityGroups   []string
+	subnetZoneCache     map[string]string // cached subnet and zone map
 	// Range
 }
 
@@ -74,20 +76,21 @@ func New(
 ) *Controller {
 	ctx := log.NewContext()
 	c := &Controller{
-		kubeClient:    kubeClient,
-		cloudClient:   cloudClient,
-		crdClient:     crdClient,
-		cniMode:       cniMode,
-		nodeName:      nodeName,
-		defaultIPPool: utilpool.GetDefaultIPPoolName(nodeName),
-		instanceID:    instanceID,
+		kubeClient:      kubeClient,
+		cloudClient:     cloudClient,
+		crdClient:       crdClient,
+		cniMode:         cniMode,
+		nodeName:        nodeName,
+		defaultIPPool:   utilpool.GetDefaultIPPoolName(nodeName),
+		instanceID:      instanceID,
+		subnetZoneCache: make(map[string]string),
 	}
 
-	c.subnets = subnetList
-	log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.subnets)
+	c.eniSubnetCandidates = subnetList
+	log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
 
-	c.securityGroups = securityGroupList
-	log.Infof(ctx, "security groups bound to eni are: %v", c.securityGroups)
+	c.eniSecurityGroups = securityGroupList
+	log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
 
 	return c
 }
@@ -96,6 +99,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 	ctx := log.NewContext()
 
 	isLocalNode := nodeKey == c.nodeName
+
 	if isLocalNode {
 		_, err := nodeLister.Get(nodeKey)
 		if err != nil && !kerrors.IsNotFound(err) {
@@ -109,24 +113,27 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		}
 
 		switch {
-		case types.IsCCECNIModeBasedOnBCCSecondaryIP(c.cniMode):
-			return c.syncENISpec(ctx, nodeKey, nodeLister)
 		case types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || types.IsKubenetMode(c.cniMode):
 			return c.syncRangeSpec(ctx, nodeKey, nodeLister)
+		case types.IsCCECNIModeBasedOnBCCSecondaryIP(c.cniMode):
+			return c.syncENISpec(ctx, nodeKey, nodeLister)
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(c.cniMode):
+			return c.syncENISpec(ctx, nodeKey, nodeLister)
 		default:
 			return fmt.Errorf("unknown cni mode: %v", c.cniMode)
 		}
 	}
 
-	// if node is deleted, then delete default pool
-	_, err := nodeLister.Get(nodeKey)
-	if kerrors.IsNotFound(err) {
-		// clean up pool of deleted node
-		poolName := utilpool.GetDefaultIPPoolName(nodeKey)
-		log.Errorf(ctx, "node %v is deleted, delete default ippool %v", nodeKey, poolName)
-		if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(poolName, metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
-			log.Errorf(ctx, "failed to delete ippool %v: %v", poolName, err)
+	if !isLocalNode {
+		// if node is deleted, then delete default pool
+		_, err := nodeLister.Get(nodeKey)
+		if kerrors.IsNotFound(err) {
+			// clean up pool of deleted node
+			poolName := utilpool.GetDefaultIPPoolName(nodeKey)
+			log.Errorf(ctx, "node %v is deleted, delete default ippool %v", nodeKey, poolName)
+			if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(poolName, metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
+				log.Errorf(ctx, "failed to delete ippool %v: %v", poolName, err)
+			}
 		}
 	}
 
@@ -134,15 +141,18 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 }
 
 func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
-	log.Infof(ctx, "syncing eni spec of node %v begins...", nodeName)
-	defer log.Infof(ctx, "syncing eni spec of node %v ends...", nodeName)
+	log.V(6).Infof(ctx, "syncing eni spec of node %v begins...", nodeName)
+	defer log.V(6).Infof(ctx, "syncing eni spec of node %v ends...", nodeName)
 
-	instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
-	if err != nil {
-		log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
-		return err
+	// cache instance to avoid
+	if c.instance == nil {
+		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
+		if err != nil {
+			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
+			return err
+		}
+		c.instance = instance
 	}
-	c.availabilityZone = instance.ZoneName
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.defaultIPPool, metav1.GetOptions{})
@@ -151,10 +161,15 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 			return err
 		}
 
-		result.Spec.ENI.AvailabilityZone = instance.ZoneName
-		result.Spec.ENI.VPCID = instance.VpcId
-		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.subnets)
-		result.Spec.ENI.SecurityGroups = c.securityGroups
+		result.Spec.ENI.AvailabilityZone = c.instance.ZoneName
+		result.Spec.ENI.VPCID = c.instance.VpcId
+		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.eniSubnetCandidates)
+		result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
+
+		// TODO: add an event here.
+		if len(result.Spec.ENI.Subnets) == 0 {
+			log.Errorf(ctx, "node %v in zone %v has no subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
+		}
 
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
 		if updateErr != nil {
@@ -163,8 +178,8 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		}
 
 		var maxENINum, maxIPPerENI int
-		maxENINum = utileni.GetMaxENIPerNode(instance.CpuCount)
-		maxIPPerENI = utileni.GetMaxIPPerENI(instance.MemoryCapacityInGB)
+		maxENINum = utileni.GetMaxENIPerNode(c.instance.CpuCount)
+		maxIPPerENI = utileni.GetMaxIPPerENI(c.instance.MemoryCapacityInGB)
 
 		err = c.patchENICapacityInfoToNode(ctx, maxENINum, maxIPPerENI)
 		if err != nil {
@@ -180,13 +195,13 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		return retryErr
 	}
 
-	log.Infof(ctx, "update ippool %v spec successfully", c.defaultIPPool)
+	log.V(6).Infof(ctx, "update ippool %v spec successfully", c.defaultIPPool)
 	return nil
 }
 
 func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
-	log.Infof(ctx, "syncing ip range of node %v begins...", nodeName)
-	defer log.Infof(ctx, "syncing ip range of node %v ends...", nodeName)
+	log.V(6).Infof(ctx, "syncing ip range of node %v begins...", nodeName)
+	defer log.V(6).Infof(ctx, "syncing ip range of node %v ends...", nodeName)
 
 	node, err := nodeLister.Get(nodeName)
 	if err != nil {
@@ -248,7 +263,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 		return retryErr
 	}
 
-	log.Infof(ctx, "update ippool %v spec ip range successfully", c.defaultIPPool)
+	log.V(6).Infof(ctx, "update ippool %v spec ip range successfully", c.defaultIPPool)
 	return nil
 }
 
@@ -279,18 +294,23 @@ func (c *Controller) createOrUpdateIPPool(ctx context.Context) error {
 	return nil
 }
 
-// findSameZoneSubnets 从 cluster-level 的子网挑选和 node 同可用区的子网
 func (c *Controller) findSameZoneSubnets(ctx context.Context, subnets []string) []string {
 	filteredSubnets := make([]string, 0)
 	for _, s := range subnets {
-		resp, err := c.cloudClient.DescribeSubnet(ctx, s)
-		if err != nil {
-			log.Errorf(ctx, "findSameZoneSubnets: skip subnet %v due to describe error: %v", s, err)
-			continue
+		szone, ok := c.subnetZoneCache[s]
+		if !ok {
+			resp, err := c.cloudClient.DescribeSubnet(ctx, s)
+			if err != nil {
+				log.Errorf(ctx, "findSameZoneSubnets: skip subnet %v due to describe error: %v", s, err)
+				continue
+			}
+			szone = resp.ZoneName
+			c.subnetZoneCache[s] = szone
 		}
-		if resp.ZoneName == c.availabilityZone {
+
+		if szone == c.instance.ZoneName {
 			filteredSubnets = append(filteredSubnets, s)
-			log.Infof(ctx, "add subnet %v at zone %v as node-level candidate", s, resp.ZoneName)
+			log.V(6).Infof(ctx, "add subnet %v at zone %v as node-level candidate", s, szone)
 		}
 	}
 

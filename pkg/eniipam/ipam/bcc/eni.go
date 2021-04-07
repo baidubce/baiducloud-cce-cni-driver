@@ -31,6 +31,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
@@ -154,6 +155,14 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 	for _, node := range nodes {
 		ctx := log.NewContext()
 		log.V(6).Infof(ctx, "check node %v whether need to increase eni", node.Name)
+
+		// skip BBC if cluster is hybrid
+		instanceType := util.GetNodeInstanceType(node)
+		if instanceType != metadata.InstanceTypeExBCC {
+			log.V(6).Infof(ctx, "node %v has instance type %v, skip increasing eni", node.Name, instanceType)
+			continue
+		}
+
 		// get node instance id
 		instanceID := util.GetInstanceIDFromNode(node)
 		if instanceID == "" {
@@ -265,7 +274,7 @@ func (ipam *IPAM) needToCreateNewENI(ctx context.Context, node *v1.Node, attache
 	}
 
 	ipNum, eniNum := ipam.getAvailableIPAndENINum(ctx, maxIPPerENI, attachedENIs)
-	log.Infof(ctx, "node %v has %v available IP and %v available ENI if ignoring subnet that has no more ip", node.Name, ipNum, eniNum)
+	log.V(6).Infof(ctx, "node %v has %v available IP and %v available ENI if ignoring subnet that has no more ip", node.Name, ipNum, eniNum)
 
 	warmIPTarget, err := utileni.GetWarmIPTargetFromNodeAnnotations(node)
 	if err != nil {

@@ -119,6 +119,7 @@ data:
                 "ipam":{
                     "type":"eni-ipam",
                     "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",
+                    "instanceType":"{{ printf "{{ .InstanceType }}" }}",
                     "deleteENIScopeLinkRoute":true
                 }
             }
@@ -137,7 +138,8 @@ data:
              "kubeconfig":"/etc/cni/net.d/cce-cni.d/cce-cni.kubeconfig",
              "ipam":{
                  "type":"eni-ipam",
-                 "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}"
+                 "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",
+                 "instanceType":"{{ printf "{{ .InstanceType }}" }}"
              }
          },
          {
@@ -169,7 +171,8 @@ data:
                 "omitGateway":true,
                 "ipam":{
                     "type":"eni-ipam",
-                    "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}"
+                    "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",
+                    "instanceType":"{{ printf "{{ .InstanceType }}" }}"
                 }
             },
             {
@@ -200,7 +203,8 @@ data:
                 "vethPrefix":"veth",
                 "ipam":{
                     "type":"eni-ipam",
-                    "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}"
+                    "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",
+                    "instanceType":"{{ printf "{{ .InstanceType }}" }}"
                 }
             },
             {

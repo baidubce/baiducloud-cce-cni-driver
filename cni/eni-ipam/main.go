@@ -128,8 +128,8 @@ func main() {
 func cmdAdd(args *skel.CmdArgs) error {
 	ctx := log.NewContext()
 
-	log.Infof(ctx, "-----------cmdAdd begins----------")
-	defer log.Infof(ctx, "-----------cmdAdd ends----------")
+	log.Infof(ctx, "====> CmdAdd Begins <====")
+	defer log.Infof(ctx, "====> CmdAdd Ends <====")
 	log.Infof(ctx, "[cmdAdd]: containerID: %v, netns: %v, ifName: %v, args: %v, path: %v",
 		args.ContainerID, args.Netns, args.IfName, args.Args, args.Path)
 	log.Infof(ctx, "[cmdAdd]: stdinData: %v", string(args.StdinData))
@@ -191,8 +191,8 @@ func cmdAdd(args *skel.CmdArgs) error {
 func cmdDel(args *skel.CmdArgs) error {
 	ctx := log.NewContext()
 
-	log.Infof(ctx, "-----------cmdDel begins----------")
-	defer log.Infof(ctx, "-----------cmdDel ends----------")
+	log.Infof(ctx, "====> CmdDel Begins <====")
+	defer log.Infof(ctx, "====> CmdDel Ends <====")
 	log.Infof(ctx, "[cmdDel]: containerID: %v, netns: %v, ifName: %v, args: %v, path: %v",
 		args.ContainerID, args.Netns, args.IfName, args.Args, args.Path)
 	log.Infof(ctx, "[cmdDel]: stdinData: %v", string(args.StdinData))

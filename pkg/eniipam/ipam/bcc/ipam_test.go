@@ -42,6 +42,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -251,7 +252,8 @@ func TestIPAM_Allocate(t *testing.T) {
 				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "busybox",
+						Name:   "busybox",
+						Labels: map[string]string{},
 					},
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
@@ -296,12 +298,13 @@ func TestIPAM_Allocate(t *testing.T) {
 					Name:      "busybox",
 					Namespace: "default",
 					Labels: map[string]string{
-						SubnetKey: "",
+						ipamtypes.WepLabelSubnetIDKey:     "",
+						ipamtypes.WepLabelInstanceTypeKey: "bcc",
 					},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
 					IP:       "10.1.1.1",
-					Type:     PodType,
+					Type:     ipamtypes.WepTypePod,
 					ENIID:    "eni-test",
 					Node:     "test-node",
 					UpdateAt: metav1.Time{time.Unix(0, 0)},
@@ -396,7 +399,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1alpha1.WorkloadEndpointSpec{
 						SubnetID: "sbn-test",
 						IP:       "10.1.1.1",
-						Type:     StsType,
+						Type:     ipamtypes.WepTypeSts,
 					},
 				})
 
@@ -447,14 +450,15 @@ func TestIPAM_Allocate(t *testing.T) {
 					Name:      "foo-0",
 					Namespace: "default",
 					Labels: map[string]string{
-						SubnetKey: "sbn-test",
-						OwnerKey:  "foo",
+						ipamtypes.WepLabelSubnetIDKey:     "sbn-test",
+						ipamtypes.WepLabelStsOwnerKey:     "foo",
+						ipamtypes.WepLabelInstanceTypeKey: "bcc",
 					},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
 					IP:          "10.1.1.1",
 					SubnetID:    "sbn-test",
-					Type:        StsType,
+					Type:        ipamtypes.WepTypeSts,
 					ENIID:       "eni-test1",
 					Node:        "test-node",
 					UpdateAt:    metav1.Time{time.Unix(0, 0)},
@@ -647,7 +651,7 @@ func TestIPAM_Release(t *testing.T) {
 						Name: "foo-0",
 					},
 					Spec: v1alpha1.WorkloadEndpointSpec{
-						Type:        StsType,
+						Type:        ipamtypes.WepTypeSts,
 						EnableFixIP: EnableFixIPTrue,
 					},
 				})
@@ -688,7 +692,7 @@ func TestIPAM_Release(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
-					Type:        StsType,
+					Type:        ipamtypes.WepTypeSts,
 					EnableFixIP: EnableFixIPTrue,
 					UpdateAt:    metav1.Time{time.Unix(0, 0)},
 				},
@@ -834,7 +838,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 				informerResyncPeriod:  tt.fields.informerResyncPeriod,
 				gcPeriod:              tt.fields.gcPeriod,
 			}
-			if err := ipam.buildAllocatedCache(); (err != nil) != tt.wantErr {
+			if err := ipam.buildAllocatedCache(context.TODO()); (err != nil) != tt.wantErr {
 				t.Errorf("buildAllocatedCache() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

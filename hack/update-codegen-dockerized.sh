@@ -44,6 +44,7 @@ $GOPATH/bin/informer-gen \
 # Generate mocks for testing with mockgen.
 MOCKGEN_TARGETS=(
   "pkg/bce/cloud Interface"
+  "pkg/bce/metadata Interface"
   "pkg/eniipam/ipam Interface"
   "pkg/util/network Interface"
   "pkg/util/fs FileSystem"

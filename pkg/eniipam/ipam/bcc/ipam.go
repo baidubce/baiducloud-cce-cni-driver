@@ -43,8 +43,9 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -85,9 +86,16 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 
 	wep, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(namespace).Get(name)
 	if err == nil {
-		log.Infof(ctx, "try to reuse fix IP %v for pod (%v %v)", wep.Spec.IP, namespace, name)
+		ipToAllocate := wep.Spec.IP
+		if !isFixIPStatefulSetPod(pod) {
+			log.Warningf(ctx, "pod (%v %v) still has wep, but is not a fix-ip sts pod", namespace, name)
+			ipToAllocate = ""
+		}
+		if ipToAllocate != "" {
+			log.Infof(ctx, "try to reuse fix IP %v for pod (%v %v)", ipToAllocate, namespace, name)
+		}
 		for _, eni := range enis {
-			ipResult, err = ipam.tryAllocateIPForFixIPPod(ctx, eni, wep)
+			ipResult, err = ipam.tryAllocateIPForFixIPPod(ctx, eni, wep, ipToAllocate)
 			if err == nil {
 				ipAddedENI = eni
 				break
@@ -110,9 +118,10 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		wep.Spec.Node = pod.Spec.NodeName
 		wep.Spec.SubnetID = ipAddedENI.SubnetId
 		wep.Spec.UpdateAt = metav1.Time{ipam.clock.Now()}
-		wep.Labels[SubnetKey] = ipAddedENI.SubnetId
+		wep.Labels[ipamtypes.WepLabelSubnetIDKey] = ipAddedENI.SubnetId
+		wep.Labels[ipamtypes.WepLabelInstanceTypeKey] = string(metadata.InstanceTypeExBCC)
 		if k8sutil.IsStatefulSetPod(pod) {
-			wep.Labels[OwnerKey] = util.GetStsName(wep)
+			wep.Labels[ipamtypes.WepLabelStsOwnerKey] = util.GetStsName(wep)
 		}
 		if pod.Annotations != nil {
 			wep.Spec.EnableFixIP = pod.Annotations[StsPodAnnotationEnableFixIP]
@@ -155,13 +164,14 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 			Labels: map[string]string{
-				SubnetKey: ipAddedENI.SubnetId,
+				ipamtypes.WepLabelSubnetIDKey:     ipAddedENI.SubnetId,
+				ipamtypes.WepLabelInstanceTypeKey: string(metadata.InstanceTypeExBCC),
 			},
 		},
 		Spec: v1alpha1.WorkloadEndpointSpec{
 			ContainerID: containerID,
 			IP:          ipResult,
-			Type:        PodType,
+			Type:        ipamtypes.WepTypePod,
 			Mac:         ipAddedENI.MacAddress,
 			ENIID:       ipAddedENI.EniId,
 			Node:        pod.Spec.NodeName,
@@ -171,8 +181,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	if k8sutil.IsStatefulSetPod(pod) {
-		wep.Spec.Type = StsType
-		wep.Labels[OwnerKey] = util.GetStsName(wep)
+		wep.Spec.Type = ipamtypes.WepTypeSts
+		wep.Labels[ipamtypes.WepLabelStsOwnerKey] = util.GetStsName(wep)
 	}
 
 	if pod.Annotations != nil {
@@ -286,9 +296,7 @@ func NewIPAM(
 	informerResyncPeriod time.Duration,
 	eniSyncPeriod time.Duration,
 	gcPeriod time.Duration,
-) (ipam.Interface, error) {
-	log.Infof(context.TODO(), "limit ip mutating rate to %v, burst to %v", ipMutatingRate, ipMutatingBurst)
-
+) (ipamtypes.Interface, error) {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
@@ -327,8 +335,10 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		runtime.HandleCrash()
 	}()
 
-	log.Info(ctx, "Starting cce ipam controller")
-	defer log.Info(ctx, "Shutting down cce ipam controller")
+	log.Info(ctx, "Starting cce ipam controller for BCC")
+	defer log.Info(ctx, "Shutting down cce ipam controller for BCC")
+
+	log.Infof(ctx, "limit ip mutating rate to %v, burst to %v", ipam.bucket.Rate(), ipam.bucket.Capacity())
 
 	nodeInformer := ipam.kubeInformer.Core().V1().Nodes().Informer()
 	podInformer := ipam.kubeInformer.Core().V1().Pods().Informer()
@@ -356,7 +366,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		log.Info(ctx, "WaitForCacheSync done")
 	}
 
-	err := ipam.buildAllocatedCache()
+	err := ipam.buildAllocatedCache(ctx)
 	if err != nil {
 		return err
 	}
@@ -382,7 +392,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 	return nil
 }
 
-func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni, wep *v1alpha1.WorkloadEndpoint) (string, error) {
+func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, ipToAllocate string) (string, error) {
 	var namespace, name string = wep.Namespace, wep.Name
 
 	// Note: here DeletePrivateIP and AddPrivateIP should be atomic. we leverage a lock to do this
@@ -393,12 +403,12 @@ func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni,
 	if err := ipam.cloud.DeletePrivateIP(ctx, wep.Spec.IP, wep.Spec.ENIID); err != nil && !cloud.IsErrorENIPrivateIPNotFound(err) {
 		log.Errorf(ctx, "error delete private IP %v for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
 	}
-	log.Infof(ctx, "try to add IP %v to %v", wep.Spec.IP, eni.EniId)
+	log.Infof(ctx, "try to add IP %v to %v", ipToAllocate, eni.EniId)
 	ipam.bucket.Wait(1)
-	ipResult, err := ipam.cloud.AddPrivateIP(ctx, wep.Spec.IP, eni.EniId)
+	ipResult, err := ipam.cloud.AddPrivateIP(ctx, ipToAllocate, eni.EniId)
 	ipam.lock.Unlock()
 	if err != nil {
-		log.Errorf(ctx, "error add private IP %v for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
+		log.Errorf(ctx, "error add private IP %v for pod (%v %v): %v", ipToAllocate, namespace, name, err)
 		if cloud.IsErrorSubnetHasNoMoreIP(err) {
 			e := ipam.declareSubnetHasNoMoreIP(ctx, eni.SubnetId, true)
 			if e != nil {
@@ -410,7 +420,7 @@ func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni,
 		}
 		return "", err
 	}
-	log.Infof(ctx, "add private IP %v for pod (%v %v) successfully", wep.Spec.IP, namespace, name)
+	log.Infof(ctx, "add private IP %v for pod (%v %v) successfully", ipToAllocate, namespace, name)
 	ipam.lock.Lock()
 	ipam.privateIPNumCache[eni.EniId]++
 	ipam.lock.Unlock()
@@ -463,12 +473,17 @@ func (ipam *IPAM) tryAllocateIP(ctx context.Context, eni *enisdk.Eni, namespace,
 	return ipResult, nil
 }
 
-func (ipam *IPAM) buildAllocatedCache() error {
+func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
 
-	ctx := log.NewContext()
-	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(labels.Everything())
+	selector, err := wepListerSelector()
+	if err != nil {
+		log.Errorf(ctx, "error parsing requirement: %v", err)
+		return err
+	}
+
+	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(selector)
 	if err != nil {
 		return err
 	}
@@ -491,21 +506,26 @@ func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
 			return false, nil
 		}
 
-		// list all nodes
-		nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(labels.Everything())
+		bccSelector, err := bccNodeListerSelector()
+		if err != nil {
+			log.Errorf(ctx, "error parsing requirement: %v", err)
+			return false, nil
+		}
+		// list nodes whose instance type is BCC
+		nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(bccSelector)
 		if err != nil {
 			log.Errorf(ctx, "failed to list nodes when syncing eni info: %v", err)
 			return false, nil
 		}
 
-		// build eni cache
+		// build eni cache of bcc nodes
 		err = ipam.buildENICache(ctx, nodes, enis)
 		if err != nil {
 			log.Errorf(ctx, "failed to build eni cache: %v", err)
 			return false, nil
 		}
 
-		// update ippool status
+		// update ippool status of bcc nodes
 		for _, node := range nodes {
 			err = ipam.updateIPPoolStatus(ctx, node, enis)
 			if err != nil {
@@ -627,7 +647,14 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 			log.Errorf(ctx, "gc: error list sts in cluster: %v", err)
 			return false, nil
 		}
-		wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(labels.Everything())
+
+		wepSelector, err := wepListerSelector()
+		if err != nil {
+			log.Errorf(ctx, "error parsing requirement: %v", err)
+			return false, nil
+		}
+
+		wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(wepSelector)
 		if err != nil {
 			log.Errorf(ctx, "gc: error list wep in cluster: %v", err)
 			return false, nil
@@ -708,12 +735,14 @@ func (ipam *IPAM) gcDeletedSts(ctx context.Context, wepList []*v1alpha1.Workload
 func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.StatefulSet) error {
 	for _, sts := range stsList {
 		replicas := int(*sts.Spec.Replicas)
-		requirement, err := labels.NewRequirement(OwnerKey, selection.Equals, []string{sts.Name})
+		requirement, err := labels.NewRequirement(ipamtypes.WepLabelStsOwnerKey, selection.Equals, []string{sts.Name})
 		if err != nil {
 			log.Errorf(ctx, "gc: error parsing requirement: %v", err)
 			return err
 		}
 		selector := labels.NewSelector().Add(*requirement)
+
+		// find wep whose owner is sts
 		weps, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(sts.Namespace).List(selector)
 		if err != nil {
 			log.Errorf(ctx, "gc: failed to list wep with selector: %v: %v", selector.String(), err)
@@ -774,7 +803,7 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadEndpoint) error {
 	for _, wep := range wepList {
-		if wep.Spec.Type != PodType {
+		if wep.Spec.Type != ipamtypes.WepTypePod {
 			continue
 		}
 		_, err := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(wep.Namespace).Get(wep.Name)
@@ -823,7 +852,7 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 }
 
 func isFixIPStatefulSetPodWep(wep *v1alpha1.WorkloadEndpoint) bool {
-	return wep.Spec.Type == StsType && wep.Spec.EnableFixIP == EnableFixIPTrue
+	return wep.Spec.Type == ipamtypes.WepTypeSts && wep.Spec.EnableFixIP == EnableFixIPTrue
 }
 
 func isFixIPStatefulSetPod(pod *v1.Pod) bool {
@@ -844,4 +873,21 @@ func buildInstanceIdToNodeNameMap(ctx context.Context, nodes []*v1.Node) map[str
 		instanceIdToNodeNameMap[instanceId] = n.Name
 	}
 	return instanceIdToNodeNameMap
+}
+
+func wepListerSelector() (labels.Selector, error) {
+	// for wep owned by bcc, use selector "cce.io/subnet-id", to be compatible with old versions.
+	requirement, err := labels.NewRequirement(ipamtypes.WepLabelSubnetIDKey, selection.Exists, nil)
+	if err != nil {
+		return nil, err
+	}
+	return labels.NewSelector().Add(*requirement), nil
+}
+
+func bccNodeListerSelector() (labels.Selector, error) {
+	requirement, err := labels.NewRequirement(v1.LabelInstanceType, selection.Equals, []string{"BCC"})
+	if err != nil {
+		return nil, err
+	}
+	return labels.NewSelector().Add(*requirement), nil
 }

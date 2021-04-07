@@ -38,6 +38,7 @@ type NetConf struct {
 type IPAMConf struct {
 	Type                    string `json:"type,omitempty"`
 	Endpoint                string `json:"endpoint"`
+	InstanceType            string `json:"instanceType"`
 	DeleteENIScopeLinkRoute bool   `json:"deleteENIScopeLinkRoute"`
 	RouteTableIDOffset      int    `json:"routeTableIDOffset"` // default 127, eth1 use table 128, eth2 use table 129 etc.
 	ENILinkPrefix           string `json:"eniLinkPrefix"`      // default "eth"

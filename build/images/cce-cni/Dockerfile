@@ -21,4 +21,7 @@ COPY output/cce-ipam /bin/cce-ipam
 # install cce node agent binary
 COPY output/cni-node-agent /bin/cni-node-agent
 
+# install cce node agent binary
+COPY output/ip-masq-agent /bin/cce-ip-masq-agent
+
 CMD ["/bin/sh", "/entrypoint.sh"]

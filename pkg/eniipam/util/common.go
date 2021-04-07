@@ -23,6 +23,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 )
 
 func GetInstanceIDFromNode(node *v1.Node) string {
@@ -48,6 +49,23 @@ func GetStsPodIndex(wep *v1alpha1.WorkloadEndpoint) int {
 		return -1
 	}
 	return int(index)
+}
+
+func GetNodeInstanceType(node *v1.Node) metadata.InstanceTypeEx {
+	if node.Labels == nil {
+		return metadata.InstanceTypeExUnknown
+	}
+
+	instanceTypeStr := node.Labels[v1.LabelInstanceType]
+	if instanceTypeStr == "BCC" {
+		return metadata.InstanceTypeExBCC
+	}
+
+	if instanceTypeStr == "BBC" {
+		return metadata.InstanceTypeExBBC
+	}
+
+	return metadata.InstanceTypeExUnknown
 }
 
 // Random generates random num in [min, max)

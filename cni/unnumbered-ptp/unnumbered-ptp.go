@@ -159,6 +159,33 @@ func (p *ptpPlugin) setupContainerNetNSVeth(
 		return fmt.Errorf("failed to look up %q: %v", ifName, err)
 	}
 
+	contVethLink, err := p.nlink.LinkByName(ifName)
+	if err != nil {
+		return fmt.Errorf("failed to look up %q: %v", ifName, err)
+	}
+
+	for _, ipc := range pr.IPs {
+		var err error
+		if ipc.Version == "4" {
+			err = p.nlink.AddrAdd(contVethLink, &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   ipc.Address.IP,
+					Mask: net.CIDRMask(32, 32),
+				},
+			})
+		} else if ipc.Version == "6" {
+			err = p.nlink.AddrAdd(contVethLink, &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   ipc.Address.IP,
+					Mask: net.CIDRMask(128, 128),
+				},
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("failed to add container primary ip %v to %s: %v", ipc.Address.String(), ifName, err)
+		}
+	}
+
 	// add route to host through veth
 	for _, ipc := range hostAddrs {
 		addrBits := 128

@@ -421,6 +421,8 @@ func Test_ptpPlugin_setupContainerNetNSVeth(t *testing.T) {
 				gomock.InOrder(
 					ip.EXPECT().SetupVeth(gomock.Any(), gomock.Any(), gomock.Any()).Return(net.Interface{}, net.Interface{}, nil),
 					netutil.EXPECT().InterfaceByName(gomock.Any()).Return(&net.Interface{}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil),
 					nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil),
 					nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil),

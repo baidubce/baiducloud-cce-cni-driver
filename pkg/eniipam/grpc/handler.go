@@ -29,16 +29,16 @@ import (
 )
 
 type ENIIPAMGrpcServer struct {
-	ipamd  ipam.Interface
-	port   int
-	ipType rpc.IPType
+	bccipamd ipam.Interface
+	bbcipamd ipam.Interface
+	port     int
 }
 
-func New(ipam ipam.Interface, ipType rpc.IPType, port int) *ENIIPAMGrpcServer {
+func New(bccipam ipam.Interface, bbcipam ipam.Interface, port int) *ENIIPAMGrpcServer {
 	return &ENIIPAMGrpcServer{
-		ipamd:  ipam,
-		port:   port,
-		ipType: ipType,
+		bccipamd: bccipam,
+		bbcipamd: bbcipam,
+		port:     port,
 	}
 }
 
@@ -78,9 +78,29 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 	log.Infof(ctx, "[Request Body]: %v", req.String())
 
 	rpcReply := &rpc.AllocateIPReply{
-		IPType: cb.ipType,
+		IPType: req.IPType,
 	}
-	wep, err := cb.ipamd.Allocate(ctx, name, namespace, containerID)
+
+	// get ipamd by request type
+	var ipamd ipam.Interface
+	switch req.IPType {
+	case rpc.IPType_BCCMultiENIMultiIPType:
+		ipamd = cb.bccipamd
+	case rpc.IPType_BBCPrimaryENIMultiIPType:
+		ipamd = cb.bbcipamd
+	default:
+		ipamd = cb.bccipamd
+		log.Warningf(ctx, "unknown ipType %v from cni request, assume runs in BCC", req.IPType)
+	}
+
+	// we are unlikely to hit this
+	if ipamd == nil {
+		rpcReply.IsSuccess = false
+		rpcReply.ErrMsg = fmt.Sprintf("unsupported ipType %v from cni request", req.IPType)
+		return rpcReply, nil
+	}
+
+	wep, err := ipamd.Allocate(ctx, name, namespace, containerID)
 
 	defer func() {
 		if data, err := json.Marshal(wep); err == nil {
@@ -122,9 +142,29 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 	log.Infof(ctx, "[Request Body]: %v", req.String())
 
 	rpcReply := &rpc.ReleaseIPReply{
-		IPType: cb.ipType,
+		IPType: req.IPType,
 	}
-	wep, err := cb.ipamd.Release(ctx, name, namespace, containerID)
+
+	// get ipamd by request type
+	var ipamd ipam.Interface
+	switch req.IPType {
+	case rpc.IPType_BCCMultiENIMultiIPType:
+		ipamd = cb.bccipamd
+	case rpc.IPType_BBCPrimaryENIMultiIPType:
+		ipamd = cb.bbcipamd
+	default:
+		ipamd = cb.bccipamd
+		log.Warningf(ctx, "unknown ipType %v from cni request, assume runs in BCC", req.IPType)
+	}
+
+	// we are unlikely to hit this
+	if ipamd == nil {
+		rpcReply.IsSuccess = false
+		rpcReply.ErrMsg = fmt.Sprintf("unsupported ipType %v from cni request", req.IPType)
+		return rpcReply, nil
+	}
+
+	wep, err := ipamd.Release(ctx, name, namespace, containerID)
 
 	defer func() {
 		if data, err := json.Marshal(wep); err == nil {
@@ -159,7 +199,5 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 }
 
 func (cb *ENIIPAMGrpcServer) CheckIP(ctx context.Context, req *rpc.CheckIPRequest) (*rpc.CheckIPReply, error) {
-	return &rpc.CheckIPReply{
-		IPType: cb.ipType,
-	}, nil
+	return &rpc.CheckIPReply{}, nil
 }

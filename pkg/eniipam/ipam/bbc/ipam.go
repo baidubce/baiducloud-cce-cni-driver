@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -39,9 +40,11 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -70,8 +73,6 @@ func NewIPAM(
 	ipMutatingRate float64,
 	ipMutatingBurst int64,
 ) (ipam.Interface, error) {
-	log.Infof(context.TODO(), "limit ip mutating rate to %v, burst to %v", ipMutatingRate, ipMutatingBurst)
-
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
@@ -189,6 +190,9 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
+			Labels: map[string]string{
+				ipamtypes.WepLabelInstanceTypeKey: string(metadata.InstanceTypeExBBC),
+			},
 		},
 		Spec: v1alpha1.WorkloadEndpointSpec{
 			ContainerID: containerID,
@@ -302,8 +306,10 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		runtime.HandleCrash()
 	}()
 
-	log.Info(ctx, "Starting cce ipam controller")
-	defer log.Info(ctx, "Shutting down cce ipam controller")
+	log.Info(ctx, "Starting cce ipam controller for BBC")
+	defer log.Info(ctx, "Shutting down cce ipam controller for BBC")
+
+	log.Infof(ctx, "limit ip mutating rate to %v, burst to %v", ipam.bucket.Rate(), ipam.bucket.Capacity())
 
 	nodeInformer := ipam.kubeInformer.Core().V1().Nodes().Informer()
 	podInformer := ipam.kubeInformer.Core().V1().Pods().Informer()
@@ -326,7 +332,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 	}
 
 	// rebuild datastore cache
-	err := ipam.buildAllocatedCache()
+	err := ipam.buildAllocatedCache(ctx)
 	if err != nil {
 		return err
 	}
@@ -347,7 +353,13 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 	err := wait.PollImmediateUntil(ipam.gcPeriod, func() (bool, error) {
 		ctx := log.NewContext()
 
-		wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(labels.Everything())
+		selector, err := wepListerSelector()
+		if err != nil {
+			log.Errorf(ctx, "error parsing requirement: %v", err)
+			return false, nil
+		}
+
+		wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(selector)
 		if err != nil {
 			log.Errorf(ctx, "gc: error list wep in cluster: %v", err)
 			return false, nil
@@ -576,18 +588,34 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 	return nil
 }
 
-func (ipam *IPAM) buildAllocatedCache() error {
+func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
 
-	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(labels.Everything())
+	selector, err := wepListerSelector()
+	if err != nil {
+		log.Errorf(ctx, "error parsing requirement: %v", err)
+		return err
+	}
+
+	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(selector)
 	if err != nil {
 		return err
 	}
 	for _, wep := range wepList {
 		nwep := wep.DeepCopy()
 		ipam.allocated[wep.Spec.IP] = nwep
+		log.Infof(ctx, "build cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
 	}
 
 	return nil
+}
+
+func wepListerSelector() (labels.Selector, error) {
+	// for wep owned by bbc, use selector "cce.io/instance-type=bbc"
+	requirement, err := labels.NewRequirement(ipamtypes.WepLabelInstanceTypeKey, selection.Equals, []string{string(metadata.InstanceTypeExBBC)})
+	if err != nil {
+		return nil, err
+	}
+	return labels.NewSelector().Add(*requirement), nil
 }

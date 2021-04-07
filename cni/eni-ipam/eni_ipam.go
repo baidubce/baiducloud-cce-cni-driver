@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	grpcwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/grpc"
@@ -56,10 +57,17 @@ func (ipam *ENIIPAM) AllocIP(ctx context.Context, k8sArgs *K8SArgs, ipamConf *IP
 	defer conn.Close()
 
 	c := rpc.NewCNIBackendClient(conn)
+
+	var ipType rpc.IPType = rpc.IPType_BCCMultiENIMultiIPType
+	if ipamConf.InstanceType == string(metadata.InstanceTypeExBBC) {
+		ipType = rpc.IPType_BBCPrimaryENIMultiIPType
+	}
+
 	resp, err := c.AllocateIP(ctx, &rpc.AllocateIPRequest{
 		K8SPodName:             string(k8sArgs.K8S_POD_NAME),
 		K8SPodNamespace:        string(k8sArgs.K8S_POD_NAMESPACE),
 		K8SPodInfraContainerID: string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID),
+		IPType:                 ipType,
 	})
 	if err != nil {
 		log.Errorf(ctx, "failed to allocate ip from cni backend: %v", err)
@@ -79,10 +87,17 @@ func (ipam *ENIIPAM) ReleaseIP(ctx context.Context, k8sArgs *K8SArgs, ipamConf *
 
 	// release ip from cni backend
 	c := rpc.NewCNIBackendClient(conn)
+
+	var ipType rpc.IPType = rpc.IPType_BCCMultiENIMultiIPType
+	if ipamConf.InstanceType == string(metadata.InstanceTypeExBBC) {
+		ipType = rpc.IPType_BBCPrimaryENIMultiIPType
+	}
+
 	resp, err := c.ReleaseIP(ctx, &rpc.ReleaseIPRequest{
 		K8SPodName:             string(k8sArgs.K8S_POD_NAME),
 		K8SPodNamespace:        string(k8sArgs.K8S_POD_NAMESPACE),
 		K8SPodInfraContainerID: string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID),
+		IPType:                 ipType,
 	})
 	if err != nil {
 		log.Errorf(ctx, "failed to release ip from cni backend: %v", err)

@@ -46,10 +46,12 @@ import (
 )
 
 const (
-	eniAttachTimeout  int = 50
-	eniAttachMaxRetry int = 10
-
 	fromENIPrimaryIPRulePriority = 1024
+)
+
+const (
+	rateLimitErrorSleepPeriod  = time.Millisecond * 200
+	rateLimitErrorJitterFactor = 5
 )
 
 var (
@@ -112,16 +114,16 @@ func (c *Controller) ReconcileENIs() {
 			log.Errorf(ctx, "error reconciling enis: %v", err)
 		}
 
-		var networkReady = true
+		var eniNetworkReady = true
 		if err != nil && !cloud.IsErrorRateLimit(err) {
-			networkReady = false
+			eniNetworkReady = false
 		}
 
 		patchErr := k8sutil.UpdateNetworkingCondition(
 			ctx,
 			c.kubeClient,
 			c.nodeName,
-			networkReady,
+			eniNetworkReady,
 			"AllENIReady",
 			"NotAllENIReady",
 			"CCE ENI Controller reconciles ENI",
@@ -147,6 +149,9 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 	enis, err := c.cloudClient.ListENIs(ctx, c.vpcID)
 	if err != nil {
 		log.Errorf(ctx, "failed to list enis in vpc %s: %v", c.vpcID, err)
+		if cloud.IsErrorRateLimit(err) {
+			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+		}
 		return err
 	}
 
@@ -163,53 +168,16 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 		}
 	}
 
-	// update cr status and ip link up and add addr
-	err = c.updateIPPoolStatus(ctx, enis)
+	// set eni link up
+	// add eni link ip addr
+	// report link index
+	err = c.setupENINetwork(ctx, enis)
 	if err != nil {
 		log.Errorf(ctx, "failed to update ippool %v status: %v", c.defaultIPPool, err)
 		return err
 	}
 
 	return nil
-}
-
-func (c *Controller) waitForUnstableENIWithTimeout(ctx context.Context) error {
-	sleepTime := time.Duration(eniAttachTimeout/eniAttachMaxRetry) * time.Second
-
-	for i := 0; i < eniAttachMaxRetry; i++ {
-		// list all enis in vpc
-		enis, err := c.cloudClient.ListENIs(ctx, c.vpcID)
-		if err != nil {
-			log.Errorf(ctx, "waitForUnstableENIWithTimeout tries %d time: failed to list enis in vpc %s: %v", i, c.vpcID, err)
-			time.Sleep(sleepTime)
-			continue
-		}
-
-		allENIStable := true
-
-		for _, eni := range enis {
-			// if eni not owned by local node, just ignore
-			if !utileni.ENIOwnedByNode(&eni, c.clusterID, c.instanceID) {
-				continue
-			}
-
-			if eni.Status == utileni.ENIStatusAttaching || eni.Status == utileni.ENIStatusDetaching {
-				allENIStable = false
-				log.Infof(ctx, "waitForUnstableENIWithTimeout tries %d time: eni %s is in status %s", i, eni.EniId, eni.Status)
-			}
-		}
-
-		if allENIStable {
-			log.Info(ctx, "waitForUnstableENIWithTimeout: all enis are stable")
-			return nil
-		}
-
-		time.Sleep(sleepTime)
-	}
-
-	// attach timeout
-	log.Errorf(ctx, "waitForUnstableENIWithTimeout: eni in attaching/detaching status too long")
-	return fmt.Errorf("eni in attaching/detaching status too long")
 }
 
 // listAvailableENIs lists ENIs that are available and owned by this node
@@ -251,8 +219,8 @@ func (c *Controller) freeLeakedAvailableENIs(ctx context.Context, enis []enisdk.
 
 }
 
-func (c *Controller) updateIPPoolStatus(ctx context.Context, enis []enisdk.Eni) error {
-	eniStatus := map[string]v1alpha1.ENI{}
+func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) error {
+	eniStatus := make(map[string]v1alpha1.ENI)
 
 	for _, eni := range enis {
 		if !utileni.ENIOwnedByNode(&eni, c.clusterID, c.instanceID) {

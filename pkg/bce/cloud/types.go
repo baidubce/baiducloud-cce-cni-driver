@@ -48,6 +48,7 @@ type Interface interface {
 	BBCGetInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error)
 	BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error)
 	BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error
+	BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error)
 }
 
 type Client struct {

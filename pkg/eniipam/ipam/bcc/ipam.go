@@ -45,7 +45,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -118,10 +118,10 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		wep.Spec.Node = pod.Spec.NodeName
 		wep.Spec.SubnetID = ipAddedENI.SubnetId
 		wep.Spec.UpdateAt = metav1.Time{ipam.clock.Now()}
-		wep.Labels[ipamtypes.WepLabelSubnetIDKey] = ipAddedENI.SubnetId
-		wep.Labels[ipamtypes.WepLabelInstanceTypeKey] = string(metadata.InstanceTypeExBCC)
+		wep.Labels[ipamgeneric.WepLabelSubnetIDKey] = ipAddedENI.SubnetId
+		wep.Labels[ipamgeneric.WepLabelInstanceTypeKey] = string(metadata.InstanceTypeExBCC)
 		if k8sutil.IsStatefulSetPod(pod) {
-			wep.Labels[ipamtypes.WepLabelStsOwnerKey] = util.GetStsName(wep)
+			wep.Labels[ipamgeneric.WepLabelStsOwnerKey] = util.GetStsName(wep)
 		}
 		if pod.Annotations != nil {
 			wep.Spec.EnableFixIP = pod.Annotations[StsPodAnnotationEnableFixIP]
@@ -164,14 +164,14 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 			Labels: map[string]string{
-				ipamtypes.WepLabelSubnetIDKey:     ipAddedENI.SubnetId,
-				ipamtypes.WepLabelInstanceTypeKey: string(metadata.InstanceTypeExBCC),
+				ipamgeneric.WepLabelSubnetIDKey:     ipAddedENI.SubnetId,
+				ipamgeneric.WepLabelInstanceTypeKey: string(metadata.InstanceTypeExBCC),
 			},
 		},
 		Spec: v1alpha1.WorkloadEndpointSpec{
 			ContainerID: containerID,
 			IP:          ipResult,
-			Type:        ipamtypes.WepTypePod,
+			Type:        ipamgeneric.WepTypePod,
 			Mac:         ipAddedENI.MacAddress,
 			ENIID:       ipAddedENI.EniId,
 			Node:        pod.Spec.NodeName,
@@ -181,8 +181,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	if k8sutil.IsStatefulSetPod(pod) {
-		wep.Spec.Type = ipamtypes.WepTypeSts
-		wep.Labels[ipamtypes.WepLabelStsOwnerKey] = util.GetStsName(wep)
+		wep.Spec.Type = ipamgeneric.WepTypeSts
+		wep.Labels[ipamgeneric.WepLabelStsOwnerKey] = util.GetStsName(wep)
 	}
 
 	if pod.Annotations != nil {
@@ -264,7 +264,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		}
 		return nil, err
 	}
-	log.Infof(ctx, "release private IP for pod (%v %v) successfully", namespace, name)
+	log.Infof(ctx, "release private IP %v for pod (%v %v) successfully", wep.Spec.IP, namespace, name)
 
 	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(name, metav1.NewDeleteOptions(0))
 	if err != nil {
@@ -296,7 +296,7 @@ func NewIPAM(
 	informerResyncPeriod time.Duration,
 	eniSyncPeriod time.Duration,
 	gcPeriod time.Duration,
-) (ipamtypes.Interface, error) {
+) (ipamgeneric.Interface, error) {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
@@ -581,7 +581,7 @@ func (ipam *IPAM) buildENICache(ctx context.Context, nodes []*v1.Node, enis []en
 func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, enis []enisdk.Eni) error {
 	eniStatus := map[string]v1alpha1.ENI{}
 	instanceID := util.GetInstanceIDFromNode(node)
-	ippoolName := utilippool.GetDefaultIPPoolName(node.Name)
+	ippoolName := utilippool.GetNodeIPPoolName(node.Name)
 	for _, eni := range enis {
 		if eni.Status != utileni.ENIStatusInuse || !utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
 			continue
@@ -615,7 +615,7 @@ func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, enis []
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ippoolName, metav1.GetOptions{})
+		result, err := ipam.crdInformer.Cce().V1alpha1().IPPools().Lister().IPPools(v1.NamespaceDefault).Get(ippoolName)
 		if err != nil {
 			log.Errorf(ctx, "failed to get ippool %v: %v", ippoolName, err)
 			return err
@@ -735,7 +735,7 @@ func (ipam *IPAM) gcDeletedSts(ctx context.Context, wepList []*v1alpha1.Workload
 func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.StatefulSet) error {
 	for _, sts := range stsList {
 		replicas := int(*sts.Spec.Replicas)
-		requirement, err := labels.NewRequirement(ipamtypes.WepLabelStsOwnerKey, selection.Equals, []string{sts.Name})
+		requirement, err := labels.NewRequirement(ipamgeneric.WepLabelStsOwnerKey, selection.Equals, []string{sts.Name})
 		if err != nil {
 			log.Errorf(ctx, "gc: error parsing requirement: %v", err)
 			return err
@@ -803,7 +803,7 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadEndpoint) error {
 	for _, wep := range wepList {
-		if wep.Spec.Type != ipamtypes.WepTypePod {
+		if wep.Spec.Type != ipamgeneric.WepTypePod {
 			continue
 		}
 		_, err := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(wep.Namespace).Get(wep.Name)
@@ -852,7 +852,7 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 }
 
 func isFixIPStatefulSetPodWep(wep *v1alpha1.WorkloadEndpoint) bool {
-	return wep.Spec.Type == ipamtypes.WepTypeSts && wep.Spec.EnableFixIP == EnableFixIPTrue
+	return wep.Spec.Type == ipamgeneric.WepTypeSts && wep.Spec.EnableFixIP == EnableFixIPTrue
 }
 
 func isFixIPStatefulSetPod(pod *v1.Pod) bool {
@@ -877,7 +877,7 @@ func buildInstanceIdToNodeNameMap(ctx context.Context, nodes []*v1.Node) map[str
 
 func wepListerSelector() (labels.Selector, error) {
 	// for wep owned by bcc, use selector "cce.io/subnet-id", to be compatible with old versions.
-	requirement, err := labels.NewRequirement(ipamtypes.WepLabelSubnetIDKey, selection.Exists, nil)
+	requirement, err := labels.NewRequirement(ipamgeneric.WepLabelSubnetIDKey, selection.Exists, nil)
 	if err != nil {
 		return nil, err
 	}

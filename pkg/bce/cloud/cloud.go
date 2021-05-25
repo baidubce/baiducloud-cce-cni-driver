@@ -236,3 +236,7 @@ func (c *Client) BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*
 func (c *Client) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error {
 	return c.bbcClient.BatchDelIP(args)
 }
+
+func (c *Client) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
+	return c.bbcClient.BatchAddIPCrossSubnet(args)
+}

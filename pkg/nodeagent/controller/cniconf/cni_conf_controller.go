@@ -197,7 +197,7 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 	}
 
 	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) {
-		ipPoolName := utilpool.GetDefaultIPPoolName(c.nodeName)
+		ipPoolName := utilpool.GetNodeIPPoolName(c.nodeName)
 		ipPool, err := c.ippoolLister.IPPools(v1.NamespaceDefault).Get(ipPoolName)
 		if err != nil {
 			return nil, err

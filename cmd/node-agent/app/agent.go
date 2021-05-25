@@ -161,8 +161,10 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.options.config.CNIMode,
 		s.options.hostName,
 		s.options.instanceID,
+		s.options.instanceType,
 		s.options.config.CCE.ENIController.ENISubnetList,
 		s.options.config.CCE.ENIController.SecurityGroupList,
+		s.options.config.CCE.PodSubnetController.SubnetList,
 	)
 	nodeWatcher.RegisterEventHandler(ippoolCtrl)
 
@@ -176,6 +178,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.metaClient,
 		s.kubeClient,
 		s.crdClient,
+		s.recorder,
 		s.options.config.CCE.ClusterID,
 		s.options.hostName,
 		s.options.instanceID,
@@ -245,13 +248,8 @@ func (s *nodeAgent) runCCEModeBasedOnBBCSecondaryIP(
 	nodeWatcher *k8swatcher.NodeWatcher,
 	eniController *eni.Controller,
 ) {
-	instanceType, err := s.metaClient.GetInstanceTypeEx()
-	if err != nil {
-		log.Fatalf(ctx, "failed to get instance type via metadata: %v", err)
-	}
-
-	if instanceType == metadata.InstanceTypeExBCC {
-		log.Infof(ctx, "instance type is %v via metadata, will run eni controller", instanceType)
+	if s.options.instanceType == metadata.InstanceTypeExBCC {
+		log.Infof(ctx, "instance type is %v via metadata, will run eni controller", s.options.instanceType)
 		go eniController.ReconcileENIs()
 	}
 }

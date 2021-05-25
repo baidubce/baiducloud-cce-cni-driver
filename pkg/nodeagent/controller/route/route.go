@@ -193,7 +193,7 @@ func (rc *RouteController) getPodCIDRs(ctx context.Context) ([]string, error) {
 		return rc.PodCIDRs, nil
 	}
 
-	ippoolName := utilippool.GetDefaultIPPoolName(rc.NodeName)
+	ippoolName := utilippool.GetNodeIPPoolName(rc.NodeName)
 	ippool, err := rc.CRDClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ippoolName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
@@ -227,7 +227,7 @@ func (rc *RouteController) ensureVPCRoute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.Infof(ctx, "advertiseRoute for node %s: %v", rc.NodeName, shouldAdvertiseRoute)
+	log.V(6).Infof(ctx, "advertiseRoute for node %s: %v", rc.NodeName, shouldAdvertiseRoute)
 
 	return rc.reconcileVPCRoute(ctx, routes, shouldAdvertiseRoute)
 }
@@ -255,13 +255,13 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 			log.Infof(ctx, "remove old route: %+v", route)
 			continue
 		}
-		log.Infof(ctx, "keep other route: %+v", route)
+		log.V(6).Infof(ctx, "keep other route: %+v", route)
 	}
 
 	if shouldAdvertiseRoute {
 		for _, cidr := range rc.PodCIDRs {
 			if _, ok := isRouteExist[cidr]; ok {
-				log.Infof(ctx, "skip adding target route for pod cidr: %s", cidr)
+				log.V(6).Infof(ctx, "skip adding target route for pod cidr: %s", cidr)
 				continue
 			}
 			createRouteArg := &vpc.CreateRouteRuleArgs{
@@ -320,13 +320,13 @@ func (rc *RouteController) advertiseRoute(node *v1.Node) (bool, error) {
 func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error {
 	startTime := time.Now()
 	var patchErr error
-	log.Infof(ctx, "syncRoute for node %v starts", nodeName)
+	log.V(6).Infof(ctx, "sync route for node %v starts", nodeName)
 
 	defer func() {
 		if patchErr != nil {
-			log.Errorf(ctx, "updateNetworkingCondition for node %v error: %v", nodeName, patchErr)
+			log.Errorf(ctx, "update networking condition for node %v error: %v", nodeName, patchErr)
 		}
-		log.Infof(ctx, "syncRoute for node %v ends (%v)", nodeName, time.Since(startTime))
+		log.V(6).Infof(ctx, "sync route for node %v ends (%v)", nodeName, time.Since(startTime))
 	}()
 
 	// only create vpc route for our own node
@@ -341,16 +341,20 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 		log.Infof(ctx, "node %v has podCIDRs %s", rc.NodeName, podCIDRs)
 
 		err = rc.ensureVPCRoute(ctx)
-		patchErr = k8sutil.UpdateNetworkingCondition(
-			ctx,
-			rc.KubeClient,
-			rc.NodeName,
-			err == nil,
-			"RouteCreated",
-			"NoRouteCreated",
-			"CCE RouteController created a route",
-			"CCE RouteController failed to create a route",
-		)
+		// only update when route ready, never taint node
+		if err == nil {
+			patchErr = k8sutil.UpdateNetworkingCondition(
+				ctx,
+				rc.KubeClient,
+				rc.NodeName,
+				true,
+				"RouteCreated",
+				"NoRouteCreated",
+				"CCE RouteController created a route",
+				"CCE RouteController failed to create a route",
+			)
+		}
+
 		if err != nil {
 			log.Errorf(ctx, "syncRoute for node %v error: %v", nodeName, err)
 			rc.EventRecorder.Eventf(eventObject, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.NodeName, err)

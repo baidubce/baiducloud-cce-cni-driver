@@ -62,7 +62,7 @@ func TestIsErrorBBCENIPrivateIPNotFound(t *testing.T) {
 	}{
 		{
 			args: args{
-				err: fmt.Errorf("Error Message: \"The ips [192.168.24.51] is invalid\", Error Code: \"BadRequest\", Status Code: 400, Request Id: \"4a3e96c4-e57c-42bc-b479-bf96f4ac12c9\""),
+				err: fmt.Errorf("Error Message: \"The ips [192.168.24.51] is invalid\", Error Code: \"NoSuchObject\", Status Code: 400, Request Id: \"4a3e96c4-e57c-42bc-b479-bf96f4ac12c9\""),
 			},
 			want: true,
 		},

@@ -28,18 +28,28 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore"
+	datastorev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/keymutex"
 )
 
+const (
+	PodAnnotationSpecificSubnets = "cce.io/subnets"
+)
+
+// subnet is a helper struct
+type subnet struct {
+	subnetID     string
+	availableCnt int
+}
+
 type IPAM struct {
 	lock     sync.RWMutex
 	nodeLock keymutex.KeyMutex
 
-	datastore      *datastore.DataStore
+	datastore      *datastorev2.DataStore
 	allocated      map[string]*v1alpha1.WorkloadEndpoint
 	cacheHasSynced bool
 
@@ -61,6 +71,9 @@ type IPAM struct {
 
 	bucket        *ratelimit.Bucket
 	batchAddIPNum int
+
+	// nodeENIMap is a map whose key is node name and value is eni Id
+	nodeENIMap map[string]string
 
 	gcPeriod time.Duration
 }

@@ -26,14 +26,19 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ktypes "k8s.io/apimachinery/pkg/types"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	k8sutilnet "k8s.io/utils/net"
 	"modernc.org/mathutil"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	ccetypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
@@ -51,17 +56,22 @@ type Controller struct {
 	// Common
 	kubeClient    kubernetes.Interface
 	crdClient     clientset.Interface
-	defaultIPPool string
+	metaClient    metadata.Interface
+	eventRecorder record.EventRecorder
+	ippoolName    string
 	cniMode       types.ContainerNetworkMode
 	instanceID    string
+	instanceType  metadata.InstanceTypeEx
 	nodeName      string
 	instance      *bccapi.InstanceModel
 	// ENI
 	cloudClient         cloud.Interface
-	eniSubnetCandidates []string // cluster-level candidate subnets
+	eniSubnetCandidates []string // cluster-level candidate subnets for eni
 	eniSecurityGroups   []string
-	subnetZoneCache     map[string]string // cached subnet and zone map
-	// Range
+	// Primary ENI Secondary IP
+	podSubnetCandidates []string // cluster-level candidate subnets for pod
+	// misc
+	subnetZoneCache map[string]string // cached subnet and zone map
 }
 
 func New(
@@ -71,26 +81,39 @@ func New(
 	cniMode ccetypes.ContainerNetworkMode,
 	nodeName string,
 	instanceID string,
-	subnetList []string,
+	instanceType metadata.InstanceTypeEx,
+	eniSubnetList []string,
 	securityGroupList []string,
+	podSubnetList []string,
 ) *Controller {
 	ctx := log.NewContext()
 	c := &Controller{
 		kubeClient:      kubeClient,
 		cloudClient:     cloudClient,
 		crdClient:       crdClient,
+		metaClient:      metadata.NewClient(),
 		cniMode:         cniMode,
 		nodeName:        nodeName,
-		defaultIPPool:   utilpool.GetDefaultIPPoolName(nodeName),
+		instanceType:    instanceType,
+		ippoolName:      utilpool.GetNodeIPPoolName(nodeName),
 		instanceID:      instanceID,
 		subnetZoneCache: make(map[string]string),
 	}
 
-	c.eniSubnetCandidates = subnetList
+	c.eniSubnetCandidates = eniSubnetList
 	log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
 
 	c.eniSecurityGroups = securityGroupList
 	log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
+
+	c.podSubnetCandidates = podSubnetList
+	log.Infof(ctx, "cluster-level pod candidate subnets are: %v", c.podSubnetCandidates)
+
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
+		Interface: kubeClient.CoreV1().Events(""),
+	})
+	c.eventRecorder = eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cce-cni-node-agent"})
 
 	return c
 }
@@ -101,14 +124,19 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 	isLocalNode := nodeKey == c.nodeName
 
 	if isLocalNode {
-		_, err := nodeLister.Get(nodeKey)
+		node, err := nodeLister.Get(nodeKey)
 		if err != nil && !kerrors.IsNotFound(err) {
 			return err
 		}
 
+		if node.Status.Phase == v1.NodeTerminated {
+			log.Infof(ctx, "node %v is terminated", node.Name)
+			return nil
+		}
+
 		// node exists, then ensure pool exists
 		if err := c.createOrUpdateIPPool(ctx); err != nil {
-			log.Errorf(ctx, "failed to create ippool %v: %v", c.defaultIPPool, err)
+			log.Errorf(ctx, "failed to create ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 
@@ -118,7 +146,9 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		case types.IsCCECNIModeBasedOnBCCSecondaryIP(c.cniMode):
 			return c.syncENISpec(ctx, nodeKey, nodeLister)
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(c.cniMode):
-			return c.syncENISpec(ctx, nodeKey, nodeLister)
+			e1 := c.syncENISpec(ctx, nodeKey, nodeLister)
+			e2 := c.syncPodSubnetSpec(ctx, nodeKey, nodeLister)
+			return utilerrors.NewAggregate([]error{e1, e2})
 		default:
 			return fmt.Errorf("unknown cni mode: %v", c.cniMode)
 		}
@@ -129,7 +159,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		_, err := nodeLister.Get(nodeKey)
 		if kerrors.IsNotFound(err) {
 			// clean up pool of deleted node
-			poolName := utilpool.GetDefaultIPPoolName(nodeKey)
+			poolName := utilpool.GetNodeIPPoolName(nodeKey)
 			log.Errorf(ctx, "node %v is deleted, delete default ippool %v", nodeKey, poolName)
 			if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(poolName, metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
 				log.Errorf(ctx, "failed to delete ippool %v: %v", poolName, err)
@@ -144,7 +174,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	log.V(6).Infof(ctx, "syncing eni spec of node %v begins...", nodeName)
 	defer log.V(6).Infof(ctx, "syncing eni spec of node %v ends...", nodeName)
 
-	// cache instance to avoid
+	// cache instance
 	if c.instance == nil {
 		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
 		if err != nil {
@@ -155,9 +185,9 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.defaultIPPool, metav1.GetOptions{})
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
 		if err != nil {
-			log.Errorf(ctx, "failed to get ippool %v: %v", c.defaultIPPool, err)
+			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 
@@ -166,14 +196,15 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.eniSubnetCandidates)
 		result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
 
-		// TODO: add an event here.
 		if len(result.Spec.ENI.Subnets) == 0 {
-			log.Errorf(ctx, "node %v in zone %v has no subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
+			msg := fmt.Sprintf("node %v in zone %v has no eni subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
+			log.Error(ctx, msg)
+			c.eventRecorder.Event(&v1.ObjectReference{Kind: "ENISubnet", Name: "ENISubnetEmpty"}, v1.EventTypeWarning, "ENISubnetEmpty", msg)
 		}
 
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
 		if updateErr != nil {
-			log.Errorf(ctx, "error updating ippool %v spec: %v", c.defaultIPPool, updateErr)
+			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
 		}
 
@@ -191,11 +222,63 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	})
 
 	if retryErr != nil {
-		log.Errorf(ctx, "retry: error updating ippool %v spec: %v", c.defaultIPPool, retryErr)
+		log.Errorf(ctx, "retry: error updating ippool %v spec: %v", c.ippoolName, retryErr)
 		return retryErr
 	}
 
-	log.V(6).Infof(ctx, "update ippool %v spec successfully", c.defaultIPPool)
+	log.V(6).Infof(ctx, "update ippool %v spec successfully", c.ippoolName)
+	return nil
+}
+
+func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
+	log.V(6).Infof(ctx, "syncing pod subnet spec of node %v begins...", nodeName)
+	defer log.V(6).Infof(ctx, "syncing pod subnet spec of node %v ends...", nodeName)
+
+	// TODO: current we only support BBC, will removed in the future.
+	if c.instanceType != metadata.InstanceTypeExBBC {
+		return nil
+	}
+
+	// cache instance
+	if c.instance == nil {
+		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
+		if err != nil {
+			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
+			return err
+		}
+		c.instance = instance
+	}
+
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
+		if err != nil {
+			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
+			return err
+		}
+
+		result.Spec.PodSubnets = c.findSameZoneSubnets(ctx, c.podSubnetCandidates)
+
+		if len(result.Spec.PodSubnets) == 0 {
+			msg := fmt.Sprintf("node %v in zone %v has no pod subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
+			log.Error(ctx, msg)
+			c.eventRecorder.Event(&v1.ObjectReference{Kind: "PodSubnet", Name: "PodSubnetEmpty"}, v1.EventTypeWarning, "PodSubnetEmpty", msg)
+		}
+
+		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
+		if updateErr != nil {
+			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
+			return updateErr
+		}
+
+		return nil
+	})
+
+	if retryErr != nil {
+		log.Errorf(ctx, "retry: error updating ippool %v spec: %v", c.ippoolName, retryErr)
+		return retryErr
+	}
+
+	log.V(6).Infof(ctx, "update ippool %v spec successfully", c.ippoolName)
 	return nil
 }
 
@@ -220,9 +303,9 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		ippool, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.defaultIPPool, metav1.GetOptions{})
+		ippool, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
 		if err != nil {
-			log.Errorf(ctx, "failed to get ippool %v: %v", c.defaultIPPool, err)
+			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 
@@ -251,7 +334,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 		ippool.Spec.IPv6Ranges = IPv6Ranges
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ippool)
 		if updateErr != nil {
-			log.Errorf(ctx, "error updating ippool %v spec: %v", c.defaultIPPool, updateErr)
+			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
 		}
 
@@ -259,17 +342,17 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 	})
 
 	if retryErr != nil {
-		log.Errorf(ctx, "retry: error updating ippool %v spec ip range: %v", c.defaultIPPool, retryErr)
+		log.Errorf(ctx, "retry: error updating ippool %v spec ip range: %v", c.ippoolName, retryErr)
 		return retryErr
 	}
 
-	log.V(6).Infof(ctx, "update ippool %v spec ip range successfully", c.defaultIPPool)
+	log.V(6).Infof(ctx, "update ippool %v spec ip range successfully", c.ippoolName)
 	return nil
 }
 
 // createOrUpdateIPPool creates or updates node-level IPPool CR
 func (c *Controller) createOrUpdateIPPool(ctx context.Context) error {
-	poolName := c.defaultIPPool
+	poolName := c.ippoolName
 	_, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(poolName, metav1.GetOptions{})
 	if err != nil {
 		if !kerrors.IsNotFound(err) {

@@ -306,6 +306,11 @@ func (p *ptpPlugin) setupHostVeth(vethName string, hostAddrs []netlink.Addr, res
 			addrBits = 32
 		}
 
+		var src net.IP
+		if len(hostAddrs) > 0 {
+			src = hostAddrs[0].IP
+		}
+
 		err := p.nlink.RouteAdd(&netlink.Route{
 			LinkIndex: veth.Index,
 			Scope:     netlink.SCOPE_LINK,
@@ -313,6 +318,7 @@ func (p *ptpPlugin) setupHostVeth(vethName string, hostAddrs []netlink.Addr, res
 				IP:   ipc.Address.IP,
 				Mask: net.CIDRMask(addrBits, addrBits),
 			},
+			Src: src,
 		})
 
 		if err != nil {

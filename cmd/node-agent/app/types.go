@@ -35,6 +35,8 @@ type Options struct {
 	hostName string
 	// instanceID is the BCE instanceID of this node.
 	instanceID string
+	// instanceType is the BCE instanceType of this node.
+	instanceType metadata.InstanceTypeEx
 	// subnetID is the subnetID of this node.
 	subnetID string
 	// errCh is the channel that errors will be sent.

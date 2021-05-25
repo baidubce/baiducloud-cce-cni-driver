@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asaskevich/govalidator"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/component-base/logs"
 	utilexec "k8s.io/utils/exec"
@@ -49,6 +50,7 @@ var (
 	masqChainFlag                     = flag.String("masq-chain", "IP-MASQ-AGENT", `Name of nat chain for iptables masquerade rules.`)
 	noMasqueradeAllReservedRangesFlag = flag.Bool("nomasq-all-reserved-ranges", false, "Whether to disable masquerade for all IPv4 ranges reserved by RFCs.")
 	enableIPv6                        = flag.Bool("enable-ipv6", true, "Whether to enable IPv6.")
+	cachedHostAddresses               map[string][]string
 )
 
 // MasqConfig object
@@ -149,12 +151,12 @@ func (m *MasqDaemon) Run() {
 				return
 			}
 			// resync rules
-			if err := m.syncMasqRules(); err != nil {
+			if err := m.syncMasqRules(ctx); err != nil {
 				log.Errorf(ctx, "error syncing masquerade rules: %v", err)
 				return
 			}
 			// resync ipv6 rules
-			if err := m.syncMasqRulesIPv6(); err != nil {
+			if err := m.syncMasqRulesIPv6(ctx); err != nil {
 				log.Errorf(ctx, "error syncing masquerade rules for ipv6: %v", err)
 				return
 			}
@@ -223,11 +225,14 @@ func (c *MasqConfig) validate() error {
 	// check CIDRs are valid
 	for _, cidr := range cidrs {
 		if err := validateCIDR(cidr); err != nil {
-			return err
-		}
-		// can't configure ipv6 cidr if ipv6 is not enabled
-		if !*enableIPv6 && isIPv6CIDR(cidr) {
-			return fmt.Errorf("ipv6 is not enabled, but ipv6 cidr %s provided. Enable ipv6 using --enable-ipv6 agent flag", cidr)
+			if !govalidator.IsDNSName(cidr) {
+				return fmt.Errorf("host %s is not dns name", cidr)
+			}
+		} else {
+			// can't configure ipv6 cidr if ipv6 is not enabled
+			if !*enableIPv6 && isIPv6CIDR(cidr) {
+				return fmt.Errorf("ipv6 is not enabled, but ipv6 cidr %s provided. Enable ipv6 using --enable-ipv6 agent flag", cidr)
+			}
 		}
 	}
 	return nil
@@ -248,7 +253,8 @@ func validateCIDR(cidr string) error {
 	}
 	return nil
 }
-func (m *MasqDaemon) syncMasqRules() error {
+
+func (m *MasqDaemon) syncMasqRules(ctx context.Context) error {
 	// make sure our custom chain for non-masquerade exists
 	m.iptables.EnsureChain(utiliptables.TableNAT, masqChain)
 	// ensure that any non-local in POSTROUTING jumps to masqChain
@@ -261,8 +267,21 @@ func (m *MasqDaemon) syncMasqRules() error {
 	writeLine(lines, utiliptables.MakeChainLine(masqChain)) // effectively flushes masqChain atomically with rule restore
 	// masquerade user specific traffic
 	for _, cidr := range m.config.MasqueradeCIDRs {
-		if !isIPv6CIDR(cidr) {
-			writeMasqCIDRRule(lines, cidr)
+		if _, _, err := net.ParseCIDR(cidr); err == nil {
+			if !isIPv6CIDR(cidr) {
+				writeMasqCIDRRule(lines, cidr)
+			}
+		} else {
+			hostCidrs, err := getHostIPAddressCIDRs(ctx, cidr)
+			if err != nil {
+				log.Errorf(ctx, "failed to get cidrs for host %s: %s", cidr, err)
+				continue
+			}
+			for _, hostCidr := range hostCidrs {
+				if !isIPv6CIDR(hostCidr) {
+					writeMasqCIDRRule(lines, hostCidr)
+				}
+			}
 		}
 	}
 	// link-local CIDR is always non-masquerade
@@ -271,8 +290,21 @@ func (m *MasqDaemon) syncMasqRules() error {
 	}
 	// non-masquerade for user-provided CIDRs
 	for _, cidr := range m.config.NonMasqueradeCIDRs {
-		if !isIPv6CIDR(cidr) {
-			writeNonMasqRule(lines, cidr)
+		if _, _, err := net.ParseCIDR(cidr); err == nil {
+			if !isIPv6CIDR(cidr) {
+				writeNonMasqRule(lines, cidr)
+			}
+		} else {
+			hostCidrs, err := getHostIPAddressCIDRs(ctx, cidr)
+			if err != nil {
+				log.Errorf(ctx, "failed to get cidrs for host %s: %s", cidr, err)
+				continue
+			}
+			for _, hostCidr := range hostCidrs {
+				if !isIPv6CIDR(hostCidr) {
+					writeNonMasqRule(lines, hostCidr)
+				}
+			}
 		}
 	}
 	if m.config.MasqOutBound {
@@ -285,7 +317,7 @@ func (m *MasqDaemon) syncMasqRules() error {
 	}
 	return nil
 }
-func (m *MasqDaemon) syncMasqRulesIPv6() error {
+func (m *MasqDaemon) syncMasqRulesIPv6(ctx context.Context) error {
 	isIPv6Enabled := *enableIPv6
 	if isIPv6Enabled {
 		// make sure our custom chain for ipv6 non-masquerade exists
@@ -303,8 +335,21 @@ func (m *MasqDaemon) syncMasqRulesIPv6() error {
 		writeLine(lines6, utiliptables.MakeChainLine(masqChain)) // effectively flushes masqChain atomically with rule restore
 		// masquerade user specific traffic
 		for _, cidr := range m.config.MasqueradeCIDRs {
-			if isIPv6CIDR(cidr) {
-				writeMasqCIDRRule(lines6, cidr)
+			if _, _, err := net.ParseCIDR(cidr); err == nil {
+				if isIPv6CIDR(cidr) {
+					writeMasqCIDRRule(lines6, cidr)
+				}
+			} else {
+				hostCidrs, err := getHostIPAddressCIDRs(ctx, cidr)
+				if err != nil {
+					log.Errorf(ctx, "failed to get cidrs for host %s: %s", cidr, err)
+					continue
+				}
+				for _, hostCidr := range hostCidrs {
+					if isIPv6CIDR(hostCidr) {
+						writeMasqCIDRRule(lines6, hostCidr)
+					}
+				}
 			}
 		}
 		// link-local IPv6 CIDR is non-masquerade by default
@@ -312,8 +357,21 @@ func (m *MasqDaemon) syncMasqRulesIPv6() error {
 			writeNonMasqRule(lines6, linkLocalCIDRIPv6)
 		}
 		for _, cidr := range m.config.NonMasqueradeCIDRs {
-			if isIPv6CIDR(cidr) {
-				writeNonMasqRule(lines6, cidr)
+			if _, _, err := net.ParseCIDR(cidr); err == nil {
+				if isIPv6CIDR(cidr) {
+					writeNonMasqRule(lines6, cidr)
+				}
+			} else {
+				hostCidrs, err := getHostIPAddressCIDRs(ctx, cidr)
+				if err != nil {
+					log.Errorf(ctx, "failed to get cidrs for host %s: %s", cidr, err)
+					continue
+				}
+				for _, hostCidr := range hostCidrs {
+					if isIPv6CIDR(hostCidr) {
+						writeNonMasqRule(lines6, hostCidr)
+					}
+				}
 			}
 		}
 		if m.config.MasqOutBoundIPv6 {
@@ -395,4 +453,39 @@ func isIPv6CIDR(cidr string) bool {
 // which means the ip belongs to ipv4 family
 func isIPv6(ip string) bool {
 	return net.ParseIP(ip).To4() == nil
+}
+
+func getHostIPAddressCIDRs(ctx context.Context, host string) ([]string, error) {
+	if cachedHostAddresses == nil {
+		cachedHostAddresses = make(map[string][]string)
+	}
+
+	// lookup host ip
+	var rawAddrs []string
+	hostAddrs, err := net.LookupHost(host)
+	if err != nil {
+		log.Warningf(ctx, "failed to lookup host %s, will search cache: %s", host, err)
+		cachedAddr, ok := cachedHostAddresses[host]
+		if !ok {
+			log.Errorf(ctx, "failed to get cached address for host: %s %s", host, err)
+			return nil, fmt.Errorf("no cached address found for host %s", host)
+		}
+		rawAddrs = cachedAddr
+	} else {
+		rawAddrs = hostAddrs
+		cachedHostAddresses[host] = hostAddrs
+	}
+
+	// convert ip to cidr
+	resultCIDRs := make([]string, 0)
+	for _, addr := range rawAddrs {
+		if isIPv6(addr) {
+			resultCIDRs = append(resultCIDRs, addr+"/128")
+		} else {
+			resultCIDRs = append(resultCIDRs, addr+"/32")
+		}
+	}
+
+	log.Infof(ctx, "cidrs for host %s: %s", host, resultCIDRs)
+	return resultCIDRs, nil
 }

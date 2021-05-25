@@ -26,8 +26,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore"
-	ipamtypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	datastorev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v2"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -91,7 +91,7 @@ func TestIPAM_Allocate(t *testing.T) {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
 		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
+		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
 		eventBroadcaster record.EventBroadcaster
@@ -107,6 +107,7 @@ func TestIPAM_Allocate(t *testing.T) {
 		clusterID        string
 		bucket           *ratelimit.Bucket
 		batchAddIPNum    int
+		nodeENIMap       map[string]string
 		gcPeriod         time.Duration
 	}
 	type args struct {
@@ -144,7 +145,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -184,7 +185,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -230,15 +231,27 @@ func TestIPAM_Allocate(t *testing.T) {
 					},
 				})
 
+				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(&v1alpha1.IPPool{
+					TypeMeta: metav1.TypeMeta{},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "ippool-test-node",
+						Namespace: v1.NamespaceDefault,
+					},
+					Spec: v1alpha1.IPPoolSpec{
+						PodSubnets: []string{"sbn-a"},
+					},
+				})
 				gomock.InOrder(
 					cloudClient.EXPECT().BBCGetInstanceENI(gomock.Any(), "test-node-id").Return(
 						&bbc.GetInstanceEniResult{
 							Id: "test-node-id",
 							PrivateIpSet: []bbc.PrivateIP{
 								{
+									SubnetId:         "sbn-a",
 									PrivateIpAddress: "10.1.1.1",
 								},
 								{
+									SubnetId:         "sbn-a",
 									PrivateIpAddress: "10.1.1.2",
 								},
 							},
@@ -248,7 +261,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -260,7 +273,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					allocated: map[string]*v1alpha1.WorkloadEndpoint{
 						"10.1.1.2": {},
 					},
-					bucket: ratelimit.NewBucket(100, 100),
+					bucket:     ratelimit.NewBucket(100, 100),
+					nodeENIMap: make(map[string]string),
 				}
 			}(),
 			args: args{
@@ -273,14 +287,15 @@ func TestIPAM_Allocate(t *testing.T) {
 					Name:      "busybox",
 					Namespace: "default",
 					Labels: map[string]string{
-						ipamtypes.WepLabelInstanceTypeKey: "bbc",
+						ipamgeneric.WepLabelInstanceTypeKey: "bbc",
 					},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
-					IP:       "10.1.1.1",
-					ENIID:    "test-node-id",
-					Node:     "test-node",
-					UpdateAt: metav1.Time{time.Unix(0, 0)},
+					IP:         "10.1.1.1",
+					InstanceID: "test-node-id",
+					Node:       "test-node",
+					SubnetID:   "sbn-a",
+					UpdateAt:   metav1.Time{time.Unix(0, 0)},
 				},
 			},
 			wantErr: false,
@@ -310,6 +325,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				cacheHasSynced:   tt.fields.cacheHasSynced,
 				gcPeriod:         tt.fields.gcPeriod,
 				clock:            clock.NewFakeClock(time.Unix(0, 0)),
+				nodeENIMap:       tt.fields.nodeENIMap,
 			}
 			got, err := ipam.Allocate(tt.args.ctx, tt.args.name, tt.args.namespace, tt.args.containerID)
 			if (err != nil) != tt.wantErr {
@@ -328,7 +344,7 @@ func TestIPAM_Release(t *testing.T) {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
 		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
+		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
 		eventBroadcaster record.EventBroadcaster
@@ -390,7 +406,7 @@ func TestIPAM_Release(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -446,7 +462,7 @@ func TestIPAM_Release(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -523,7 +539,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
 		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
+		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
 		eventBroadcaster record.EventBroadcaster
@@ -601,13 +617,9 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 				return fields{
 					ctrl: ctrl,
 					lock: sync.RWMutex{},
-					datastore: func() *datastore.DataStore {
-						dt := datastore.NewDataStore()
+					datastore: func() *datastorev2.DataStore {
+						dt := datastorev2.NewDataStore()
 						err := dt.AddNodeToStore("test-node", "test-node-id")
-						if err != nil {
-							return nil
-						}
-						err = dt.AddENIToStore("test-node", "test-node-id")
 						if err != nil {
 							return nil
 						}
@@ -703,7 +715,7 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
 		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
+		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
 		eventBroadcaster record.EventBroadcaster
@@ -748,8 +760,8 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 				return fields{
 					ctrl: ctrl,
 					lock: sync.RWMutex{},
-					datastore: func() *datastore.DataStore {
-						dt := datastore.NewDataStore()
+					datastore: func() *datastorev2.DataStore {
+						dt := datastorev2.NewDataStore()
 						err := dt.AddNodeToStore("test-node", "test-node-id")
 						if err != nil {
 							return nil
@@ -805,51 +817,6 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("gcDeletedNode() error = %v, wantErr %v", err, tt.wantErr)
 				return
-			}
-		})
-	}
-}
-
-func TestIPAM_poolTooLow(t *testing.T) {
-	ipam := IPAM{}
-	type args struct {
-		total int
-		used  int
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			name: "Normal More",
-			args: args{
-				total: 5,
-				used:  2,
-			},
-			want: false,
-		},
-		{
-			name: "Normal Equal",
-			args: args{
-				total: 5,
-				used:  5,
-			},
-			want: true,
-		},
-		{
-			name: "Normal Less - Corrupted",
-			args: args{
-				total: 5,
-				used:  7,
-			},
-			want: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ipam.poolTooLow(tt.args.total, tt.args.used); got != tt.want {
-				t.Errorf("ipam.poolTooLow() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -916,113 +883,12 @@ func TestIPAM_poolCorrupted(t *testing.T) {
 	}
 }
 
-func TestIPAM_increasePool(t *testing.T) {
-	type fields struct {
-		ctrl             *gomock.Controller
-		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
-		allocated        map[string]*v1alpha1.WorkloadEndpoint
-		cacheHasSynced   bool
-		eventBroadcaster record.EventBroadcaster
-		eventRecorder    record.EventRecorder
-		kubeInformer     informers.SharedInformerFactory
-		kubeClient       kubernetes.Interface
-		crdInformer      crdinformers.SharedInformerFactory
-		crdClient        versioned.Interface
-		cloud            cloud.Interface
-		clock            clock.Clock
-		cniMode          types.ContainerNetworkMode
-		vpcID            string
-		clusterID        string
-		bucket           *ratelimit.Bucket
-		batchAddIPNum    int
-		gcPeriod         time.Duration
-	}
-	type args struct {
-		ctx        context.Context
-		node       string
-		instanceID string
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr bool
-	}{
-		{
-			name: "normal",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
-
-				gomock.InOrder(
-					cloudClient.EXPECT().BBCBatchAddIP(gomock.Any(), gomock.Any()).Return(&bbc.BatchAddIpResponse{
-						PrivateIps: []string{"10.0.0.1", "10.0.0.2"},
-					}, nil),
-				)
-				startInformers(kubeInformer, crdInformer)
-				return fields{
-					ctrl:             ctrl,
-					batchAddIPNum:    5,
-					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
-					cacheHasSynced:   true,
-					eventBroadcaster: brdcaster,
-					eventRecorder:    recorder,
-					kubeInformer:     kubeInformer,
-					kubeClient:       kubeClient,
-					crdInformer:      crdInformer,
-					crdClient:        crdClient,
-					cloud:            cloudClient,
-					allocated: map[string]*v1alpha1.WorkloadEndpoint{
-						"10.0.0.1": {},
-					},
-					bucket: ratelimit.NewBucket(100, 100),
-				}
-			}(),
-			args: args{
-				node:       "test-node",
-				instanceID: "test-node-id",
-			},
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.fields.ctrl != nil {
-				defer tt.fields.ctrl.Finish()
-			}
-			ipam := &IPAM{
-				batchAddIPNum:  tt.fields.batchAddIPNum,
-				cloud:          tt.fields.cloud,
-				crdInformer:    tt.fields.crdInformer,
-				allocated:      tt.fields.allocated,
-				cacheHasSynced: tt.fields.cacheHasSynced,
-				clock:          clock.NewFakeClock(time.Unix(0, 0)),
-				datastore: func() *datastore.DataStore {
-					dt := datastore.NewDataStore()
-					dt.AddNodeToStore("test-node", "test-node-id")
-					dt.AddENIToStore("test-node", "test-node-id")
-					return dt
-				}(),
-				bucket: tt.fields.bucket,
-			}
-			err := ipam.increasePool(tt.args.ctx, tt.args.node, tt.args.instanceID)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("rebuildNodeDataStoreCache() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-		})
-	}
-}
-
 func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
 		nodeLock         keymutex.KeyMutex
-		datastore        *datastore.DataStore
+		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
 		eventBroadcaster record.EventBroadcaster
@@ -1038,6 +904,7 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 		clusterID        string
 		bucket           *ratelimit.Bucket
 		batchAddIPNum    int
+		nodeENIMap       map[string]string
 		gcPeriod         time.Duration
 	}
 	type args struct {
@@ -1069,7 +936,7 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
-					datastore:        datastore.NewDataStore(),
+					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
 					eventRecorder:    recorder,
@@ -1081,7 +948,8 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 					allocated: map[string]*v1alpha1.WorkloadEndpoint{
 						"10.0.0.1": {},
 					},
-					bucket: ratelimit.NewBucket(100, 100),
+					bucket:     ratelimit.NewBucket(100, 100),
+					nodeENIMap: make(map[string]string),
 				}
 			}(),
 			args: args{
@@ -1110,8 +978,9 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 				allocated:      tt.fields.allocated,
 				cacheHasSynced: tt.fields.cacheHasSynced,
 				clock:          clock.NewFakeClock(time.Unix(0, 0)),
-				datastore:      datastore.NewDataStore(),
+				datastore:      datastorev2.NewDataStore(),
 				bucket:         tt.fields.bucket,
+				nodeENIMap:     tt.fields.nodeENIMap,
 			}
 			err := ipam.rebuildNodeDataStoreCache(tt.args.ctx, tt.args.node, tt.args.instanceID)
 			if (err != nil) != tt.wantErr {

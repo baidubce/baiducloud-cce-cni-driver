@@ -46,7 +46,7 @@ func NewRootCommand() *cobra.Command {
 	options := &Options{
 		stopCh:                make(chan struct{}),
 		ResyncPeriod:          15 * time.Second,
-		ENISyncPeriod:         5 * time.Second,
+		ENISyncPeriod:         10 * time.Second,
 		GCPeriod:              60 * time.Second,
 		Port:                  9999,
 		SubnetSelectionPolicy: string(bccipam.SubnetSelectionPolicyMostFreeIP),
@@ -153,15 +153,14 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 		}
 
 		for _, ipamd := range ipamds {
-			if ipamd == nil {
-				continue
+			if ipamd != nil {
+				go func(ipamd ipam.Interface) {
+					ctx := log.NewContext()
+					if err := ipamd.Run(ctx, opts.stopCh); err != nil {
+						log.Fatalf(ctx, "ipamd failed to run: %v", err)
+					}
+				}(ipamd)
 			}
-			go func(ipamd ipam.Interface) {
-				ctx := log.NewContext()
-				if err := ipamd.Run(ctx, opts.stopCh); err != nil {
-					log.Fatalf(ctx, "ipamd failed to run: %v", err)
-				}
-			}(ipamd)
 		}
 
 		ipamGrpcBackend := grpc.New(ipamds[0], ipamds[1], opts.Port)

@@ -38,6 +38,7 @@ type WorkloadEndpointSpec struct {
 	Gw                string      `json:"gw"`
 	ENIID             string      `json:"eniID"`
 	Node              string      `json:"node"`
+	InstanceID        string      `json:"instanceID"`
 	SubnetID          string      `json:"subnetID"`
 	EnableFixIP       string      `json:"enableFixIP"`
 	FixIPDeletePolicy string      `json:"fixIPDeletePolicy"`
@@ -65,20 +66,25 @@ type IPPool struct {
 }
 
 type IPPoolSpec struct {
-	// IPPool bind to nodes selected by nodeSelector
+	// NodeSelector allows IPPool to allocate for a specific node by label selector
 	NodeSelector string `json:"nodeSelector"`
 
-	// ranges is for host-local allocator
-	IPv4Ranges []Range `json:"ipv4Ranges"`
-	IPv6Ranges []Range `json:"ipv6Ranges"`
+	// Priority is the priority value of IPPool
+	Priority int32 `json:"priority,omitempty"`
 
-	// eni spec, subnet/security group etc
-	// eni is for eni allocator
-	ENI ENISpec `json:"eni"`
+	// Range spec for host-local allocator
+	IPv4Ranges []Range `json:"ipv4Ranges,omitempty"`
+	IPv6Ranges []Range `json:"ipv6Ranges,omitempty"`
+
+	// ENI spec for ENI allocator
+	ENI ENISpec `json:"eni,omitempty"`
+
+	// PodSubnets spec for primary eni secondary ip modes
+	PodSubnets []string `json:"podSubnets,omitempty"`
 }
 
 type IPPoolStatus struct {
-	ENI ENIStatus `json:"eni"`
+	ENI ENIStatus `json:"eni,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

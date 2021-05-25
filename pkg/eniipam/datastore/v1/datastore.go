@@ -13,7 +13,7 @@
  *
  */
 
-package datastore
+package v1
 
 import (
 	"errors"

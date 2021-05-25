@@ -144,20 +144,25 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 func (o *Options) applyDefaults(ctx context.Context) error {
 	var err error
 
+	// get instance type
+	o.instanceType, err = o.metaClient.GetInstanceTypeEx()
+	if err != nil {
+		log.Fatalf(ctx, "failed to get instance type via metadata: %v", err)
+	}
+
 	if o.config.CNIMode == "" {
-		typeEx, err := o.metaClient.GetInstanceTypeEx()
-		if err == nil {
-			switch typeEx {
-			case metadata.InstanceTypeExBCC:
-				o.config.CNIMode = types.CCEModeSecondaryIPAutoDetect
-			case metadata.InstanceTypeExBBC:
-				o.config.CNIMode = types.CCEModeBBCSecondaryIPAutoDetect
-			}
+		switch o.instanceType {
+		case metadata.InstanceTypeExBCC:
+			o.config.CNIMode = types.CCEModeSecondaryIPAutoDetect
+		case metadata.InstanceTypeExBBC:
+			o.config.CNIMode = types.CCEModeBBCSecondaryIPAutoDetect
 		}
 	}
+
 	if o.config.Workers <= 0 {
 		o.config.Workers = 1
 	}
+
 	if o.config.ResyncPeriod <= 0 {
 		o.config.ResyncPeriod = types.Duration(defaultInformerResyncPeriod)
 	}

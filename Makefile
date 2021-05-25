@@ -19,18 +19,18 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.2.1
+VERSION := v1.2.2
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.16.8
 
 # build info
 GIT_COMMIT := $(shell git rev-parse HEAD)
-Git_SUMMARY := $(shell git describe --tags --dirty --always)
+GIT_SUMMARY := $(shell git describe --tags --dirty --always)
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 
 EXTRALDFLAGS := -X $(GO_PACKAGE)/pkg/version.GitCommit=$(GIT_COMMIT)
-EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.GitSummary=$(Git_SUMMARY)
+EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.GitSummary=$(GIT_SUMMARY)
 EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.BuildDate=$(BUILD_DATE)
 EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.Version=$(VERSION)
 

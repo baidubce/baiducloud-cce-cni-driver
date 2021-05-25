@@ -24,8 +24,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
 
-// GetDefaultIPPoolName is a helper function that creates IPPool CR name from nodeName
-func GetDefaultIPPoolName(nodeName string) string {
+// GetNodeIPPoolName is a helper function that creates IPPool CR name from nodeName
+func GetNodeIPPoolName(nodeName string) string {
 	return "ippool-" + strings.Replace(nodeName, ".", "-", -1)
 }
 

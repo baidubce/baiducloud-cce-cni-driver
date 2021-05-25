@@ -81,6 +81,21 @@ func (mr *MockInterfaceMockRecorder) BBCBatchAddIP(arg0, arg1 interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIP), arg0, arg1)
 }
 
+// BBCBatchAddIpCrossSubnet mocks base method
+func (m *MockInterface) BBCBatchAddIPCrossSubnet(arg0 context.Context, arg1 *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BBCBatchAddIPCrossSubnet", arg0, arg1)
+	ret0, _ := ret[0].(*bbc.BatchAddIpResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BBCBatchAddIpCrossSubnet indicates an expected call of BBCBatchAddIpCrossSubnet
+func (mr *MockInterfaceMockRecorder) BBCBatchAddIpCrossSubnet(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIPCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIPCrossSubnet), arg0, arg1)
+}
+
 // BBCBatchDelIP mocks base method
 func (m *MockInterface) BBCBatchDelIP(arg0 context.Context, arg1 *bbc.BatchDelIpArgs) error {
 	m.ctrl.T.Helper()

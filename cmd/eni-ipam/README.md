@@ -1,6 +1,6 @@
 # cce-eni-ipam
 
-中心化 ipam-server，负责申请/释放 ENI 辅助 IP。与 cni 插件 eni-ipam 通过 HTTP 协议通信，将申请/释放 IP 的结果传递给 cni。
+中心化 ipam-server，负责申请/释放 ENI 辅助 IP。与 cni 插件 eni-ipam 通过 gRPC 协议通信，将申请/释放 IP 的结果传递给 cni。
 
 ## sts 固定 IP
 

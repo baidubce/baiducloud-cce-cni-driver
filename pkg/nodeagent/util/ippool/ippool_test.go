@@ -44,8 +44,8 @@ func TestGetDefaultIPPoolName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := GetDefaultIPPoolName(tt.args.nodeName); got != tt.want {
-				t.Errorf("GetDefaultIPPoolName() = %v, want %v", got, tt.want)
+			if got := GetNodeIPPoolName(tt.args.nodeName); got != tt.want {
+				t.Errorf("GetNodeIPPoolName() = %v, want %v", got, tt.want)
 			}
 		})
 	}

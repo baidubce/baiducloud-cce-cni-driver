@@ -23,11 +23,10 @@ import (
 	"sort"
 	"time"
 
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
@@ -274,13 +273,13 @@ func (ipam *IPAM) needToCreateNewENI(ctx context.Context, node *v1.Node, attache
 	}
 
 	ipNum, eniNum := ipam.getAvailableIPAndENINum(ctx, maxIPPerENI, attachedENIs)
-	log.V(6).Infof(ctx, "node %v has %v available IP and %v available ENI if ignoring subnet that has no more ip", node.Name, ipNum, eniNum)
 
 	warmIPTarget, err := utileni.GetWarmIPTargetFromNodeAnnotations(node)
 	if err != nil {
 		return false, err
 	}
 	if ipNum < warmIPTarget {
+		log.Warningf(ctx, "node %v has %v available IP(s) and %v ENI(s) if ignoring subnet that has no more ip", node.Name, ipNum, eniNum)
 		msg := fmt.Sprintf("need to create eni due to: warm ip target(%v) not reached", warmIPTarget)
 		log.Info(ctx, msg)
 		ipam.eventRecorder.Event(node, v1.EventTypeNormal, "CreateNewENI", msg)
@@ -315,8 +314,10 @@ func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, maxIPPerENI int, 
 }
 
 func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.Node) ([]*v1alpha1.Subnet, error) {
+	var result []*v1alpha1.Subnet
+
 	// list all pools
-	pools, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceAll).List(metav1.ListOptions{})
+	pools, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).List(metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -329,19 +330,46 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 	}
 	log.V(6).Infof(ctx, "list all matched pools: %v", log.ToJson(matchedPools))
 
-	var result []*v1alpha1.Subnet
-	for _, pool := range matchedPools {
+	// sort matched pools by priority
+	sort.Slice(matchedPools, func(i, j int) bool {
+		return matchedPools[i].Spec.Priority > matchedPools[j].Spec.Priority
+	})
+
+	// find matched pools with largest priority.
+	// if multiple pools has the same priority, they are all selected out.
+	priorPools := findLargestPriorityPools(matchedPools)
+	log.V(6).Infof(ctx, "list all prior matched pools: %v", log.ToJson(priorPools))
+
+	// aggregate subnets
+	for _, pool := range priorPools {
 		for _, s := range pool.Spec.ENI.Subnets {
 			subnet, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(s)
 			if err != nil {
 				log.Errorf(ctx, "failed to get subnet %v crd: %v", s, err)
-				continue
+				return nil, err
 			}
 			result = append(result, subnet)
 		}
 	}
 
 	return result, nil
+}
+
+// TODO: this can be optimized by binary search
+func findLargestPriorityPools(pools []v1alpha1.IPPool) []v1alpha1.IPPool {
+	if len(pools) == 0 {
+		return nil
+	}
+
+	// pools have been sorted, search from tail to head
+	maxPriority := pools[0].Spec.Priority
+	for i := len(pools) - 1; i >= 0; i-- {
+		if pools[i].Spec.Priority == maxPriority {
+			return pools[:i+1]
+		}
+	}
+
+	return []v1alpha1.IPPool{pools[0]}
 }
 
 func (ipam *IPAM) createOneENI(ctx context.Context, node *v1.Node) error {
@@ -575,11 +603,11 @@ func (ipam *IPAM) rollbackFailedENI(ctx context.Context, eniID string) error {
 }
 
 func (ipam *IPAM) getSecurityGroupsFromDefaultIPPool(ctx context.Context, node *v1.Node) ([]string, error) {
-	defaultIPPool := utilippool.GetDefaultIPPoolName(node.Name)
+	ippoolName := utilippool.GetNodeIPPoolName(node.Name)
 
-	ippool, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(defaultIPPool, metav1.GetOptions{})
+	ippool, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ippoolName, metav1.GetOptions{})
 	if err != nil {
-		log.Errorf(ctx, "failed to get ippool %v: %v", defaultIPPool, err)
+		log.Errorf(ctx, "failed to get ippool %v: %v", ippoolName, err)
 		return nil, err
 	}
 

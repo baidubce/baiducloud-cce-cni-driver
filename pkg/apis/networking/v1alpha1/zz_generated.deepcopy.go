@@ -162,6 +162,11 @@ func (in *IPPoolSpec) DeepCopyInto(out *IPPoolSpec) {
 		}
 	}
 	in.ENI.DeepCopyInto(&out.ENI)
+	if in.PodSubnets != nil {
+		in, out := &in.PodSubnets, &out.PodSubnets
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 

@@ -43,9 +43,10 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonSubnetHasNoMoreIP
 		case caseInsensitiveContains(errMsg, "RateLimit"):
 			return ErrorReasonRateLimit
-		case caseInsensitiveContains(errMsg, "BadRequest") && caseInsensitiveContains(errMsg, "is invalid"):
+		case caseInsensitiveContains(errMsg, "NoSuchObject"):
 			return ErrorReasonBBCENIPrivateIPNotFound
-		case caseInsensitiveContains(errMsg, "ExceedLimitException"):
+			// TODO: remove BadRequest when IaaS fixes their API
+		case caseInsensitiveContains(errMsg, "ExceedLimitException") || caseInsensitiveContains(errMsg, "BadRequest"):
 			return ErrorReasonBBCENIPrivateIPExceedLimit
 		}
 	}

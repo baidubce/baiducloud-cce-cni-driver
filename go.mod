@@ -3,7 +3,8 @@ module github.com/baidubce/baiducloud-cce-cni-driver
 go 1.16
 
 require (
-	github.com/baidubce/bce-sdk-go v0.9.55
+	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a
+	github.com/baidubce/bce-sdk-go v0.9.70
 	github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins v0.8.7
 	github.com/gogo/protobuf v1.3.1 // indirect

@@ -23,7 +23,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	ktypes "k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	crdlisters "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8swatcher"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -47,6 +47,7 @@ func (ipam *IPAM) syncSubnets(stopCh <-chan struct{}) {
 	watcher.RegisterEventHandler(ipam)
 	go watcher.Run(1, stopCh)
 
+	// periodically update subnet
 	err := wait.PollImmediateUntil(subnetSyncPeriod, func() (done bool, err error) {
 		ctx := log.NewContext()
 		_ = ipam.updateSubnetStatus(ctx)
@@ -59,6 +60,9 @@ func (ipam *IPAM) syncSubnets(stopCh <-chan struct{}) {
 
 // SyncIPPool ipam implements IPPoolHandler
 func (ipam *IPAM) SyncIPPool(poolKey string, poolLister crdlisters.IPPoolLister) error {
+	var errs []error
+	var subnets []string
+
 	ctx := log.NewContext()
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(poolKey)
@@ -72,8 +76,12 @@ func (ipam *IPAM) SyncIPPool(poolKey string, poolLister crdlisters.IPPoolLister)
 		return err
 	}
 
-	var errs []error
-	for _, s := range pool.Spec.ENI.Subnets {
+	// in hybrid mode, bbc and bcc ipam are both enabled.
+	// so bcc ipam can sync all subnet crs.
+	subnets = append(subnets, pool.Spec.ENI.Subnets...)
+	subnets = append(subnets, pool.Spec.PodSubnets...)
+
+	for _, s := range subnets {
 		err := ipam.ensureSubnetCRExists(ctx, s)
 		if err != nil {
 			errs = append(errs, err)
@@ -94,6 +102,7 @@ func (ipam *IPAM) updateSubnetStatus(ctx context.Context) error {
 		resp, err := ipam.cloud.DescribeSubnet(ctx, crd.Spec.ID)
 		if err != nil {
 			log.Errorf(ctx, "failed to describe vpc subnet %v: %v", crd.Spec.ID, err)
+			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 			continue
 		}
 
@@ -119,36 +128,14 @@ func (ipam *IPAM) ensureSubnetCRExists(ctx context.Context, name string) error {
 			return err
 		}
 
-		// subnet cr not found, start to create
-		resp, err := ipam.cloud.DescribeSubnet(ctx, name)
-		if err != nil {
-			log.Errorf(ctx, "failed to describe vpc subnet %v: %v", name, err)
+		log.Warningf(ctx, "subnet cr for %v is not found, will create...", name)
+
+		if err := ipamgeneric.CreateSubnetCR(ctx, ipam.cloud, ipam.crdClient, name); err != nil {
+			log.Errorf(ctx, "failed to create subnet cr for %v: %v", name, err)
 			return err
 		}
 
-		s := &v1alpha1.Subnet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: v1.NamespaceDefault,
-			},
-			Spec: v1alpha1.SubnetSpec{
-				ID:               resp.SubnetId,
-				Name:             resp.Name,
-				AvailabilityZone: resp.ZoneName,
-				CIDR:             resp.Cidr,
-			},
-			Status: v1alpha1.SubnetStatus{
-				AvailableIPNum: resp.AvailableIp,
-				Enable:         true,
-				HasNoMoreIP:    false,
-			},
-		}
-
-		_, err = ipam.crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(s)
-		if err != nil {
-			log.Errorf(ctx, "failed to create subnet crd %v: %v", name, err)
-			return err
-		}
+		log.Infof(ctx, "create subnet cr for %v successfully", name)
 
 		return nil
 	}
@@ -158,7 +145,7 @@ func (ipam *IPAM) ensureSubnetCRExists(ctx context.Context, name string) error {
 		ipam.eventRecorder.Eventf(&v1.ObjectReference{
 			Kind: "Subnet",
 			Name: "SubnetHasNoMoreIP",
-		}, v1.EventTypeWarning, "SubnetHasNoMoreIP", "Subnet %v(%v) once has no more ip to allocate, consider disable it to prevent new eni creation", subnet.Spec.ID, subnet.Spec.CIDR)
+		}, v1.EventTypeWarning, "SubnetHasNoMoreIP", "Subnet %v(%v) has no more ip to allocate, consider disable it to prevent new eni creation", subnet.Spec.ID, subnet.Spec.CIDR)
 	}
 
 	return nil

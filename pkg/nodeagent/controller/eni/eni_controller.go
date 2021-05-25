@@ -31,6 +31,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
@@ -42,11 +43,14 @@ import (
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
+	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
 	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
+	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 )
 
 const (
 	fromENIPrimaryIPRulePriority = 1024
+	rpFilterSysctlTemplate       = "net.ipv4.conf.%s.rp_filter"
 )
 
 const (
@@ -64,10 +68,13 @@ type Controller struct {
 	metaClient    metadata.Interface
 	kubeClient    kubernetes.Interface
 	crdClient     clientset.Interface
+	eventRecorder record.EventRecorder
 	netlink       netlinkwrapper.Interface
+	sysctl        sysctlwrapper.Interface
+	netutil       networkutil.Interface
 	clusterID     string
 	nodeName      string
-	defaultIPPool string
+	ippoolName    string
 	instanceID    string
 	vpcID         string
 	rtTableOffset int
@@ -80,6 +87,7 @@ func New(
 	metaClient metadata.Interface,
 	kubeClient kubernetes.Interface,
 	crdClient clientset.Interface,
+	eventRecorder record.EventRecorder,
 	clusterID string,
 	nodeName string,
 	instanceID string,
@@ -92,10 +100,13 @@ func New(
 		metaClient:    metaClient,
 		kubeClient:    kubeClient,
 		crdClient:     crdClient,
+		eventRecorder: eventRecorder,
 		netlink:       netlinkwrapper.New(),
+		sysctl:        sysctlwrapper.New(),
+		netutil:       networkutil.New(),
 		clusterID:     clusterID,
 		nodeName:      nodeName,
-		defaultIPPool: utilippool.GetDefaultIPPoolName(nodeName),
+		ippoolName:    utilippool.GetNodeIPPoolName(nodeName),
 		instanceID:    instanceID,
 		vpcID:         vpcID,
 		rtTableOffset: rtTableOffset,
@@ -112,26 +123,27 @@ func (c *Controller) ReconcileENIs() {
 		err := c.reconcileENIs(ctx)
 		if err != nil {
 			log.Errorf(ctx, "error reconciling enis: %v", err)
+			c.eventRecorder.Eventf(&v1.ObjectReference{
+				Kind: "ENI",
+				Name: "ENIReconciliation",
+			}, v1.EventTypeWarning, "ENI Not Ready", "CCE ENI Controller failed to reconcile enis: %v", err)
 		}
+		// only update when eni ready, never taint node
+		if err == nil {
+			patchErr := k8sutil.UpdateNetworkingCondition(
+				ctx,
+				c.kubeClient,
+				c.nodeName,
+				true,
+				"AllENIReady",
+				"NotAllENIReady",
+				"CCE ENI Controller reconciles ENI",
+				"CCE ENI Controller failed to reconcile ENI",
+			)
 
-		var eniNetworkReady = true
-		if err != nil && !cloud.IsErrorRateLimit(err) {
-			eniNetworkReady = false
-		}
-
-		patchErr := k8sutil.UpdateNetworkingCondition(
-			ctx,
-			c.kubeClient,
-			c.nodeName,
-			eniNetworkReady,
-			"AllENIReady",
-			"NotAllENIReady",
-			"CCE ENI Controller reconciles ENI",
-			"CCE ENI Controller failed to reconcile ENI",
-		)
-
-		if patchErr != nil {
-			log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
+			if patchErr != nil {
+				log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
+			}
 		}
 
 		return false, nil
@@ -173,7 +185,7 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 	// report link index
 	err = c.setupENINetwork(ctx, enis)
 	if err != nil {
-		log.Errorf(ctx, "failed to update ippool %v status: %v", c.defaultIPPool, err)
+		log.Errorf(ctx, "failed to update ippool %v status: %v", c.ippoolName, err)
 		return err
 	}
 
@@ -212,6 +224,8 @@ func (c *Controller) freeLeakedAvailableENIs(ctx context.Context, enis []enisdk.
 		if err != nil {
 			log.Errorf(ctx, "failed to delete eni %v: %v", eni.EniId, err)
 			errs = append(errs, err)
+		} else {
+			log.Infof(ctx, "free leaked eni %v successfully", eni.EniId)
 		}
 	}
 
@@ -244,23 +258,23 @@ func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) err
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.defaultIPPool, metav1.GetOptions{})
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
 		if err != nil {
-			log.Errorf(ctx, "failed to get ippool %v: %v", c.defaultIPPool, err)
+			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 		result.Status.ENI.ENIs = eniStatus
 
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
 		if updateErr != nil {
-			log.Errorf(ctx, "error updating ippool %v status: %v", c.defaultIPPool, updateErr)
+			log.Errorf(ctx, "error updating ippool %v status: %v", c.ippoolName, updateErr)
 			return updateErr
 		}
 		return nil
 	})
 
 	if retryErr != nil {
-		log.Errorf(ctx, "retry: error updating ippool %v status: %v", c.defaultIPPool, retryErr)
+		log.Errorf(ctx, "retry: error updating ippool %v status: %v", c.ippoolName, retryErr)
 		return retryErr
 	}
 
@@ -294,6 +308,8 @@ func (c *Controller) setupENILink(ctx context.Context, eni *enisdk.Eni) (int, er
 		log.Errorf(ctx, "failed to add from eni primary ip rule: %v", err)
 		return eniIndex, err
 	}
+
+	_ = c.disableRPFCheck(ctx, eniIntf)
 
 	return eniIndex, nil
 }
@@ -463,6 +479,22 @@ func (c *Controller) addPrimaryIP(ctx context.Context, intf netlink.Link, primar
 
 	log.Infof(ctx, "add primary IP %v to link %v successfully", addr.String(), intf.Attrs().Name)
 	return nil
+}
+
+func (c *Controller) disableRPFCheck(ctx context.Context, eniIntf netlink.Link) error {
+	var errs []error
+
+	primaryInterfaceName, _ := c.netutil.DetectDefaultRouteInterfaceName()
+
+	for _, intf := range []string{"all", primaryInterfaceName, eniIntf.Attrs().Name} {
+		if intf != "" {
+			if _, err := c.sysctl.Sysctl(fmt.Sprintf(rpFilterSysctlTemplate, intf), "0"); err != nil {
+				errs = append(errs, err)
+				log.Errorf(ctx, "failed to disable RP filter for interface %v: %v", intf, err)
+			}
+		}
+	}
+	return utilerrors.NewAggregate(errs)
 }
 
 func (c *Controller) findLinkDefaultRoute(ctx context.Context, intf netlink.Link) (*netlink.Route, error) {

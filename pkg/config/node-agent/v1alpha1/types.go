@@ -58,6 +58,8 @@ type CCEConfiguration struct {
 	RouteController RouteControllerConfiguration `json:"routeController"`
 	// ENIController contains eni controller related configuration
 	ENIController ENIControllerConfiguration `json:"eniController"`
+	// PodSubnetController contains cross subnets related configuration
+	PodSubnetController PodSubnetControllerConfiguration `json:"podSubnetController"`
 }
 
 type CNIConfigControllerConfiguration struct {
@@ -93,4 +95,8 @@ type ENIControllerConfiguration struct {
 	ENISyncPeriod types.Duration `json:"eniSyncPeriod"`
 	// RouteTableOffset route policy offset, default 127
 	RouteTableOffset int `json:"routeTableOffset"`
+}
+
+type PodSubnetControllerConfiguration struct {
+	SubnetList []string `json:"subnetList"`
 }

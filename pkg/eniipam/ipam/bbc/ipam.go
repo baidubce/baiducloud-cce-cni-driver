@@ -59,7 +59,9 @@ import (
 const (
 	// cniTimeout set to be slightly less than 220 sec in kubelet
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
-	cniTimeout                 = 210 * time.Second
+	cniTimeout = 210 * time.Second
+	// minPrivateIPLifeTime is the life time of a private ip (from allocation to release), aim to trade off db slave delay
+	minPrivateIPLifeTime       = 3 * time.Second
 	rateLimitErrorSleepPeriod  = time.Millisecond * 200
 	rateLimitErrorJitterFactor = 5
 )
@@ -351,7 +353,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		if cloud.IsErrorRateLimit(err) {
 			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 		}
-		if !cloud.IsErrorBBCENIPrivateIPNotFound(err) {
+		if !(cloud.IsErrorBBCENIPrivateIPNotFound(err) && ipam.clock.Since(wep.Spec.UpdateAt.Time) >= minPrivateIPLifeTime) {
 			return nil, err
 		}
 	}
@@ -508,7 +510,7 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 					if cloud.IsErrorRateLimit(err) {
 						time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 					}
-					if !cloud.IsErrorBBCENIPrivateIPNotFound(err) {
+					if !(cloud.IsErrorBBCENIPrivateIPNotFound(err) && ipam.clock.Since(wep.Spec.UpdateAt.Time) >= minPrivateIPLifeTime) {
 						log.Errorf(ctx, "gc: stop delete wep for leaked pod (%v %v), try next round", wep.Namespace, wep.Name)
 						continue
 					}
@@ -666,6 +668,9 @@ func (ipam *IPAM) tryBatchAddIP(ctx context.Context, node, instanceID, subnetID 
 
 			if cloud.IsErrorRateLimit(err) {
 				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+			}
+			if cloud.IsErrorSubnetHasNoMoreIP(err) {
+				ipamgeneric.DeclareSubnetHasNoMoreIP(ctx, ipam.crdClient, ipam.crdInformer, subnetID, true)
 			}
 			if cloud.IsErrorBBCENIPrivateIPExceedLimit(err) {
 				batchAddNum = batchAddNum >> 1

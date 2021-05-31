@@ -490,7 +490,7 @@ func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 	for _, wep := range wepList {
 		nwep := wep.DeepCopy()
 		ipam.allocated[wep.Spec.IP] = nwep
-		log.Infof(ctx, "build cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
+		log.Infof(ctx, "build allocated pod cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
 	}
 	return nil
 }

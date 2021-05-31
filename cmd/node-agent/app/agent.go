@@ -252,6 +252,22 @@ func (s *nodeAgent) runCCEModeBasedOnBBCSecondaryIP(
 		log.Infof(ctx, "instance type is %v via metadata, will run eni controller", s.options.instanceType)
 		go eniController.ReconcileENIs()
 	}
+
+	if s.options.instanceType == metadata.InstanceTypeExBBC {
+		patchErr := utilk8s.UpdateNetworkingCondition(
+			ctx,
+			s.kubeClient,
+			s.options.hostName,
+			true,
+			"BBCReady",
+			"BBCNotReady",
+			"CCE Controller reconciles BBC",
+			"CCE Controller failed to reconcile BBC",
+		)
+		if patchErr != nil {
+			log.Errorf(ctx, "bbc: update networking condition for node %v error: %v", s.options.hostName, patchErr)
+		}
+	}
 }
 
 // printFlags logs the flags in the flagset

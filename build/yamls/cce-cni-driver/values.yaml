@@ -10,6 +10,7 @@ ContainerNetworkCIDRIPv4: # 集群 IPv4 容器网络网段
 ContainerNetworkCIDRIPv6: # 集群 IPv6 容器网络网段
 ENISubnetList: # 弹性网卡子网列表
 SecurityGroupList: # 弹性网卡安全组列表
+PodSubnetList:
 CCEGatewayEndpoint:
 BCCEndpoint:
 BBCEndpoint:

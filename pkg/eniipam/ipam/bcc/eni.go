@@ -313,6 +313,7 @@ func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, maxIPPerENI int, 
 	return ipNum, eniNum
 }
 
+// findAllCandidateSubnetsOfNode find largest priority pools to support dynamic config
 func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.Node) ([]*v1alpha1.Subnet, error) {
 	var result []*v1alpha1.Subnet
 
@@ -328,7 +329,7 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 	if err != nil {
 		return nil, err
 	}
-	log.V(6).Infof(ctx, "list all matched pools: %v", log.ToJson(matchedPools))
+	log.Infof(ctx, "list all matched pools: %v", poolNameList(matchedPools))
 
 	// sort matched pools by priority
 	sort.Slice(matchedPools, func(i, j int) bool {
@@ -338,7 +339,9 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 	// find matched pools with largest priority.
 	// if multiple pools has the same priority, they are all selected out.
 	priorPools := findLargestPriorityPools(matchedPools)
-	log.V(6).Infof(ctx, "list all prior matched pools: %v", log.ToJson(priorPools))
+	if len(priorPools) > 0 {
+		log.Infof(ctx, "list matched pools with largest priority %v: %v", priorPools[0].Spec.Priority, poolNameList(priorPools))
+	}
 
 	// aggregate subnets
 	for _, pool := range priorPools {
@@ -353,6 +356,14 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 	}
 
 	return result, nil
+}
+
+func poolNameList(pools []v1alpha1.IPPool) []string {
+	var result []string
+	for _, pool := range pools {
+		result = append(result, pool.Name)
+	}
+	return result
 }
 
 // TODO: this can be optimized by binary search

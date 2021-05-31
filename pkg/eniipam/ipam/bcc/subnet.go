@@ -17,14 +17,11 @@ package bcc
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
-	ktypes "k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
@@ -152,39 +149,9 @@ func (ipam *IPAM) ensureSubnetCRExists(ctx context.Context, name string) error {
 }
 
 func (ipam *IPAM) declareSubnetHasNoMoreIP(ctx context.Context, subnetID string, hasNoMoreIP bool) error {
-	subnet, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(subnetID)
-	if err != nil {
-		log.Errorf(ctx, "failed to get subnet crd %v: %v", subnetID, err)
-		return err
-	}
-
-	status := subnet.Status
-
-	// the status is same, won't update
-	if status.HasNoMoreIP == hasNoMoreIP {
-		return nil
-	}
-
-	status.HasNoMoreIP = hasNoMoreIP
-	err = ipam.patchSubnetStatus(ctx, subnet.Name, &status)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ipamgeneric.DeclareSubnetHasNoMoreIP(ctx, ipam.crdClient, ipam.crdInformer, subnetID, hasNoMoreIP)
 }
 
 func (ipam *IPAM) patchSubnetStatus(ctx context.Context, name string, status *v1alpha1.SubnetStatus) error {
-	json, err := json.Marshal(status)
-	if err != nil {
-		return err
-	}
-	patchData := []byte(fmt.Sprintf(`{"status":%s}`, json))
-	_, err = ipam.crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Patch(name, ktypes.MergePatchType, patchData)
-	if err != nil {
-		log.Errorf(ctx, "failed to patch subnet crd %v: %v", name, err)
-		return err
-	}
-
-	return nil
+	return ipamgeneric.PatchSubnetStatus(ctx, ipam.crdClient, name, status)
 }

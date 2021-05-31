@@ -42,7 +42,7 @@ type WorkloadEndpointSpec struct {
 	SubnetID          string      `json:"subnetID"`
 	EnableFixIP       string      `json:"enableFixIP"`
 	FixIPDeletePolicy string      `json:"fixIPDeletePolicy"`
-	UpdateAt          metav1.Time `json:"-"`
+	UpdateAt          metav1.Time `json:"updateAt"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -22,13 +22,15 @@ import (
 type ErrorReason string
 
 const (
-	ErrorReasonUnknown                    ErrorReason = "Unknown"
-	ErrorReasonENIPrivateIPNotFound       ErrorReason = "ENIPrivateIPNotFound"
-	ErrorReasonENINotFound                ErrorReason = "ENINotFound"
-	ErrorReasonSubnetHasNoMoreIP          ErrorReason = "SubnetHasNoMoreIP"
-	ErrorReasonRateLimit                  ErrorReason = "RateLimit"
-	ErrorReasonBBCENIPrivateIPNotFound    ErrorReason = "BBCENIPrivateIPNotFound"
-	ErrorReasonBBCENIPrivateIPExceedLimit ErrorReason = "BBCENIPrivateIPExceedLimit"
+	ErrorReasonUnknown                             ErrorReason = "Unknown"
+	ErrorReasonENIPrivateIPNotFound                ErrorReason = "ENIPrivateIPNotFound"
+	ErrorReasonENINotFound                         ErrorReason = "ENINotFound"
+	ErrorReasonSubnetHasNoMoreIP                   ErrorReason = "SubnetHasNoMoreIP"
+	ErrorReasonRateLimit                           ErrorReason = "RateLimit"
+	ErrorReasonPrivateIPInUse                      ErrorReason = "PrivateIPInUse"
+	ErrorReasonVmMemoryCanNotAttachMoreIpException ErrorReason = "VmMemoryCanNotAttachMoreIpException"
+	ErrorReasonBBCENIPrivateIPNotFound             ErrorReason = "BBCENIPrivateIPNotFound"
+	ErrorReasonBBCENIPrivateIPExceedLimit          ErrorReason = "BBCENIPrivateIPExceedLimit"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -43,12 +45,16 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonSubnetHasNoMoreIP
 		case caseInsensitiveContains(errMsg, "RateLimit"):
 			return ErrorReasonRateLimit
-			// TODO: remove BadRequest when IaaS fixes their API
 		case caseInsensitiveContains(errMsg, "NoSuchObject") || caseInsensitiveContains(errMsg, "is invalid"):
-			return ErrorReasonBBCENIPrivateIPNotFound
 			// TODO: remove BadRequest when IaaS fixes their API
+			return ErrorReasonBBCENIPrivateIPNotFound
+		case caseInsensitiveContains(errMsg, "VmMemoryCanNotAttachMoreIpException"):
+			return ErrorReasonVmMemoryCanNotAttachMoreIpException
 		case caseInsensitiveContains(errMsg, "ExceedLimitException") || caseInsensitiveContains(errMsg, "BadRequest"):
+			// TODO: remove BadRequest when IaaS fixes their API
 			return ErrorReasonBBCENIPrivateIPExceedLimit
+		case caseInsensitiveContains(errMsg, "PrivateIpInUseException"):
+			return ErrorReasonPrivateIPInUse
 		}
 	}
 	return ErrorReasonUnknown
@@ -69,6 +75,14 @@ func IsErrorSubnetHasNoMoreIP(err error) bool {
 
 func IsErrorRateLimit(err error) bool {
 	return ReasonForError(err) == ErrorReasonRateLimit
+}
+
+func IsErrorPrivateIPInUse(err error) bool {
+	return ReasonForError(err) == ErrorReasonPrivateIPInUse
+}
+
+func IsErrorVmMemoryCanNotAttachMoreIpException(err error) bool {
+	return ReasonForError(err) == ErrorReasonVmMemoryCanNotAttachMoreIpException
 }
 
 func IsErrorBBCENIPrivateIPNotFound(err error) bool {

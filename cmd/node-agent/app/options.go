@@ -298,8 +298,8 @@ func (o *Options) getNodeInstanceID(ctx context.Context) (string, error) {
 		if err == nil {
 			n, err := o.kubeClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
 			if err == nil {
-				instanceID = ipamutil.GetInstanceIDFromNode(n)
-				if instanceID != "" {
+				instanceID, err = ipamutil.GetInstanceIDFromNode(n)
+				if err == nil {
 					return instanceID, nil
 				}
 			}

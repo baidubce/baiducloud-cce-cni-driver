@@ -301,6 +301,7 @@ func TestIPAM_Allocate(t *testing.T) {
 						ipamgeneric.WepLabelSubnetIDKey:     "",
 						ipamgeneric.WepLabelInstanceTypeKey: "bcc",
 					},
+					Finalizers: []string{ipamgeneric.WepFinalizer},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
 					IP:       "10.1.1.1",

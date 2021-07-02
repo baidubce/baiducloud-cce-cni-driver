@@ -57,7 +57,13 @@ data:
                 "omitGateway":true,
                 "ipam": {
                     "type": "host-local",
-                    "subnet": "{{ printf "{{ .Subnet }}" }}",
+                    "ranges":[
+                        [
+                            {
+                                "subnet":"{{ printf "{{ .Subnet }}" }}"
+                            }
+                        ]
+                    ],
                     "routes":[
                         {
                             "dst":"0.0.0.0/0"

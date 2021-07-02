@@ -241,6 +241,13 @@ func TestIPAM_Allocate(t *testing.T) {
 						PodSubnets: []string{"sbn-a"},
 					},
 				})
+
+				crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(&v1alpha1.Subnet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sbn-a",
+						Namespace: v1.NamespaceDefault,
+					},
+				})
 				gomock.InOrder(
 					cloudClient.EXPECT().BBCGetInstanceENI(gomock.Any(), "test-node-id").Return(
 						&bbc.GetInstanceEniResult{
@@ -289,6 +296,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Labels: map[string]string{
 						ipamgeneric.WepLabelInstanceTypeKey: "bbc",
 					},
+					Finalizers: []string{ipamgeneric.WepFinalizer},
 				},
 				Spec: v1alpha1.WorkloadEndpointSpec{
 					IP:         "10.1.1.1",
@@ -927,8 +935,8 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 				gomock.InOrder(
 					cloudClient.EXPECT().BBCGetInstanceENI(gomock.Any(), gomock.Any()).Return(&bbc.GetInstanceEniResult{
 						PrivateIpSet: []bbc.PrivateIP{
-							{PrivateIpAddress: "10.0.0.1"},
-							{PrivateIpAddress: "10.0.0.2"},
+							{PrivateIpAddress: "10.0.0.1", SubnetId: "sbn"},
+							{PrivateIpAddress: "10.0.0.2", SubnetId: "sbn"},
 						},
 					}, nil),
 				)

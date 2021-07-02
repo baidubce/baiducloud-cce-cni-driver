@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	WaitLockSleepTime = 10 * time.Microsecond
+	waitLockSleepTime = 10 * time.Microsecond
 )
 
 type KeyMutex struct {
@@ -33,12 +33,17 @@ func (k *KeyMutex) TryLock(key interface{}) bool {
 	return !ok
 }
 
-func (k *KeyMutex) WaitLock(key interface{}, retry int) bool {
-	for i := 0; i < retry; i++ {
+func (k *KeyMutex) WaitLock(key interface{}, timeout time.Duration) bool {
+	start := time.Now()
+
+	for {
 		if k.TryLock(key) {
 			return true
-		} else {
-			time.Sleep(WaitLockSleepTime)
+		}
+
+		time.Sleep(waitLockSleepTime)
+		if time.Since(start) >= timeout {
+			return false
 		}
 	}
 	return false

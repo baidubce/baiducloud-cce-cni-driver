@@ -22,6 +22,7 @@ import (
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/juju/ratelimit"
 	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
@@ -29,6 +30,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -54,9 +56,13 @@ type IPAM struct {
 	eniCache map[string][]*enisdk.Eni
 	// privateIPNumCache stores allocated IP num of each eni. key is eni id.
 	privateIPNumCache map[string]int
-	cacheHasSynced    bool
+	// addIPBackoffCache to slow down add ip API call if subnet or vm cannot allocate more ip
+	addIPBackoffCache map[string]*wait.Backoff
+	// ipam will rebuild cache if restarts, should not handle request from cni if cacheHasSynced is false
+	cacheHasSynced bool
 	// key is ip, value is wep
 	allocated map[string]*v1alpha1.WorkloadEndpoint
+	datastore *datastorev1.DataStore
 
 	eventBroadcaster record.EventBroadcaster
 	eventRecorder    record.EventRecorder

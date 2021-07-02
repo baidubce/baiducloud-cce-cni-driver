@@ -17,16 +17,22 @@ package ipam
 
 import (
 	"context"
+	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
 
 const (
-	WepTypeSts          = "StatefulSet"
-	WepTypePod          = "Pod"
-	WepLabelStsOwnerKey = "cce.io/owner"
-	WepLabelSubnetIDKey = "cce.io/subnet-id"
+	WepTypeSts              = "StatefulSet"
+	WepTypePod              = "Pod"
+	WepLabelStsOwnerKey     = "cce.io/owner"
+	WepLabelSubnetIDKey     = "cce.io/subnet-id"
 	WepLabelInstanceTypeKey = "cce.io/instance-type"
+	WepFinalizer            = "cce-cni.cce.io"
+
+	// CniTimeout set to be slightly less than 220 sec in kubelet
+	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
+	CniTimeout = 200 * time.Second
 )
 
 type Interface interface {

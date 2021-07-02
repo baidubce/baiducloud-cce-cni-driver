@@ -24,14 +24,15 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
 
-func TestGetInstanceID(t *testing.T) {
+func TestGetInstanceIDFromNode(t *testing.T) {
 	type args struct {
 		node *v1.Node
 	}
 	tests := []struct {
-		name string
-		args args
-		want string
+		name    string
+		args    args
+		want    string
+		wantErr bool
 	}{
 		{
 			args: args{
@@ -51,13 +52,19 @@ func TestGetInstanceID(t *testing.T) {
 					},
 				},
 			},
-			want: "",
+			want:    "",
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := GetInstanceIDFromNode(tt.args.node); got != tt.want {
-				t.Errorf("GetInstanceIDFromNode() = %v, want %v", got, tt.want)
+			got, err := GetInstanceIDFromNode(tt.args.node)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetInstanceIDFromNode() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("GetInstanceIDFromNode() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

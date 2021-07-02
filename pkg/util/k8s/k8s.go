@@ -76,6 +76,15 @@ func IsStatefulSetPod(pod *v1.Pod) bool {
 	return false
 }
 
+func IsPodFinished(pod *v1.Pod) bool {
+	// Ref: https://github.com/projectcalico/libcalico-go/blob/9bbd69b5de2b6df62f4508d7557ddb67b1be1dc2/lib/backend/k8s/conversion/conversion.go#L157-L171
+	switch pod.Status.Phase {
+	case v1.PodFailed, v1.PodSucceeded, v1.PodPhase("Completed"):
+		return true
+	}
+	return false
+}
+
 func UpdateNetworkingCondition(
 	ctx context.Context,
 	kubeClient kubernetes.Interface,

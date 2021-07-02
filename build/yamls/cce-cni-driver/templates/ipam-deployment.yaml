@@ -6,6 +6,8 @@ metadata:
   namespace: kube-system
 spec:
   replicas: {{- if has .Values.CNIMode $deployCNIModeList }} 0 {{- else }} 3 {{- end }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cce-eni-ipam
@@ -54,7 +56,7 @@ spec:
             - --cluster-id={{ .Values.ClusterID }}
             - --region={{ .Values.Region }}
             - --vpc-id={{ .Values.VPCID }}
-            - --eni-sync-period=3s
+            - --eni-sync-period=10s
             - --gc-period=120s
             - --port=9999
             - --logtostderr=false

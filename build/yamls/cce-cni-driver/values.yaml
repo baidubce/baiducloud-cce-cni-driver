@@ -2,7 +2,7 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-CNIMode: vpc-secondary-ip-auto-detect # CNI 模式
+CNIMode: vpc-secondary-ip-auto-detect
 Region:   # 集群地域
 ClusterID: # 集群id
 VPCID:    # 集群 vpc id

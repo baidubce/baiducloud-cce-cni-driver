@@ -174,6 +174,11 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	log.V(6).Infof(ctx, "syncing eni spec of node %v begins...", nodeName)
 	defer log.V(6).Infof(ctx, "syncing eni spec of node %v ends...", nodeName)
 
+	//  current we only support BCC
+	if c.instanceType != metadata.InstanceTypeExBCC {
+		return nil
+	}
+
 	// cache instance
 	if c.instance == nil {
 		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
@@ -181,6 +186,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
 			return err
 		}
+		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
 		c.instance = instance
 	}
 
@@ -246,6 +252,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
 			return err
 		}
+		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
 		c.instance = instance
 	}
 
@@ -268,6 +275,14 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 		if updateErr != nil {
 			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
+		}
+
+		const bbcMaxPrivateIPNum = 40
+		const bbcMaxENINum = 1
+		err = c.patchENICapacityInfoToNode(ctx, bbcMaxENINum, bbcMaxPrivateIPNum)
+		if err != nil {
+			log.Errorf(ctx, "error patching cni capacity info: %v", err)
+			return err
 		}
 
 		return nil

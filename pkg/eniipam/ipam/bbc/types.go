@@ -21,6 +21,7 @@ import (
 
 	"github.com/juju/ratelimit"
 	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
@@ -49,9 +50,10 @@ type IPAM struct {
 	lock     sync.RWMutex
 	nodeLock keymutex.KeyMutex
 
-	datastore      *datastorev2.DataStore
-	allocated      map[string]*v1alpha1.WorkloadEndpoint
-	cacheHasSynced bool
+	datastore         *datastorev2.DataStore
+	addIPBackoffCache map[string]*wait.Backoff
+	allocated         map[string]*v1alpha1.WorkloadEndpoint
+	cacheHasSynced    bool
 
 	eventBroadcaster record.EventBroadcaster
 	eventRecorder    record.EventRecorder

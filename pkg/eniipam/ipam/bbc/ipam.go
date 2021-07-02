@@ -19,6 +19,7 @@ import (
 	"context"
 	goerrors "errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ import (
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/kubernetes/pkg/kubelet/dockershim/network"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
@@ -51,15 +53,12 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
+	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/keymutex"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 const (
-	// cniTimeout set to be slightly less than 220 sec in kubelet
-	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
-	cniTimeout = 210 * time.Second
 	// minPrivateIPLifeTime is the life time of a private ip (from allocation to release), aim to trade off db slave delay
 	minPrivateIPLifeTime       = 3 * time.Second
 	rateLimitErrorSleepPeriod  = time.Millisecond * 200
@@ -89,24 +88,25 @@ func NewIPAM(
 	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, resyncPeriod)
 
 	ipam := &IPAM{
-		eventBroadcaster: eventBroadcaster,
-		eventRecorder:    recorder,
-		kubeInformer:     kubeInformer,
-		kubeClient:       kubeClient,
-		crdInformer:      crdInformer,
-		crdClient:        crdClient,
-		cloud:            bceClient,
-		clock:            clock.RealClock{},
-		cniMode:          cniMode,
-		vpcID:            vpcID,
-		clusterID:        clusterID,
-		datastore:        datastorev2.NewDataStore(),
-		allocated:        make(map[string]*v1alpha1.WorkloadEndpoint),
-		bucket:           ratelimit.NewBucketWithRate(ipMutatingRate, ipMutatingBurst),
-		nodeENIMap:       make(map[string]string),
-		batchAddIPNum:    batchAddIPNum,
-		cacheHasSynced:   false,
-		gcPeriod:         gcPeriod,
+		eventBroadcaster:  eventBroadcaster,
+		eventRecorder:     recorder,
+		kubeInformer:      kubeInformer,
+		kubeClient:        kubeClient,
+		crdInformer:       crdInformer,
+		crdClient:         crdClient,
+		cloud:             bceClient,
+		clock:             clock.RealClock{},
+		cniMode:           cniMode,
+		vpcID:             vpcID,
+		clusterID:         clusterID,
+		datastore:         datastorev2.NewDataStore(),
+		addIPBackoffCache: make(map[string]*wait.Backoff),
+		allocated:         make(map[string]*v1alpha1.WorkloadEndpoint),
+		bucket:            ratelimit.NewBucketWithRate(ipMutatingRate, ipMutatingBurst),
+		nodeENIMap:        make(map[string]string),
+		batchAddIPNum:     batchAddIPNum,
+		cacheHasSynced:    false,
+		gcPeriod:          gcPeriod,
 	}
 	return ipam, nil
 }
@@ -139,15 +139,19 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	// get instance id from node
-	instanceID := util.GetInstanceIDFromNode(node)
+	instanceID, err := util.GetInstanceIDFromNode(node)
+	if err != nil {
+		return nil, err
+	}
 
 	var candidateSubnets []string
 
-	// check pod annotation
+	// check pod annotation, judge whether pod needs specific subnets
 	if PodNeedsSpecificSubnets(pod) {
 		candidateSubnets = GetPodSpecificSubnetsFromAnnotation(pod)
 		log.Infof(ctx, "pod (%v %v) requires specific subnets: %v", namespace, name, pod.Annotations[PodAnnotationSpecificSubnets])
 	} else {
+		// normal pod use predefined subnets
 		candidateSubnets = ippool.Spec.PodSubnets
 	}
 
@@ -158,9 +162,9 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		log.Warningf(ctx, "warn: create subnet crs failed: %v", err)
 	}
 
-	// add lock for each node
-	if !ipam.nodeLock.WaitLock(node.Name, (int)(cniTimeout/keymutex.WaitLockSleepTime)) {
-		msg := fmt.Sprintf("wait key lock for node %v timeout", node.Name)
+	// add key lock for each node
+	if !ipam.nodeLock.WaitLock(node.Name, (network.CNITimeoutSec*time.Second-ipamgeneric.CniTimeout)/2) {
+		msg := fmt.Sprintf("QPS exceed limit on node %v", node.Name)
 		log.Error(ctx, msg)
 		return nil, goerrors.New(msg)
 	}
@@ -177,7 +181,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		log.Infof(ctx, "rebuild cache for node %v ends", node.Name)
 	}
 
-	// check if pool is corrupted
+	// get node stats from store, to further check if pool is corrupted
 	total, used, err := ipam.datastore.GetNodeStats(node.Name)
 	if err != nil {
 		msg := fmt.Sprintf("get node %v stats in datastore failed: %v", node, err)
@@ -201,7 +205,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	// if pool cannot allocate ip, then batch add ips
 	if !ipam.poolCanAllocateIP(ctx, node.Name, candidateSubnets) {
 		start := time.Now()
-		err = ipam.increasePool(ctx, node.Name, instanceID, candidateSubnets)
+		err = ipam.increasePool(ctx, node.Name, instanceID, candidateSubnets, pod)
 		if err != nil {
 			log.Errorf(ctx, "increase pool for node %v failed: %v", node.Name, err)
 		}
@@ -223,6 +227,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			Labels: map[string]string{
 				ipamgeneric.WepLabelInstanceTypeKey: string(metadata.InstanceTypeExBBC),
 			},
+			Finalizers: []string{ipamgeneric.WepFinalizer},
 		},
 		Spec: v1alpha1.WorkloadEndpointSpec{
 			ContainerID: containerID,
@@ -246,6 +251,10 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	log.Infof(ctx, "create wep with spec %+v for pod (%v %v) successfully", wep.Spec, namespace, name)
 
 	ipam.lock.Lock()
+	if _, ok := ipam.addIPBackoffCache[wep.Spec.InstanceID]; ok {
+		delete(ipam.addIPBackoffCache, wep.Spec.InstanceID)
+		log.Infof(ctx, "remove backoff for instance %v when handling pod (%v %v) due to successful ip allocate", wep.Spec.InstanceID, namespace, name)
+	}
 	ipam.allocated[ipResult] = wep
 	ipam.lock.Unlock()
 
@@ -293,7 +302,6 @@ func (ipam *IPAM) tryAllocateIPBySubnets(ctx context.Context, node string, candi
 			continue
 		}
 		available := total - used
-
 		subnets = append(subnets, subnet{sbn, available})
 	}
 
@@ -341,10 +349,9 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		return nil, nil
 	}
 
-	ipam.bucket.Wait(1)
 	// delete eni ip, delete fip crd
 	log.Infof(ctx, "try to release private IP and wep for pod (%v %v)", namespace, name)
-	err = ipam.cloud.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+	err = ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
 		InstanceId: wep.Spec.InstanceID,
 		PrivateIps: []string{wep.Spec.IP},
 	})
@@ -356,6 +363,14 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		if !(cloud.IsErrorBBCENIPrivateIPNotFound(err) && ipam.clock.Since(wep.Spec.UpdateAt.Time) >= minPrivateIPLifeTime) {
 			return nil, err
 		}
+	} else {
+		// err == nil, ip was really on eni and deleted successfully, remove backoff
+		ipam.lock.Lock()
+		if _, ok := ipam.addIPBackoffCache[wep.Spec.InstanceID]; ok {
+			delete(ipam.addIPBackoffCache, wep.Spec.InstanceID)
+			log.Infof(ctx, "remove backoff for instance %v when handling pod (%v %v) due to successful ip release", wep.Spec.InstanceID, namespace, name)
+		}
+		ipam.lock.Unlock()
 	}
 	log.Infof(ctx, "release private IP %v for pod (%v %v) successfully", wep.Spec.IP, namespace, name)
 
@@ -370,6 +385,13 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		log.Errorf(ctx, "release: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
 	}
 
+	// remove finalizers
+	wep.Finalizers = nil
+	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(wep)
+	if err != nil {
+		log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
+		return nil, err
+	}
 	// delete wep
 	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(name, metav1.NewDeleteOptions(0))
 	if err != nil {
@@ -498,9 +520,8 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 					Name: fmt.Sprintf("%v %v", wep.Namespace, wep.Name),
 				}, v1.EventTypeWarning, "PodLeaked", msg)
 
-				ipam.bucket.Wait(1)
 				// delete ip
-				err = ipam.cloud.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+				err = ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
 					InstanceId: wep.Spec.InstanceID,
 					PrivateIps: []string{wep.Spec.IP},
 				})
@@ -528,6 +549,13 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 					log.Errorf(ctx, "gc: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
 				}
 
+				// remove finalizers
+				wep.Finalizers = nil
+				_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(wep)
+				if err != nil {
+					log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", wep.Namespace, wep.Name, err)
+					continue
+				}
 				// delete wep
 				err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Delete(wep.Name, metav1.NewDeleteOptions(0))
 				if err != nil {
@@ -586,7 +614,12 @@ func (ipam *IPAM) poolCorrupted(total, used int) bool {
 	return false
 }
 
-func (ipam *IPAM) increasePool(ctx context.Context, node, instanceID string, candidateSubnets []string) error {
+func (ipam *IPAM) increasePool(
+	ctx context.Context,
+	node, instanceID string,
+	candidateSubnets []string,
+	pod *v1.Pod,
+) error {
 	// subnet cache from subnet cr
 	var subnets []subnet
 
@@ -612,7 +645,7 @@ func (ipam *IPAM) increasePool(ctx context.Context, node, instanceID string, can
 	var errs []error
 
 	for _, sbn := range subnets {
-		batchAddResult, err = ipam.tryBatchAddIP(ctx, node, instanceID, sbn.subnetID)
+		batchAddResult, err = ipam.tryBatchAddIP(ctx, node, instanceID, sbn.subnetID, pod, ipam.backoffCap(len(subnets)))
 		if err == nil {
 			batchAddResultSubnet = sbn.subnetID
 			break
@@ -621,6 +654,7 @@ func (ipam *IPAM) increasePool(ctx context.Context, node, instanceID string, can
 		log.Errorf(ctx, "batch add private ip(s) for %v in subnet %s failed: %v, try next subnet...", node, sbn.subnetID, err)
 	}
 
+	// none of the subnets succeeded
 	if batchAddResult == nil {
 		err := utilerrors.NewAggregate(errs)
 		log.Errorf(ctx, "failed to batch add private ip(s) for %v in all subnets %+v: %v", node, subnets, err)
@@ -640,15 +674,99 @@ func (ipam *IPAM) increasePool(ctx context.Context, node, instanceID string, can
 	return nil
 }
 
-func (ipam *IPAM) tryBatchAddIP(ctx context.Context, node, instanceID, subnetID string) (*bbc.BatchAddIpResponse, error) {
+func (ipam *IPAM) batchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
+	ipam.bucket.Wait(1)
+	return ipam.cloud.BBCBatchAddIPCrossSubnet(ctx, args)
+}
+
+func (ipam *IPAM) batchAddIPCrossSubnetWithExponentialBackoff(
+	ctx context.Context,
+	args *bbc.BatchAddIpCrossSubnetArgs,
+	pod *v1.Pod) (*bbc.BatchAddIpResponse, error) {
+	var backoffWaitPeriod time.Duration
+	var backoff *wait.Backoff
+	var ok bool
+	const waitPeriodNum = 10
+
+	ipam.lock.Lock()
+	backoff = ipam.addIPBackoffCache[args.InstanceId]
+	if backoff != nil && backoff.Steps >= 0 {
+		backoffWaitPeriod = backoff.Step()
+	}
+	ipam.lock.Unlock()
+
+	if backoffWaitPeriod != 0 {
+		log.Infof(ctx, "backoff: wait %v to allocate private ip at %v", backoffWaitPeriod, args.InstanceId)
+		// instead of sleep a large amount of time, we divide sleep time into small parts to check backoff cache.
+		for i := 0; i < waitPeriodNum; i++ {
+			time.Sleep(backoffWaitPeriod / waitPeriodNum)
+			ipam.lock.RLock()
+			backoff, ok = ipam.addIPBackoffCache[args.InstanceId]
+			ipam.lock.RUnlock()
+			if !ok {
+				log.Warningf(ctx, "found backoff on instance %v removed", args.InstanceId)
+				break
+			}
+		}
+	}
+
+	// if have reached backoff cap, first check then add ip
+	if backoff != nil && backoffWaitPeriod >= backoff.Cap {
+		// 1. check if subnet still has available ip
+		if len(args.SingleEniAndSubentIps) > 0 {
+			subnetID := args.SingleEniAndSubentIps[0].SubnetId
+			subnet, err := ipam.cloud.DescribeSubnet(ctx, subnetID)
+			if err == nil && subnet.AvailableIp <= 0 {
+				msg := fmt.Sprintf("backoff short-circuit: subnet %v has no available ip", subnetID)
+				log.Warning(ctx, msg)
+				return nil, goerrors.New(msg)
+			}
+			if err != nil {
+				log.Errorf(ctx, "failed to describe subnet %v: %v", subnetID, err)
+			}
+		}
+
+		// 2. check if node cannot attach more ip due to memory
+		node, err := ipam.kubeInformer.Core().V1().Nodes().Lister().Get(pod.Spec.NodeName)
+		if err == nil {
+			maxPrivateIPNum, err := utileni.GetMaxIPPerENIFromNodeAnnotations(node)
+			if err == nil && maxPrivateIPNum != 0 {
+				eniResult, err := ipam.cloud.BBCGetInstanceENI(ctx, args.InstanceId)
+				if err == nil && len(eniResult.PrivateIpSet) >= maxPrivateIPNum {
+					msg := fmt.Sprintf("backoff short-circuit: instance %v cannot add more ip due to memory", args.InstanceId)
+					log.Warning(ctx, msg)
+					return nil, goerrors.New(msg)
+				}
+
+				if err != nil {
+					log.Errorf(ctx, "failed to get instance %v eni: %v", args.InstanceId, err)
+				}
+			}
+		}
+	}
+
+	return ipam.batchAddIPCrossSubnet(ctx, args)
+}
+
+func (ipam *IPAM) batchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error {
+	ipam.bucket.Wait(1)
+	return ipam.cloud.BBCBatchDelIP(ctx, args)
+}
+
+func (ipam *IPAM) tryBatchAddIP(
+	ctx context.Context,
+	node, instanceID, subnetID string,
+	pod *v1.Pod,
+	backoffCap time.Duration,
+) (*bbc.BatchAddIpResponse, error) {
 	// alloc ip for bbc
 	var err error
 	var batchAddNum int = ipam.batchAddIPNum
 	var batchAddResult *bbc.BatchAddIpResponse
+	var namespace, name string = pod.Namespace, pod.Name
 
 	for batchAddNum > 0 {
-		ipam.bucket.Wait(1)
-		batchAddResult, err = ipam.cloud.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
+		batchAddResult, err = ipam.batchAddIPCrossSubnetWithExponentialBackoff(ctx, &bbc.BatchAddIpCrossSubnetArgs{
 			InstanceId: instanceID,
 			SingleEniAndSubentIps: []bbc.SingleEniAndSubentIp{
 				{
@@ -657,7 +775,7 @@ func (ipam *IPAM) tryBatchAddIP(ctx context.Context, node, instanceID, subnetID 
 					SecondaryPrivateIpAddressCount: batchAddNum,
 				},
 			},
-		})
+		}, pod)
 		if err == nil {
 			log.Infof(ctx, "batch add %v private ip(s) for %v in subnet %s successfully, %v", batchAddNum, node, subnetID, batchAddResult.PrivateIps)
 			break
@@ -669,10 +787,20 @@ func (ipam *IPAM) tryBatchAddIP(ctx context.Context, node, instanceID, subnetID 
 			if cloud.IsErrorRateLimit(err) {
 				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 			}
-			if cloud.IsErrorSubnetHasNoMoreIP(err) {
+			if batchAddNum == 1 && cloud.IsErrorSubnetHasNoMoreIP(err) {
 				ipamgeneric.DeclareSubnetHasNoMoreIP(ctx, ipam.crdClient, ipam.crdInformer, subnetID, true)
 			}
-			if cloud.IsErrorBBCENIPrivateIPExceedLimit(err) {
+			if isErrorNeedExponentialBackoff(err) {
+				if batchAddNum == 1 {
+					ipam.lock.Lock()
+					if _, ok := ipam.addIPBackoffCache[instanceID]; !ok {
+						ipam.addIPBackoffCache[instanceID] = util.NewBackoffWithCap(backoffCap)
+						log.Infof(ctx, "add backoff with cap %v for instance %v when handling pod (%v %v) due to error: %v", backoffCap, instanceID, namespace, name, err)
+					}
+					ipam.lock.Unlock()
+				}
+
+				// decrease batchAddNum then retry
 				batchAddNum = batchAddNum >> 1
 				continue
 			}
@@ -703,6 +831,9 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 		}
 		return goerrors.New(msg)
 	}
+
+	// if node was moved out and rejoined in, should cleanup previous backoff cache
+	delete(ipam.addIPBackoffCache, instanceID)
 
 	// build node eni map
 	ipam.nodeENIMap[node.Name] = resp.Id
@@ -788,6 +919,15 @@ func (ipam *IPAM) createSubnetCRs(ctx context.Context, candidateSubnets []string
 	}
 
 	return utilerrors.NewAggregate(errs)
+}
+
+func (ipam *IPAM) backoffCap(subnetNum int) time.Duration {
+	var addIPMaxTry int = int(math.Log2(float64(ipam.batchAddIPNum))) + 1
+	return ipamgeneric.CniTimeout / time.Duration(addIPMaxTry) / time.Duration(subnetNum)
+}
+
+func isErrorNeedExponentialBackoff(err error) bool {
+	return cloud.IsErrorBBCENIPrivateIPExceedLimit(err) || cloud.IsErrorSubnetHasNoMoreIP(err)
 }
 
 func PodNeedsSpecificSubnets(pod *v1.Pod) bool {

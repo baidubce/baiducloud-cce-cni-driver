@@ -54,7 +54,7 @@ func TestGetMaxIPPerENI(t *testing.T) {
 			fields: fields{
 				memoryCapacityInGB: 312321,
 			},
-			want: 20,
+			want: 40,
 		},
 		{
 			name: "Level 1",
@@ -89,7 +89,7 @@ func TestGetMaxIPPerENI(t *testing.T) {
 			fields: fields{
 				memoryCapacityInGB: 33,
 			},
-			want: 20,
+			want: 30,
 		},
 	}
 	for _, tt := range tests {

@@ -16,26 +16,32 @@
 package util
 
 import (
+	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 )
 
-func GetInstanceIDFromNode(node *v1.Node) string {
+func GetInstanceIDFromNode(node *v1.Node) (string, error) {
 	providerID := node.Spec.ProviderID
 	if !strings.HasPrefix(providerID, "cce://") {
 		providerID = "cce://" + providerID
 	}
 	splitted := strings.Split(providerID, "//")
 	if len(splitted) != 2 {
-		return ""
+		return "", fmt.Errorf("invalid ProviderID format: %v", node.Spec.ProviderID)
 	}
-	return splitted[1]
+	if splitted[1] == "" {
+		return "", fmt.Errorf("instanceID of node %v is empty", node.Name)
+	}
+	return splitted[1], nil
 }
 
 func GetStsName(wep *v1alpha1.WorkloadEndpoint) string {
@@ -66,6 +72,17 @@ func GetNodeInstanceType(node *v1.Node) metadata.InstanceTypeEx {
 	}
 
 	return metadata.InstanceTypeExUnknown
+}
+
+func NewBackoffWithCap(cap time.Duration) *wait.Backoff {
+	backoff := wait.Backoff{
+		Steps:    30,
+		Duration: 2 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.05,
+		Cap:      cap,
+	}
+	return &backoff
 }
 
 // Random generates random num in [min, max)

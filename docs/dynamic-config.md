@@ -29,7 +29,7 @@ CNI 对于该配置文件的使用方式可以概括如下：
 1. 配置文件以 Volume 形式被挂载进 NodeAgent Pod 中，并被 NodeAgent 读取解析；
 2. NodeAgent 查找出配置中 `eniSubnetList` 中与本节点同可用区的所有子网；
 3. NodeAgent 为本节点创建出一个 IPPool 自定义资源(下文称为节点默认 IPPool)， 并填入第2步中筛选出的同可用区的子网；
-4. IPAM 根据 IPPool 中包含的信息去为每个节点创建/挂载 ENI
+4. IPAM 根据 IPPool 中包含的信息去为每个节点创建/挂载 ENI；
 
 一个节点默认 IPPool 自定义资源的样例：
 ```yaml

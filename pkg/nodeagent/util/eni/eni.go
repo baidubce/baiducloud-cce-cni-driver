@@ -45,19 +45,24 @@ const (
 	NodeAnnotationWarmIPTarget      = "cce.io/warm-ip-target"
 )
 
+const eniNamePartNum int = 4
+
 // GetMaxIPPerENI returns the max num of IPs that can be attached to single ENI
+// Ref: https://cloud.baidu.com/doc/VPC/s/0jwvytzll
 func GetMaxIPPerENI(memoryCapacityInGB int) int {
 	maxIPNum := 0
 
 	switch {
 	case memoryCapacityInGB > 0 && memoryCapacityInGB < 2:
 		maxIPNum = 2
-	case memoryCapacityInGB >= 2 && memoryCapacityInGB < 12:
+	case memoryCapacityInGB >= 2 && memoryCapacityInGB <= 8:
 		maxIPNum = 8
-	case memoryCapacityInGB >= 12 && memoryCapacityInGB <= 32:
+	case memoryCapacityInGB > 8 && memoryCapacityInGB <= 32:
 		maxIPNum = 16
-	case memoryCapacityInGB > 32:
-		maxIPNum = 20
+	case memoryCapacityInGB > 32 && memoryCapacityInGB <= 64:
+		maxIPNum = 30
+	case memoryCapacityInGB > 64:
+		maxIPNum = 40
 	}
 	return maxIPNum
 }
@@ -89,7 +94,6 @@ func ENICreatedByCCE(eni *enisdk.Eni) bool {
 	if eni == nil {
 		return false
 	}
-	const eniNamePartNum int = 4
 	parts := strings.Split(eni.Name, "/")
 	if len(parts) != eniNamePartNum {
 		return false
@@ -102,6 +106,16 @@ func ENICreatedByCCE(eni *enisdk.Eni) bool {
 	return true
 }
 
+// ENIOwnedByCluster judges whether an eni is owned by specific cluster
+func ENIOwnedByCluster(eni *enisdk.Eni, clusterID string) bool {
+	if !ENICreatedByCCE(eni) {
+		return false
+	}
+	// ENICreatedByCCE ensures len(parts) == 4
+	parts := strings.Split(eni.Name, "/")
+	return clusterID == parts[0]
+}
+
 // ENIOwnedByNode judges whether an eni is owned by specific node
 func ENIOwnedByNode(eni *enisdk.Eni, clusterID, instanceID string) bool {
 	if !ENICreatedByCCE(eni) {
@@ -110,6 +124,14 @@ func ENIOwnedByNode(eni *enisdk.Eni, clusterID, instanceID string) bool {
 	// ENICreatedByCCE ensures len(parts) == 4
 	parts := strings.Split(eni.Name, "/")
 	return clusterID == parts[0] && instanceID == parts[1]
+}
+
+func GetNodeNameFromENIName(eniName string) (string, error) {
+	parts := strings.Split(eniName, "/")
+	if len(parts) != eniNamePartNum {
+		return "", fmt.Errorf("invalid eni name: %v", eniName)
+	}
+	return parts[2], nil
 }
 
 func GetPrivateIPSet(eni *enisdk.Eni) []v1alpha1.PrivateIP {

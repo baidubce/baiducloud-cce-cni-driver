@@ -20,6 +20,9 @@ import (
 	"fmt"
 
 	"github.com/baidubce/bce-sdk-go/auth"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/ccegateway"
 )
@@ -87,13 +90,22 @@ type cceGateway struct {
 	signer ccegateway.BCESigner
 }
 
-func NewCCEGatewayAuth(region, clusterID string) (Auth, error) {
+func NewCCEGatewayAuth(region, clusterID string, kubeClient kubernetes.Interface) (Auth, error) {
 	if clusterID == "" {
 		return nil, fmt.Errorf("empty cluster id")
 	}
 
 	signer := ccegateway.NewBCESigner(region, clusterID)
+
+	// set two sources for signer
+	// if fetching token from secret fails, fallback to volume
 	signer.SetVolumeSource(cceGatewayTokenVolume)
+	if kubeClient != nil {
+		signer.SetSecretSource(func(namespace string, name string) (*v1.Secret, error) {
+			return kubeClient.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
+		})
+	}
+
 	return &cceGateway{
 		signer: signer,
 	}, nil

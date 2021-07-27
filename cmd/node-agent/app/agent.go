@@ -101,6 +101,7 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 		o.config.CCE.ClusterID,
 		o.config.CCE.AccessKeyID,
 		o.config.CCE.SecretAccessKey,
+		kubeClient,
 		false,
 	)
 	if err != nil {

@@ -16,6 +16,7 @@
 package ccegateway
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -29,6 +30,8 @@ import (
 	sdklog "github.com/baidubce/bce-sdk-go/util/log"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
+
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 const (
@@ -152,29 +155,6 @@ func (cg *bceSigner) ensureToken(cred *auth.BceCredentials, opt *auth.SignOption
 
 	// Iterate all valid sources until token is successfully fetched.
 
-	if !succeeded && cg.tokenVolume != "" {
-		err := func() error {
-			var err error
-			tokenFile := filepath.Join(cg.tokenVolume, TokenKey)
-			tokenBytes, err = ioutil.ReadFile(tokenFile)
-			if err != nil {
-				return fmt.Errorf("fail to read %s: %w", tokenFile, err)
-			}
-			expiredAtFile := filepath.Join(cg.tokenVolume, ExpiredAtKey)
-			expiredAtBytes, err = ioutil.ReadFile(expiredAtFile)
-			if err != nil {
-				return fmt.Errorf("fail to read %s: %w", expiredAtFile, err)
-			}
-			return nil
-		}()
-		if err != nil {
-			sdklog.Errorf("fetch token from volume: %v", err)
-			lastErr = err
-		} else {
-			succeeded = true
-		}
-	}
-
 	if !succeeded && cg.secretGetter != nil {
 		err := func() error {
 			tokenSecret, err := cg.secretGetter(TokenSecretNamespace, TokenSecretName)
@@ -197,7 +177,34 @@ func (cg *bceSigner) ensureToken(cred *auth.BceCredentials, opt *auth.SignOption
 			return nil
 		}()
 		if err != nil {
-			sdklog.Errorf("fetch token from secret: %v", err)
+			errMsg := fmt.Sprintf("fetch token from secret: %v", err)
+			sdklog.Error(errMsg)
+			log.Error(context.TODO(), errMsg)
+			lastErr = err
+		} else {
+			succeeded = true
+		}
+	}
+
+	if !succeeded && cg.tokenVolume != "" {
+		err := func() error {
+			var err error
+			tokenFile := filepath.Join(cg.tokenVolume, TokenKey)
+			tokenBytes, err = ioutil.ReadFile(tokenFile)
+			if err != nil {
+				return fmt.Errorf("fail to read %s: %w", tokenFile, err)
+			}
+			expiredAtFile := filepath.Join(cg.tokenVolume, ExpiredAtKey)
+			expiredAtBytes, err = ioutil.ReadFile(expiredAtFile)
+			if err != nil {
+				return fmt.Errorf("fail to read %s: %w", expiredAtFile, err)
+			}
+			return nil
+		}()
+		if err != nil {
+			errMsg := fmt.Sprintf("fetch token from volume: %v", err)
+			sdklog.Error(errMsg)
+			log.Error(context.TODO(), errMsg)
 			lastErr = err
 		} else {
 			succeeded = true
@@ -208,7 +215,9 @@ func (cg *bceSigner) ensureToken(cred *auth.BceCredentials, opt *auth.SignOption
 		var err error
 		tokenBytes, expiredAtBytes, err = cg.tokenGetter(cred, opt)
 		if err != nil {
-			sdklog.Errorf("fetch token from getter: %v", err)
+			errMsg := fmt.Sprintf("fetch token from getter: %v", err)
+			sdklog.Error(errMsg)
+			log.Error(context.TODO(), errMsg)
 			lastErr = fmt.Errorf("fail to invoke tokenGetter: %w", err)
 		} else {
 			succeeded = true

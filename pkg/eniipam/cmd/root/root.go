@@ -96,6 +96,7 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 		opts.ClusterID,
 		opts.AccessKeyID,
 		opts.SecretAccessKey,
+		kubeClient,
 		opts.Debug,
 	)
 	if err != nil {

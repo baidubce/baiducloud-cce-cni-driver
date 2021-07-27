@@ -27,12 +27,14 @@ import (
 	"github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 	sdklog "github.com/baidubce/bce-sdk-go/util/log"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	// Endpoints 环境变量命名
 	BCCEndpointEnv = "BCC_ENDPOINT"
 	BBCEndpointEnv = "BBC_ENDPOINT"
+
+	connectionTimeoutSInSecond = 20
 )
 
 func newBCEClientConfig(ctx context.Context,
@@ -58,7 +60,14 @@ func newBCEClientConfig(ctx context.Context,
 	}
 }
 
-func New(region, clusterID, ak, sk string, debug bool) (Interface, error) {
+func New(
+	region string,
+	clusterID string,
+	accessKeyID string,
+	secretAccessKey string,
+	kubeClient kubernetes.Interface,
+	debug bool,
+) (Interface, error) {
 	ctx := context.TODO()
 
 	if debug {
@@ -67,10 +76,10 @@ func New(region, clusterID, ak, sk string, debug bool) (Interface, error) {
 
 	var auth Auth
 	var err error
-	if ak != "" && sk != "" {
-		auth, err = NewAccessKeyPairAuth(ak, sk, "")
+	if accessKeyID != "" && secretAccessKey != "" {
+		auth, err = NewAccessKeyPairAuth(accessKeyID, secretAccessKey, "")
 	} else {
-		auth, err = NewCCEGatewayAuth(region, clusterID)
+		auth, err = NewCCEGatewayAuth(region, clusterID, kubeClient)
 	}
 
 	if err != nil {
@@ -83,18 +92,22 @@ func New(region, clusterID, ak, sk string, debug bool) (Interface, error) {
 	vpcClient := &vpc.Client{
 		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
 	}
+	vpcClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
 	bccClient := &bcc.Client{
 		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
 	}
+	bccClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
 	eniClient := &eni.Client{
 		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
 	}
+	eniClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
 	bbcClient := &bbc.Client{
 		BceClient: bce.NewBceClient(bbcClientConfig, auth.GetSigner(ctx)),
 	}
+	bbcClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
 	c := &Client{
 		vpcClient: vpcClient,

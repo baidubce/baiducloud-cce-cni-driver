@@ -243,7 +243,13 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 	if subnetIDUnavailable || vpcIDUnavailable {
 		log.Warningf(ctx, "metadata error, fallback to get instance info from open api...")
 	}
-	o.bceClient, err = cloud.New(o.config.CCE.Region, o.config.CCE.ClusterID, o.config.CCE.AccessKeyID, o.config.CCE.SecretAccessKey, false)
+	o.bceClient, err = cloud.New(
+		o.config.CCE.Region,
+		o.config.CCE.ClusterID,
+		o.config.CCE.AccessKeyID,
+		o.config.CCE.SecretAccessKey,
+		o.kubeClient,
+		false)
 	if err == nil {
 		instance, err := o.bceClient.DescribeInstance(ctx, o.instanceID)
 		if err == nil {

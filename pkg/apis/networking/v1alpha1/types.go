@@ -69,6 +69,9 @@ type IPPoolSpec struct {
 	// NodeSelector allows IPPool to allocate for a specific node by label selector
 	NodeSelector string `json:"nodeSelector"`
 
+	// CreateSource indicates pool creation source
+	CreationSource string `json:"creationSource"`
+
 	// Priority is the priority value of IPPool
 	Priority int32 `json:"priority,omitempty"`
 

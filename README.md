@@ -70,7 +70,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.4
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.5
 
 # Route Controller
 EnableVPCRoute: true
@@ -93,7 +93,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.4
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.5
 ```
 
 #### BBC Secondary IP Mode
@@ -107,7 +107,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.4
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.2.5
 ```
 
 ## Running the tests

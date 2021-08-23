@@ -95,7 +95,7 @@ func UpdateNetworkingCondition(
 	readyMsg string,
 	unReadyMsg string,
 ) error {
-	node, err := kubeClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+	node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}

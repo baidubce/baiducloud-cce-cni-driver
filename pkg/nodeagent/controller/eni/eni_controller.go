@@ -258,14 +258,14 @@ func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) err
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, c.ippoolName, metav1.GetOptions{})
 		if err != nil {
 			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 		result.Status.ENI.ENIs = eniStatus
 
-		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
+		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, result, metav1.UpdateOptions{})
 		if updateErr != nil {
 			log.Errorf(ctx, "error updating ippool %v status: %v", c.ippoolName, updateErr)
 			return updateErr

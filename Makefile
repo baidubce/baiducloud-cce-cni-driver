@@ -19,9 +19,9 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.2.4
+VERSION := v1.2.5
 FELIX_VERSION := v3.5.8
-K8S_VERSION := 1.16.8
+K8S_VERSION := 1.18.9
 
 # build info
 GIT_COMMIT := $(shell git rev-parse HEAD)
@@ -57,6 +57,7 @@ build:
 	@echo "===> Building cni components <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/eni-ipam $(HOMEDIR)/cni/eni-ipam
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ipvlan $(HOMEDIR)/cni/ipvlan
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/macvlan $(HOMEDIR)/cni/macvlan
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ptp $(HOMEDIR)/cni/ptp
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/sysctl $(HOMEDIR)/cni/sysctl
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/unnumbered-ptp $(HOMEDIR)/cni/unnumbered-ptp
@@ -77,6 +78,7 @@ package-bin:
 	# package cni binaries
 	mv $(HOMEDIR)/eni-ipam $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/ipvlan $(OUTDIR)/cni-bin/
+	mv $(HOMEDIR)/macvlan $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/ptp $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/sysctl $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/unnumbered-ptp $(OUTDIR)/cni-bin/
@@ -93,7 +95,7 @@ codegen-image:
 	@echo "===> Building codegen image <==="
 	docker build -t cce-cni-codegen:kubernetes-$(K8S_VERSION) -f build/images/codegen/Dockerfile build/images/codegen
 
-cni-image: package-bin debian-iptables-image
+cni-image: package-bin
 	@echo "===> Building cce cni image <==="
 	docker build -t registry.baidubce.com/cce-plugin-pro/cce-cni:$(VERSION) -f build/images/cce-cni/Dockerfile .
 
@@ -109,7 +111,7 @@ push-felix-image:felix-image
 	@echo "===> Pushing cce felix image <==="
 	docker push registry.baidubce.com/cce-plugin-pro/cce-calico-felix:$(FELIX_VERSION)
 
-push-cni-test-image: build package-bin debian-iptables-image
+push-cni-test-image: build package-bin
 	@echo "===> Building cce cni test image <==="
 	docker build -t registry.baidubce.com/cce-plugin-dev/cce-cni:$(TAG) -f build/images/cce-cni/Dockerfile .
 	@echo "===> Pushing cce cni test image <==="

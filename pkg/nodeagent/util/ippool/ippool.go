@@ -16,6 +16,7 @@
 package ippool
 
 import (
+	"net"
 	"strings"
 
 	v1 "k8s.io/api/core/v1"
@@ -26,7 +27,21 @@ import (
 
 // GetNodeIPPoolName is a helper function that creates IPPool CR name from nodeName
 func GetNodeIPPoolName(nodeName string) string {
-	return "ippool-" + strings.Replace(nodeName, ".", "-", -1)
+	if net.ParseIP(nodeName) != nil {
+		return "ippool-" + strings.Replace(nodeName, ".", "-", -1)
+	}
+	return "ippool-" + nodeName
+}
+
+func GetNodeNameFromIPPoolName(ipPoolName string) string {
+	nodeName := strings.TrimPrefix(ipPoolName, "ippool-")
+
+	nodeIPAsName := strings.Replace(nodeName, "-", ".", -1)
+	if net.ParseIP(nodeIPAsName) != nil {
+		return nodeIPAsName
+	}
+
+	return nodeName
 }
 
 func NodeMatchesIPPool(node *v1.Node, pool *v1alpha1.IPPool) (bool, error) {

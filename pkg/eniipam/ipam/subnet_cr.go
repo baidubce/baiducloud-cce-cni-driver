@@ -40,7 +40,7 @@ func CreateSubnetCR(ctx context.Context, cloud cloud.Interface, crdClient versio
 		},
 	}
 
-	_, err = crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(s)
+	_, err = crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(ctx, s, metav1.CreateOptions{})
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
 			return nil
@@ -84,7 +84,7 @@ func PatchSubnetStatus(ctx context.Context, crdClient versioned.Interface, name 
 	}
 
 	patchData := []byte(fmt.Sprintf(`{"status":%s}`, json))
-	_, err = crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Patch(name, ktypes.MergePatchType, patchData)
+	_, err = crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Patch(ctx, name, ktypes.MergePatchType, patchData, metav1.PatchOptions{})
 	if err != nil {
 		return err
 	}

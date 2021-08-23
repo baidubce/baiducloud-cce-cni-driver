@@ -302,7 +302,7 @@ func (o *Options) getNodeInstanceID(ctx context.Context) (string, error) {
 		log.Warning(ctx, "metadata error, fallback to get instance id from node providerID")
 		nodeName, err := utilenv.GetNodeName(ctx)
 		if err == nil {
-			n, err := o.kubeClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+			n, err := o.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 			if err == nil {
 				instanceID, err = ipamutil.GetInstanceIDFromNode(n)
 				if err == nil {

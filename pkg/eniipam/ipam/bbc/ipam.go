@@ -240,7 +240,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	// create wep
-	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Create(wep)
+	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Create(ctx, wep, metav1.CreateOptions{})
 	if err != nil {
 		log.Errorf(ctx, "failed to create wep for pod (%v %v): %v", namespace, name, err)
 		if delErr := ipam.datastore.ReleasePodPrivateIP(node.Name, ipSubnet, ipResult); delErr != nil {
@@ -333,7 +333,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		return nil, fmt.Errorf("ipam has not synced cache yet")
 	}
 
-	wep, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(namespace).Get(name)
+	tmpWep, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(namespace).Get(name)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			log.Infof(ctx, "wep of pod (%v %v) not found", namespace, name)
@@ -342,6 +342,9 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		log.Errorf(ctx, "failed to get wep of pod (%v %v): %v", namespace, name, err)
 		return nil, err
 	}
+
+	// new a wep, avoid data racing
+	wep := tmpWep.DeepCopy()
 
 	// this may be due to a pod migrate to another node
 	if wep.Spec.ContainerID != containerID {
@@ -387,13 +390,13 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 
 	// remove finalizers
 	wep.Finalizers = nil
-	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(wep)
+	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
 	if err != nil {
 		log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
 		return nil, err
 	}
 	// delete wep
-	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(name, metav1.NewDeleteOptions(0))
+	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(ctx, name, *metav1.NewDeleteOptions(0))
 	if err != nil {
 		log.Errorf(ctx, "failed to delete wep for pod (%v %v): %v", namespace, name, err)
 		return nil, err
@@ -551,13 +554,13 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 
 				// remove finalizers
 				wep.Finalizers = nil
-				_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(wep)
+				_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(ctx, wep, metav1.UpdateOptions{})
 				if err != nil {
 					log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", wep.Namespace, wep.Name, err)
 					continue
 				}
 				// delete wep
-				err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Delete(wep.Name, metav1.NewDeleteOptions(0))
+				err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Delete(ctx, wep.Name, *metav1.NewDeleteOptions(0))
 				if err != nil {
 					log.Errorf(ctx, "gc: failed to delete wep for leaked pod (%v %v): %v", wep.Namespace, wep.Name, err)
 				} else {

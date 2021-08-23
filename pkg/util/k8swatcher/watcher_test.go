@@ -16,6 +16,7 @@
 package k8swatcher
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"testing"
@@ -94,6 +95,7 @@ func TestNodeAddedUpdatedDeleted(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
+	ctx := context.TODO()
 	sharedInformerFactory := informers.NewSharedInformerFactory(client, time.Minute)
 
 	mockHandler := NewNodeHandlerMock()
@@ -107,14 +109,14 @@ func TestNodeAddedUpdatedDeleted(t *testing.T) {
 	node := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
 	}
-	client.CoreV1().Nodes().Create(node)
+	client.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
 	mockHandler.validate(t, []*v1.Node{node})
 
 	// Update
-	client.CoreV1().Nodes().Update(node)
+	client.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
 	mockHandler.validate(t, []*v1.Node{node})
 
 	// Delete
-	client.CoreV1().Nodes().Delete("test-node", &metav1.DeleteOptions{})
+	client.CoreV1().Nodes().Delete(ctx, "test-node", metav1.DeleteOptions{})
 	mockHandler.validate(t, []*v1.Node{})
 }

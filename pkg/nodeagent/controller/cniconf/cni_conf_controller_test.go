@@ -176,7 +176,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				kubeClient := kubefake.NewSimpleClientset()
 				metaClient := mockmetadata.NewMockInterface(ctrl)
 
-				kubeClient.CoreV1().Services(IPAMServiceNamespace).Create(&v1.Service{
+				kubeClient.CoreV1().Services(IPAMServiceNamespace).Create(context.TODO(), &v1.Service{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: IPAMServiceName,
 					},
@@ -189,7 +189,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 						},
 					},
 					Status: v1.ServiceStatus{},
-				})
+				}, metav1.CreateOptions{})
 
 				gomock.InOrder(
 					kernelhandler.EXPECT().DetectKernelVersion(gomock.Any()).Return("4.18.0-240.1.1.el8_3.x86_64", nil),

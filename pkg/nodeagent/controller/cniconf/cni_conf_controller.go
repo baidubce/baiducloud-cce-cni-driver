@@ -178,7 +178,7 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 
 	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) {
 		// assemble ipam endpoint from clusterip
-		svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(IPAMServiceName, metav1.GetOptions{})
+		svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(ctx, IPAMServiceName, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -212,16 +212,15 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	if c.cniMode == types.CCEModeBBCSecondaryIPIPVlan || c.cniMode == types.CCEModeSecondaryIPIPVlan || c.cniMode == types.CCEModeRouteIPVlan {
-		configData.MasterInterface, err = c.netutil.DetectDefaultRouteInterfaceName()
-		if err != nil {
-			return nil, err
-		}
+	configData.MasterInterface, err = c.netutil.DetectDefaultRouteInterfaceName()
+	if err != nil {
+		log.Errorf(ctx, "failed to detect default route interface: %v", err)
+		return nil, err
+	}
 
-		configData.VethMTU, err = c.netutil.DetectInterfaceMTU(configData.MasterInterface)
-		if err != nil {
-			configData.VethMTU = vethDefaultMTU
-		}
+	configData.VethMTU, err = c.netutil.DetectInterfaceMTU(configData.MasterInterface)
+	if err != nil {
+		configData.VethMTU = vethDefaultMTU
 	}
 
 	return &configData, nil

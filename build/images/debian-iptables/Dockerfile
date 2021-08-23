@@ -20,7 +20,10 @@ RUN apt-get install -y --no-install-recommends \
     traceroute \
     inetutils-ping \
     telnet \
-    netcat
+    netcat \
+    ethtool \
+    silversearcher-ag \
+    less
 
 # Cleanup
 RUN apt-get clean -y

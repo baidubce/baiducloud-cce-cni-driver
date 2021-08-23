@@ -153,3 +153,40 @@ func TestNodeMatchesIPPool(t *testing.T) {
 		})
 	}
 }
+
+func TestGetNodeNameFromIPPoolName(t *testing.T) {
+	type args struct {
+		ipPoolName string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			args: args{
+				ipPoolName: "ippool-192-168-24-212",
+			},
+			want: "192.168.24.212",
+		},
+		{
+			args: args{
+				ipPoolName: "ippool-xxx",
+			},
+			want: "xxx",
+		},
+		{
+			args: args{
+				ipPoolName: "xxx",
+			},
+			want: "xxx",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetNodeNameFromIPPoolName(tt.args.ipPoolName); got != tt.want {
+				t.Errorf("GetNodeNameFromIPPoolName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -30,6 +30,8 @@ const (
 	WepLabelInstanceTypeKey = "cce.io/instance-type"
 	WepFinalizer            = "cce-cni.cce.io"
 
+	IPPoolCreationSourceCNI = "cce-cni"
+
 	// CniTimeout set to be slightly less than 220 sec in kubelet
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
 	CniTimeout = 200 * time.Second

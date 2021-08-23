@@ -208,7 +208,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
@@ -216,7 +216,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -249,7 +249,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name:   "busybox",
@@ -258,7 +258,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -319,7 +319,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
@@ -327,7 +327,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -371,7 +371,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
 				controllerRef := true
-				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "foo-0",
@@ -390,9 +390,9 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 
-				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "foo-0",
@@ -402,7 +402,7 @@ func TestIPAM_Allocate(t *testing.T) {
 						IP:       "10.1.1.1",
 						Type:     ipamgeneric.WepTypeSts,
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -553,13 +553,13 @@ func TestIPAM_Release(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
 					},
 					Spec: v1alpha1.WorkloadEndpointSpec{},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -646,7 +646,7 @@ func TestIPAM_Release(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "foo-0",
@@ -655,7 +655,7 @@ func TestIPAM_Release(t *testing.T) {
 						Type:        ipamgeneric.WepTypeSts,
 						EnableFixIP: EnableFixIPTrue,
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -776,13 +776,13 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
 					},
 					Spec: v1alpha1.WorkloadEndpointSpec{},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -986,13 +986,13 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(&v1alpha1.IPPool{
+				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.IPPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "ippool-test",
 					},
 					Spec:   v1alpha1.IPPoolSpec{},
 					Status: v1alpha1.IPPoolStatus{},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 

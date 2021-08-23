@@ -95,6 +95,7 @@ data:
                 "type":"ptp",
                 "enableARPProxy":true,
                 "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
                 "ipam":{
                     "type":"host-local",
                     "ranges":[
@@ -127,6 +128,7 @@ data:
                 "type":"ptp",
                 "enableARPProxy":true,
                 "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
                 "ipam":{
                     "type":"eni-ipam",
                     "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",
@@ -212,6 +214,7 @@ data:
                 "type":"ptp",
                 "enableARPProxy":true,
                 "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
                 "ipam":{
                     "type":"eni-ipam",
                     "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}",

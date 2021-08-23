@@ -102,7 +102,7 @@ func NewCCEGatewayAuth(region, clusterID string, kubeClient kubernetes.Interface
 	signer.SetVolumeSource(cceGatewayTokenVolume)
 	if kubeClient != nil {
 		signer.SetSecretSource(func(namespace string, name string) (*v1.Secret, error) {
-			return kubeClient.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
+			return kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 		})
 	}
 

@@ -41,6 +41,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	ccetypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
@@ -161,7 +162,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 			// clean up pool of deleted node
 			poolName := utilpool.GetNodeIPPoolName(nodeKey)
 			log.Errorf(ctx, "node %v is deleted, delete default ippool %v", nodeKey, poolName)
-			if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(poolName, metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
+			if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(ctx, poolName, *metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
 				log.Errorf(ctx, "failed to delete ippool %v: %v", poolName, err)
 			}
 		}
@@ -191,7 +192,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, c.ippoolName, metav1.GetOptions{})
 		if err != nil {
 			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
@@ -201,6 +202,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		result.Spec.ENI.VPCID = c.instance.VpcId
 		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.eniSubnetCandidates)
 		result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
+		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
 		if len(result.Spec.ENI.Subnets) == 0 {
 			msg := fmt.Sprintf("node %v in zone %v has no eni subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
@@ -208,7 +210,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 			c.eventRecorder.Event(&v1.ObjectReference{Kind: "ENISubnet", Name: "ENISubnetEmpty"}, v1.EventTypeWarning, "ENISubnetEmpty", msg)
 		}
 
-		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
+		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, result, metav1.UpdateOptions{})
 		if updateErr != nil {
 			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
@@ -257,13 +259,14 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
+		result, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, c.ippoolName, metav1.GetOptions{})
 		if err != nil {
 			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
 		}
 
 		result.Spec.PodSubnets = c.findSameZoneSubnets(ctx, c.podSubnetCandidates)
+		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
 		if len(result.Spec.PodSubnets) == 0 {
 			msg := fmt.Sprintf("node %v in zone %v has no pod subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
@@ -271,7 +274,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 			c.eventRecorder.Event(&v1.ObjectReference{Kind: "PodSubnet", Name: "PodSubnetEmpty"}, v1.EventTypeWarning, "PodSubnetEmpty", msg)
 		}
 
-		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(result)
+		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, result, metav1.UpdateOptions{})
 		if updateErr != nil {
 			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
@@ -318,7 +321,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		ippool, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(c.ippoolName, metav1.GetOptions{})
+		ippool, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, c.ippoolName, metav1.GetOptions{})
 		if err != nil {
 			log.Errorf(ctx, "failed to get ippool %v: %v", c.ippoolName, err)
 			return err
@@ -347,7 +350,8 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 
 		ippool.Spec.IPv4Ranges = IPv4Ranges
 		ippool.Spec.IPv6Ranges = IPv6Ranges
-		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ippool)
+		ippool.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
+		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, ippool, metav1.UpdateOptions{})
 		if updateErr != nil {
 			log.Errorf(ctx, "error updating ippool %v spec: %v", c.ippoolName, updateErr)
 			return updateErr
@@ -368,7 +372,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 // createOrUpdateIPPool creates or updates node-level IPPool CR
 func (c *Controller) createOrUpdateIPPool(ctx context.Context) error {
 	poolName := c.ippoolName
-	_, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(poolName, metav1.GetOptions{})
+	_, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, poolName, metav1.GetOptions{})
 	if err != nil {
 		if !kerrors.IsNotFound(err) {
 			return err
@@ -380,10 +384,11 @@ func (c *Controller) createOrUpdateIPPool(ctx context.Context) error {
 				Name: poolName,
 			},
 			Spec: v1alpha1.IPPoolSpec{
-				NodeSelector: fmt.Sprintf("kubernetes.io/hostname=%s", c.nodeName),
+				NodeSelector:   fmt.Sprintf("kubernetes.io/hostname=%s", c.nodeName),
+				CreationSource: ipamgeneric.IPPoolCreationSourceCNI,
 			},
 		}
-		if _, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(ippool); err != nil {
+		if _, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(ctx, ippool, metav1.CreateOptions{}); err != nil {
 			return err
 		}
 		log.Infof(ctx, "ippool %s is created successfully", poolName)
@@ -418,7 +423,7 @@ func (c *Controller) findSameZoneSubnets(ctx context.Context, subnets []string) 
 // patchENICapacityInfoToNode patches eni capacity info to node if not exists.
 // so user can reset these values.
 func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, maxIPPerENI int) error {
-	node, err := c.kubeClient.CoreV1().Nodes().Get(c.nodeName, metav1.GetOptions{})
+	node, err := c.kubeClient.CoreV1().Nodes().Get(ctx, c.nodeName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -462,7 +467,7 @@ func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, 
 		}
 
 		patchData := []byte(fmt.Sprintf(`{"metadata":{"annotations":%s}}`, json))
-		_, err = c.kubeClient.CoreV1().Nodes().Patch(c.nodeName, ktypes.StrategicMergePatchType, patchData)
+		_, err = c.kubeClient.CoreV1().Nodes().Patch(ctx, c.nodeName, ktypes.StrategicMergePatchType, patchData, metav1.PatchOptions{})
 		if err != nil {
 			return err
 		}

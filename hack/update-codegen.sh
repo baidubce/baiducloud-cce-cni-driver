@@ -5,7 +5,7 @@ set -o nounset
 set -o pipefail
 
 ROOT_DIR=$(dirname "${BASH_SOURCE[0]}")/..
-IMAGE_NAME="cce-cni-codegen:kubernetes-1.16.8"
+IMAGE_NAME="cce-cni-codegen:kubernetes-1.18.9"
 SRC_DIR="/go/src/github.com/baidubce/baiducloud-cce-cni-driver"
 
 function docker_run() {

@@ -11,6 +11,7 @@ COPY build/images/cce-cni/entrypoint.sh /entrypoint.sh
 # install cni binaries
 COPY output/cni-bin/unnumbered-ptp /unnumbered-ptp
 COPY output/cni-bin/ipvlan /ipvlan
+COPY output/cni-bin/macvlan /macvlan
 COPY output/cni-bin/ptp /ptp
 COPY output/cni-bin/eni-ipam /eni-ipam
 COPY output/cni-bin/sysctl /sysctl

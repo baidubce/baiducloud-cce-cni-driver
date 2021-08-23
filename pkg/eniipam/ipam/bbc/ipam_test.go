@@ -172,7 +172,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 				// add a pod to test environment
-				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
@@ -180,7 +180,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
@@ -212,7 +212,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 				// add a pod to test environment
-				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
@@ -220,8 +220,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
-				kubeClient.CoreV1().Nodes().Create(&v1.Node{
+				}, metav1.CreateOptions{})
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
@@ -229,9 +229,9 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1.NodeSpec{
 						ProviderID: "cce://test-node-id",
 					},
-				})
+				}, metav1.CreateOptions{})
 
-				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(&v1alpha1.IPPool{
+				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.IPPool{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "ippool-test-node",
@@ -240,14 +240,14 @@ func TestIPAM_Allocate(t *testing.T) {
 					Spec: v1alpha1.IPPoolSpec{
 						PodSubnets: []string{"sbn-a"},
 					},
-				})
+				}, metav1.CreateOptions{})
 
-				crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(&v1alpha1.Subnet{
+				crdClient.CceV1alpha1().Subnets(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.Subnet{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "sbn-a",
 						Namespace: v1.NamespaceDefault,
 					},
-				})
+				}, metav1.CreateOptions{})
 				gomock.InOrder(
 					cloudClient.EXPECT().BBCGetInstanceENI(gomock.Any(), "test-node-id").Return(
 						&bbc.GetInstanceEniResult{
@@ -401,7 +401,7 @@ func TestIPAM_Release(t *testing.T) {
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
-				kubeClient.CoreV1().Nodes().Create(&v1.Node{
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
@@ -409,7 +409,7 @@ func TestIPAM_Release(t *testing.T) {
 					Spec: v1.NodeSpec{
 						ProviderID: "cce://test-node-id",
 					},
-				})
+				}, metav1.CreateOptions{})
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
@@ -441,7 +441,7 @@ func TestIPAM_Release(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 				// add a wep to test environment
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "busybox",
 						Namespace: "default",
@@ -452,8 +452,8 @@ func TestIPAM_Release(t *testing.T) {
 						Node:     "test-node",
 						UpdateAt: metav1.Time{time.Unix(0, 0)},
 					},
-				})
-				kubeClient.CoreV1().Nodes().Create(&v1.Node{
+				}, metav1.CreateOptions{})
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
@@ -461,7 +461,7 @@ func TestIPAM_Release(t *testing.T) {
 					Spec: v1.NodeSpec{
 						ProviderID: "cce://test-node-id",
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				gomock.InOrder(
 					cloudClient.EXPECT().BBCBatchDelIP(gomock.Any(), gomock.Any()).Return(nil),
@@ -582,7 +582,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 				// add one pod for test environment
-				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(&v1.Pod{
+				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
@@ -590,9 +590,9 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
 					},
-				})
+				}, metav1.CreateOptions{})
 				// add two wep for test environment
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "busybox",
 						Namespace: "default",
@@ -603,8 +603,8 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 						Node:     "test-node",
 						UpdateAt: metav1.Time{time.Unix(0, 0)},
 					},
-				})
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				}, metav1.CreateOptions{})
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "busybox2",
 						Namespace: "default",
@@ -615,7 +615,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 						Node:     "test-node",
 						UpdateAt: metav1.Time{time.Unix(0, 0)},
 					},
-				})
+				}, metav1.CreateOptions{})
 				startInformers(kubeInformer, crdInformer)
 
 				gomock.InOrder(
@@ -755,7 +755,7 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
-				kubeClient.CoreV1().Nodes().Create(&v1.Node{
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
@@ -763,7 +763,7 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 					Spec: v1.NodeSpec{
 						ProviderID: "cce://test-node-id",
 					},
-				})
+				}, metav1.CreateOptions{})
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl: ctrl,
@@ -1016,7 +1016,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				_, kubeInformer, crdClient, crdInformer, _, _, _ := setupEnv(ctrl)
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "busybox",
 						Namespace: "default",
@@ -1027,8 +1027,8 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 						Node:     "test-node",
 						UpdateAt: metav1.Time{time.Unix(0, 0)},
 					},
-				})
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				}, metav1.CreateOptions{})
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "busybox2",
 						Namespace: "default",
@@ -1039,7 +1039,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 						Node:     "test-node",
 						UpdateAt: metav1.Time{time.Unix(0, 0)},
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				startInformers(kubeInformer, crdInformer)
 				return fields{

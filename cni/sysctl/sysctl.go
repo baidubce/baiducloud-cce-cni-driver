@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -112,7 +113,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 	if sysctlConf.TuneNonPersistentConnection {
 		sysctlResult["net.ipv4.tcp_tw_reuse"] = "1"
-		sysctlResult["net.ipv4.ip_local_port_range"] = "1024 65000"
+		sysctlResult["net.ipv4.ip_local_port_range"] = "30000 65000"
 		sysctlResult["net.core.somaxconn"] = "8192"
 		sysctlResult["net.ipv4.tcp_max_syn_backlog"] = "8192"
 	}
@@ -128,7 +129,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 			return fmt.Errorf("failed to create k8s client with kubeconfig %v: %v", sysctlConf.KubeConfig, err)
 		}
 
-		pod, err := kubeClient.CoreV1().Pods(namespace).Get(name, metav1.GetOptions{})
+		pod, err := kubeClient.CoreV1().Pods(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to get pod (%v/%v): %v", namespace, name, err)
 		}

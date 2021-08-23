@@ -304,7 +304,7 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 	var result []*v1alpha1.Subnet
 
 	// list all pools
-	pools, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).List(metav1.ListOptions{})
+	pools, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -408,6 +408,9 @@ func (ipam *IPAM) createOneENI(ctx context.Context, node *v1.Node) error {
 	secGroups, err := ipam.getSecurityGroupsFromDefaultIPPool(ctx, node)
 	if err != nil {
 		return err
+	}
+	if len(secGroups) == 0 {
+		return errors.New("security groups bound to eni cannot be empty")
 	}
 
 	eniID, err := ipam.allocateENI(ctx, node, subnet, secGroups)
@@ -615,7 +618,7 @@ func (ipam *IPAM) rollbackFailedENI(ctx context.Context, eniID string) error {
 func (ipam *IPAM) getSecurityGroupsFromDefaultIPPool(ctx context.Context, node *v1.Node) ([]string, error) {
 	ippoolName := utilippool.GetNodeIPPoolName(node.Name)
 
-	ippool, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ippoolName, metav1.GetOptions{})
+	ippool, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, ippoolName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorf(ctx, "failed to get ippool %v: %v", ippoolName, err)
 		return nil, err

@@ -78,14 +78,14 @@ func TestIPAM_updateSubnetStatus(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				_, kubeInformer, crdClient, crdInformer, bceClient, _, _ := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().Subnets(metav1.NamespaceDefault).Create(&v1alpha1.Subnet{
+				crdClient.CceV1alpha1().Subnets(metav1.NamespaceDefault).Create(context.TODO(), &v1alpha1.Subnet{
 					Spec: v1alpha1.SubnetSpec{
 						ID: "sbn-test",
 					},
 					Status: v1alpha1.SubnetStatus{
 						AvailableIPNum: 200,
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -209,7 +209,7 @@ func TestIPAM_ensureSubnetCRDExists(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				_, _, crdClient, crdInformer, bceClient, _, recorder := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().Subnets(metav1.NamespaceDefault).Create(&v1alpha1.Subnet{
+				crdClient.CceV1alpha1().Subnets(metav1.NamespaceDefault).Create(context.TODO(), &v1alpha1.Subnet{
 					TypeMeta: metav1.TypeMeta{},
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "sbn-test",
@@ -219,7 +219,7 @@ func TestIPAM_ensureSubnetCRDExists(t *testing.T) {
 						Enable:         false,
 						HasNoMoreIP:    true,
 					},
-				})
+				}, metav1.CreateOptions{})
 
 				subnetInformer := crdInformer.Cce().V1alpha1().Subnets().Informer()
 				crdInformer.Start(wait.NeverStop)

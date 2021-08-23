@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"testing"
@@ -322,9 +323,11 @@ func Test_ipvlanPlugin_updateMasterFromWep(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				nlink, ns, ipam, ip, types, netutil, crdClient := setupEnv(ctrl)
 
-				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(&v1alpha1.WorkloadEndpoint{
+				ctx := context.TODO()
+
+				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(ctx, &v1alpha1.WorkloadEndpoint{
 					ObjectMeta: metav1.ObjectMeta{Name: "busybox"},
-				})
+				}, metav1.CreateOptions{})
 
 				gomock.InOrder(
 					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Device{netlink.LinkAttrs{Name: "eth0"}}, nil),

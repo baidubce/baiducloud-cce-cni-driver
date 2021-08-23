@@ -3,6 +3,7 @@
 package v1alpha1
 
 import (
+	"context"
 	"time"
 
 	v1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
@@ -21,14 +22,14 @@ type WorkloadEndpointsGetter interface {
 
 // WorkloadEndpointInterface has methods to work with WorkloadEndpoint resources.
 type WorkloadEndpointInterface interface {
-	Create(*v1alpha1.WorkloadEndpoint) (*v1alpha1.WorkloadEndpoint, error)
-	Update(*v1alpha1.WorkloadEndpoint) (*v1alpha1.WorkloadEndpoint, error)
-	Delete(name string, options *v1.DeleteOptions) error
-	DeleteCollection(options *v1.DeleteOptions, listOptions v1.ListOptions) error
-	Get(name string, options v1.GetOptions) (*v1alpha1.WorkloadEndpoint, error)
-	List(opts v1.ListOptions) (*v1alpha1.WorkloadEndpointList, error)
-	Watch(opts v1.ListOptions) (watch.Interface, error)
-	Patch(name string, pt types.PatchType, data []byte, subresources ...string) (result *v1alpha1.WorkloadEndpoint, err error)
+	Create(ctx context.Context, workloadEndpoint *v1alpha1.WorkloadEndpoint, opts v1.CreateOptions) (*v1alpha1.WorkloadEndpoint, error)
+	Update(ctx context.Context, workloadEndpoint *v1alpha1.WorkloadEndpoint, opts v1.UpdateOptions) (*v1alpha1.WorkloadEndpoint, error)
+	Delete(ctx context.Context, name string, opts v1.DeleteOptions) error
+	DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error
+	Get(ctx context.Context, name string, opts v1.GetOptions) (*v1alpha1.WorkloadEndpoint, error)
+	List(ctx context.Context, opts v1.ListOptions) (*v1alpha1.WorkloadEndpointList, error)
+	Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error)
+	Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.WorkloadEndpoint, err error)
 	WorkloadEndpointExpansion
 }
 
@@ -47,20 +48,20 @@ func newWorkloadEndpoints(c *CceV1alpha1Client, namespace string) *workloadEndpo
 }
 
 // Get takes name of the workloadEndpoint, and returns the corresponding workloadEndpoint object, and an error if there is any.
-func (c *workloadEndpoints) Get(name string, options v1.GetOptions) (result *v1alpha1.WorkloadEndpoint, err error) {
+func (c *workloadEndpoints) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.WorkloadEndpoint, err error) {
 	result = &v1alpha1.WorkloadEndpoint{}
 	err = c.client.Get().
 		Namespace(c.ns).
 		Resource("workloadendpoints").
 		Name(name).
 		VersionedParams(&options, scheme.ParameterCodec).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }
 
 // List takes label and field selectors, and returns the list of WorkloadEndpoints that match those selectors.
-func (c *workloadEndpoints) List(opts v1.ListOptions) (result *v1alpha1.WorkloadEndpointList, err error) {
+func (c *workloadEndpoints) List(ctx context.Context, opts v1.ListOptions) (result *v1alpha1.WorkloadEndpointList, err error) {
 	var timeout time.Duration
 	if opts.TimeoutSeconds != nil {
 		timeout = time.Duration(*opts.TimeoutSeconds) * time.Second
@@ -71,13 +72,13 @@ func (c *workloadEndpoints) List(opts v1.ListOptions) (result *v1alpha1.Workload
 		Resource("workloadendpoints").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }
 
 // Watch returns a watch.Interface that watches the requested workloadEndpoints.
-func (c *workloadEndpoints) Watch(opts v1.ListOptions) (watch.Interface, error) {
+func (c *workloadEndpoints) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 	var timeout time.Duration
 	if opts.TimeoutSeconds != nil {
 		timeout = time.Duration(*opts.TimeoutSeconds) * time.Second
@@ -88,71 +89,74 @@ func (c *workloadEndpoints) Watch(opts v1.ListOptions) (watch.Interface, error) 
 		Resource("workloadendpoints").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
-		Watch()
+		Watch(ctx)
 }
 
 // Create takes the representation of a workloadEndpoint and creates it.  Returns the server's representation of the workloadEndpoint, and an error, if there is any.
-func (c *workloadEndpoints) Create(workloadEndpoint *v1alpha1.WorkloadEndpoint) (result *v1alpha1.WorkloadEndpoint, err error) {
+func (c *workloadEndpoints) Create(ctx context.Context, workloadEndpoint *v1alpha1.WorkloadEndpoint, opts v1.CreateOptions) (result *v1alpha1.WorkloadEndpoint, err error) {
 	result = &v1alpha1.WorkloadEndpoint{}
 	err = c.client.Post().
 		Namespace(c.ns).
 		Resource("workloadendpoints").
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(workloadEndpoint).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }
 
 // Update takes the representation of a workloadEndpoint and updates it. Returns the server's representation of the workloadEndpoint, and an error, if there is any.
-func (c *workloadEndpoints) Update(workloadEndpoint *v1alpha1.WorkloadEndpoint) (result *v1alpha1.WorkloadEndpoint, err error) {
+func (c *workloadEndpoints) Update(ctx context.Context, workloadEndpoint *v1alpha1.WorkloadEndpoint, opts v1.UpdateOptions) (result *v1alpha1.WorkloadEndpoint, err error) {
 	result = &v1alpha1.WorkloadEndpoint{}
 	err = c.client.Put().
 		Namespace(c.ns).
 		Resource("workloadendpoints").
 		Name(workloadEndpoint.Name).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(workloadEndpoint).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }
 
 // Delete takes name of the workloadEndpoint and deletes it. Returns an error if one occurs.
-func (c *workloadEndpoints) Delete(name string, options *v1.DeleteOptions) error {
+func (c *workloadEndpoints) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	return c.client.Delete().
 		Namespace(c.ns).
 		Resource("workloadendpoints").
 		Name(name).
-		Body(options).
-		Do().
+		Body(&opts).
+		Do(ctx).
 		Error()
 }
 
 // DeleteCollection deletes a collection of objects.
-func (c *workloadEndpoints) DeleteCollection(options *v1.DeleteOptions, listOptions v1.ListOptions) error {
+func (c *workloadEndpoints) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
 	var timeout time.Duration
-	if listOptions.TimeoutSeconds != nil {
-		timeout = time.Duration(*listOptions.TimeoutSeconds) * time.Second
+	if listOpts.TimeoutSeconds != nil {
+		timeout = time.Duration(*listOpts.TimeoutSeconds) * time.Second
 	}
 	return c.client.Delete().
 		Namespace(c.ns).
 		Resource("workloadendpoints").
-		VersionedParams(&listOptions, scheme.ParameterCodec).
+		VersionedParams(&listOpts, scheme.ParameterCodec).
 		Timeout(timeout).
-		Body(options).
-		Do().
+		Body(&opts).
+		Do(ctx).
 		Error()
 }
 
 // Patch applies the patch and returns the patched workloadEndpoint.
-func (c *workloadEndpoints) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (result *v1alpha1.WorkloadEndpoint, err error) {
+func (c *workloadEndpoints) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.WorkloadEndpoint, err error) {
 	result = &v1alpha1.WorkloadEndpoint{}
 	err = c.client.Patch(pt).
 		Namespace(c.ns).
 		Resource("workloadendpoints").
-		SubResource(subresources...).
 		Name(name).
+		SubResource(subresources...).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(data).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }

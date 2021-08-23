@@ -194,7 +194,7 @@ func (rc *RouteController) getPodCIDRs(ctx context.Context) ([]string, error) {
 	}
 
 	ippoolName := utilippool.GetNodeIPPoolName(rc.NodeName)
-	ippool, err := rc.CRDClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ippoolName, metav1.GetOptions{})
+	ippool, err := rc.CRDClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, ippoolName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (rc *RouteController) ensureVPCRoute(ctx context.Context) error {
 		return err
 	}
 
-	thisNode, err := rc.KubeClient.CoreV1().Nodes().Get(rc.NodeName, metav1.GetOptions{})
+	thisNode, err := rc.KubeClient.CoreV1().Nodes().Get(ctx, rc.NodeName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}

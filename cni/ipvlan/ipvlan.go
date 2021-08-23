@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -227,7 +228,7 @@ func (p *ipvlanPlugin) createIpvlan(conf *NetConf, ifName string, netns ns.NetNS
 
 func (p *ipvlanPlugin) updateMasterFromWep(k8sArgs *cni.K8SArgs, n *NetConf) error {
 	name, namespace := string(k8sArgs.K8S_POD_NAME), string(k8sArgs.K8S_POD_NAMESPACE)
-	wep, err := p.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Get(name, metav1.GetOptions{})
+	wep, err := p.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get wep (%v/%v): %v", namespace, name, err)
 	}

@@ -13,7 +13,7 @@
  *
  */
 
-package cmd
+package root
 
 import (
 	"time"
@@ -31,12 +31,14 @@ type Options struct {
 	ENISyncPeriod         time.Duration
 	GCPeriod              time.Duration
 	Port                  int
+	DebugPort             int
 	ResyncPeriod          time.Duration
 	LeaderElection        componentbaseconfig.LeaderElectionConfiguration
 	SubnetSelectionPolicy string
 	Debug                 bool
 	IPMutatingRate        float64
 	IPMutatingBurst       int64
+	MaxWorkerNum          int
 	BatchAddIPNum         int
 	stopCh                chan struct{}
 }

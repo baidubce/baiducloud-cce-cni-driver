@@ -971,9 +971,10 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 		gcPeriod              time.Duration
 	}
 	type args struct {
-		ctx  context.Context
-		node *v1.Node
-		enis []enisdk.Eni
+		ctx        context.Context
+		node       *v1.Node
+		instanceID string
+		enis       []enisdk.Eni
 	}
 	tests := []struct {
 		name    string
@@ -1024,6 +1025,7 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 						ProviderID: "cce://i-xxxxx",
 					},
 				},
+				instanceID: "i-xxxxx",
 				enis: []enisdk.Eni{
 					{
 						EniId:      "eni-1",
@@ -1070,7 +1072,7 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 				informerResyncPeriod:  tt.fields.informerResyncPeriod,
 				gcPeriod:              tt.fields.gcPeriod,
 			}
-			if err := ipam.updateIPPoolStatus(tt.args.ctx, tt.args.node, tt.args.enis); (err != nil) != tt.wantErr {
+			if err := ipam.updateIPPoolStatus(tt.args.ctx, tt.args.node, tt.args.instanceID, tt.args.enis); (err != nil) != tt.wantErr {
 				t.Errorf("updateIPPoolStatus() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

@@ -66,6 +66,8 @@ spec:
           ports:
             - name: grpc
               containerPort: 9999
+            - name: debug
+              containerPort: 9998
           readinessProbe:
             tcpSocket:
               port: 9999

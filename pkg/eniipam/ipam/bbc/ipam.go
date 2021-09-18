@@ -41,7 +41,6 @@ import (
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubernetes/pkg/kubelet/dockershim/network"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
@@ -163,8 +162,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	// add key lock for each node
-	if !ipam.nodeLock.WaitLock(node.Name, (network.CNITimeoutSec*time.Second-ipamgeneric.CniTimeout)/2) {
-		msg := fmt.Sprintf("QPS exceed limit on node %v", node.Name)
+	if !ipam.nodeLock.WaitLock(node.Name, ipamgeneric.CniRetryTimeout) {
+		msg := fmt.Sprintf("%v cannot add more ip due to memory or one of %v has no available ip", node.Name, candidateSubnets)
 		log.Error(ctx, msg)
 		return nil, goerrors.New(msg)
 	}
@@ -207,7 +206,9 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		start := time.Now()
 		err = ipam.increasePool(ctx, node.Name, instanceID, candidateSubnets, pod)
 		if err != nil {
-			log.Errorf(ctx, "increase pool for node %v failed: %v", node.Name, err)
+			msg := fmt.Sprintf("increase pool for node %v failed: %v", node.Name, err)
+			log.Error(ctx, msg)
+			ipam.eventRecorder.Event(node, v1.EventTypeWarning, "IncreasePoolFailed", msg)
 		}
 		log.Infof(ctx, "increase pool takes %v to finish", time.Since(start))
 	}
@@ -216,6 +217,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	ipResult, ipSubnet, err := ipam.tryAllocateIPBySubnets(ctx, node.Name, candidateSubnets)
 	if err != nil {
 		msg := fmt.Sprintf("error allocate private IP for pod (%v %v): %v", namespace, name, err)
+		ipam.eventRecorder.Event(pod, v1.EventTypeWarning, "AllocateIPFailed", msg)
 		log.Error(ctx, msg)
 		return nil, goerrors.New(msg)
 	}
@@ -317,11 +319,11 @@ func (ipam *IPAM) tryAllocateIPBySubnets(ctx context.Context, node string, candi
 			// allocate one successfully
 			return ipResult, ipSubnet, nil
 		} else {
-			log.Errorf(ctx, "datastore try allocate ip in subnet %v failed: %v", sbn.subnetID, err)
+			log.Errorf(ctx, "datastore try allocate ip for node %v in subnet %v failed: %v", node, sbn.subnetID, err)
 		}
 	}
 
-	return "", "", fmt.Errorf("no available ip address in datastore for subnets: %v", candidateSubnets)
+	return "", "", fmt.Errorf("no available ip address in datastore for node %v in subnets: %v", node, candidateSubnets)
 }
 
 func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error) {
@@ -388,24 +390,27 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		log.Errorf(ctx, "release: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
 	}
 
-	// remove finalizers
-	wep.Finalizers = nil
-	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
-	if err != nil {
-		log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
-		return nil, err
+	// ipam may receive allocate request before release request.
+	// For sts pod, wep name will not change.
+	// double check to ensure we don't mistakenly delete wep.
+	if wep.Spec.ContainerID == containerID {
+		// remove finalizers
+		wep.Finalizers = nil
+		_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
+		if err != nil {
+			log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
+			return nil, err
+		}
+		// delete wep
+		err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(ctx, name, *metav1.NewDeleteOptions(0))
+		if err != nil {
+			log.Errorf(ctx, "failed to delete wep for pod (%v %v): %v", namespace, name, err)
+			return nil, err
+		}
+		log.Infof(ctx, "release wep for pod (%v %v) successfully", namespace, name)
 	}
-	// delete wep
-	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(ctx, name, *metav1.NewDeleteOptions(0))
-	if err != nil {
-		log.Errorf(ctx, "failed to delete wep for pod (%v %v): %v", namespace, name, err)
-		return nil, err
-	}
-	log.Infof(ctx, "release wep for pod (%v %v) successfully", namespace, name)
 
-	ipam.lock.Lock()
-	delete(ipam.allocated, wep.Spec.IP)
-	ipam.lock.Unlock()
+	ipam.removeIPFromCache(wep.Spec.IP)
 
 	total, used, err := ipam.datastore.GetNodeStats(wep.Spec.Node)
 	if err == nil {
@@ -571,9 +576,7 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 						Name: fmt.Sprintf("%v %v", wep.Namespace, wep.Name),
 					}, v1.EventTypeWarning, "PodLeaked", msg)
 
-					ipam.lock.Lock()
-					delete(ipam.allocated, wep.Spec.IP)
-					ipam.lock.Unlock()
+					ipam.removeIPFromCache(wep.Spec.IP)
 				}
 			} else {
 				log.Errorf(ctx, "gc: failed to get pod (%v %v): %v", wep.Namespace, wep.Name, err)
@@ -902,6 +905,12 @@ func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 	return nil
 }
 
+func (ipam *IPAM) removeIPFromCache(ipAddr string) {
+	ipam.lock.Lock()
+	delete(ipam.allocated, ipAddr)
+	ipam.lock.Unlock()
+}
+
 func (ipam *IPAM) createSubnetCRs(ctx context.Context, candidateSubnets []string) error {
 	var errs []error
 
@@ -926,7 +935,7 @@ func (ipam *IPAM) createSubnetCRs(ctx context.Context, candidateSubnets []string
 
 func (ipam *IPAM) backoffCap(subnetNum int) time.Duration {
 	var addIPMaxTry int = int(math.Log2(float64(ipam.batchAddIPNum))) + 1
-	return ipamgeneric.CniTimeout / time.Duration(addIPMaxTry) / time.Duration(subnetNum)
+	return ipamgeneric.CCECniTimeout / time.Duration(addIPMaxTry) / time.Duration(subnetNum)
 }
 
 func isErrorNeedExponentialBackoff(err error) bool {

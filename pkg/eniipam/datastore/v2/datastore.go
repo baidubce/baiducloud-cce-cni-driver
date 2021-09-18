@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/clock"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 )
 
 const (
@@ -42,6 +44,13 @@ var (
 	NoAvailableIPAddressInDataStoreError = errors.New("no available ip address in datastore")
 
 	NoAvailableIPAddressInSubnetBucketError = errors.New("no available ip address in subnet bucket")
+)
+
+var (
+	// metrics
+	metricTotalIPCount     = metric.PrimaryEniMultiIPEniIPTotalCount
+	metricAllocatedIPCount = metric.PrimaryEniMultiIPEniIPAllocatedCount
+	metricAvailableIPCount = metric.PrimaryEniMultiIPEniIPAvailableCount
 )
 
 type DataStore struct {
@@ -113,6 +122,9 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, string, error) {
 			addr.Assigned = true
 			instance.assigned++
 
+			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
+			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
+
 			return addr.Address, addr.SubnetID, nil
 		}
 	}
@@ -142,6 +154,9 @@ func (ds *DataStore) AllocatePodPrivateIPBySubnet(node, subnetID string) (string
 		addr.Assigned = true
 		instance.assigned++
 
+		metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
+		metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
+
 		return addr.Address, addr.SubnetID, nil
 	}
 
@@ -166,6 +181,9 @@ func (ds *DataStore) ReleasePodPrivateIP(node, subnetID, ip string) error {
 	if ok {
 		if addr.Assigned {
 			instance.assigned--
+
+			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
+			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
 		}
 		addr.Assigned = false
 		return nil
@@ -210,8 +228,12 @@ func (ds *DataStore) AddPrivateIPToStore(node, subnetID, ipAddress string, assig
 
 	// increase counter
 	instance.total++
+	metricTotalIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Inc()
 	if assigned {
 		instance.assigned++
+		metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Inc()
+	} else {
+		metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Inc()
 	}
 
 	// update store
@@ -239,9 +261,17 @@ func (ds *DataStore) DeletePrivateIPFromStore(node, subnetID, ipAddress string) 
 	}
 
 	// decrease total
-	_, ok = sbucket.IPv4Addresses[ipAddress]
+	addr, ok := sbucket.IPv4Addresses[ipAddress]
 	if ok {
 		instance.total--
+		metricTotalIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Dec()
+
+		if addr.Assigned {
+			instance.assigned--
+			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Dec()
+		} else {
+			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Dec()
+		}
 	}
 
 	// update store
@@ -274,6 +304,14 @@ func (ds *DataStore) AddNodeToStore(node, instanceID string) error {
 func (ds *DataStore) DeleteNodeFromStore(node string) error {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
+
+	if nodeStore, ok := ds.store[node]; ok {
+		for subnet, _ := range nodeStore.pool {
+			metricTotalIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnet).Set(0)
+			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnet).Set(0)
+			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnet).Set(0)
+		}
+	}
 
 	delete(ds.store, node)
 

@@ -16,6 +16,8 @@
 package cloud
 
 import (
+	"github.com/baidubce/bce-sdk-go/bce"
+	"net/http"
 	"strings"
 )
 
@@ -96,4 +98,17 @@ func IsErrorBBCENIPrivateIPExceedLimit(err error) bool {
 func caseInsensitiveContains(s, substr string) bool {
 	s, substr = strings.ToLower(s), strings.ToLower(substr)
 	return strings.Contains(s, substr)
+}
+
+func BceServiceErrorToHTTPCode(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+
+	bceErr, ok := err.(*bce.BceServiceError)
+	if ok {
+		return bceErr.StatusCode
+	}
+
+	return 0
 }

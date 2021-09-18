@@ -34,6 +34,8 @@ spec:
         k8s-app: cce-ip-masq-agent
     spec:
       hostNetwork: true
+      tolerations:
+        - operator: "Exists"
       containers:
         - name: cce-ip-masq-agent
           image: {{.Values.CCECNIImage}}

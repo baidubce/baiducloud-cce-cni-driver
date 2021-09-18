@@ -12,6 +12,7 @@ COPY build/images/cce-cni/entrypoint.sh /entrypoint.sh
 COPY output/cni-bin/unnumbered-ptp /unnumbered-ptp
 COPY output/cni-bin/ipvlan /ipvlan
 COPY output/cni-bin/macvlan /macvlan
+COPY output/cni-bin/bandwidth /bandwidth
 COPY output/cni-bin/ptp /ptp
 COPY output/cni-bin/eni-ipam /eni-ipam
 COPY output/cni-bin/sysctl /sysctl
@@ -25,4 +26,4 @@ COPY output/cni-node-agent /bin/cni-node-agent
 # install cce node agent binary
 COPY output/ip-masq-agent /bin/cce-ip-masq-agent
 
-CMD ["/bin/sh", "/entrypoint.sh"]
+CMD ["/bin/bash", "/entrypoint.sh"]

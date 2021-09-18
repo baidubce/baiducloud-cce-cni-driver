@@ -51,6 +51,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
@@ -82,6 +83,12 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		return nil, err
 	}
 
+	// get node
+	node, err := ipam.kubeInformer.Core().V1().Nodes().Lister().Get(pod.Spec.NodeName)
+	if err != nil {
+		return nil, err
+	}
+
 	// find out which enis are suitable to bind
 	enis, err := ipam.findSuitableENIs(ctx, pod)
 	if err != nil {
@@ -101,7 +108,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			log.Infof(ctx, "try to reuse fix IP %v for pod (%v %v)", ipToAllocate, namespace, name)
 		}
 		for _, eni := range enis {
-			ipResult, err = ipam.tryAllocateIPForFixIPPod(ctx, eni, wep, ipToAllocate, ipamgeneric.CniTimeout/time.Duration(suitableENINum))
+			ipResult, err = ipam.tryAllocateIPForFixIPPod(ctx, eni, wep, ipToAllocate, node, ipamgeneric.CCECniTimeout/time.Duration(suitableENINum))
 			if err == nil {
 				ipAddedENI = eni
 				break
@@ -157,7 +164,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	log.Infof(ctx, "try to allocate IP and create wep for pod (%v %v)", pod.Namespace, pod.Name)
 
 	for _, eni := range enis {
-		ipResult, err = ipam.tryAllocateIP(ctx, eni, pod, ipamgeneric.CniTimeout/time.Duration(suitableENINum))
+		ipResult, err = ipam.tryAllocateIP(ctx, eni, pod, ipamgeneric.CCECniTimeout/time.Duration(suitableENINum))
 		if err == nil {
 			ipAddedENI = eni
 			break
@@ -208,18 +215,17 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		log.Errorf(ctx, "failed to create wep for pod (%v %v): %v", namespace, name, err)
 		if delErr := ipam.deletePrivateIP(ctx, ipResult, ipAddedENI.EniId); delErr != nil {
 			log.Errorf(ctx, "rollback: error deleting private IP %v for pod (%v %v): %v", ipResult, namespace, name, delErr)
+		} else {
+			ipam.decPrivateIPNumCache(ipAddedENI.EniId, false)
+			metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node.Name, ipAddedENI.SubnetId, ipAddedENI.EniId).Dec()
 		}
-		ipam.lock.Lock()
-		ipam.privateIPNumCache[ipAddedENI.EniId]--
-		ipam.lock.Unlock()
 		return nil, err
 	}
 	log.Infof(ctx, "create wep with spec %+v for pod (%v %v) successfully", wep.Spec, namespace, name)
 
 	// update allocated pod cache
 	ipam.lock.Lock()
-	if _, ok := ipam.addIPBackoffCache[wep.Spec.ENIID]; ok {
-		delete(ipam.addIPBackoffCache, wep.Spec.ENIID)
+	if ipam.removeAddIPBackoffCache(wep.Spec.ENIID, true) {
 		log.Infof(ctx, "remove backoff for eni %v when handling pod (%v %v) due to successful ip allocate", wep.Spec.ENIID, namespace, name)
 	}
 	ipam.allocated[ipResult] = wep
@@ -268,19 +274,20 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 	}
 
 	// not sts pod, delete eni ip, delete fip crd
-	log.Infof(ctx, "try to release private IP and wep for non-sts pod (%v %v)", namespace, name)
+	log.Infof(ctx, "try to release private IP %v and wep for non-sts pod (%v %v)", wep.Spec.IP, namespace, name)
 	err = ipam.deletePrivateIP(ctx, wep.Spec.IP, wep.Spec.ENIID)
 	if err != nil {
 		log.Errorf(ctx, "release: error deleting private IP %v for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
 	} else {
-		// ip was really on eni and deleted successfully, remove eni backoff and update privateIPNumCache
 		ipam.lock.Lock()
-		if _, ok := ipam.addIPBackoffCache[wep.Spec.ENIID]; ok {
-			delete(ipam.addIPBackoffCache, wep.Spec.ENIID)
+		// ip was really on eni and deleted successfully, remove eni backoff and update privateIPNumCache
+		if ipam.removeAddIPBackoffCache(wep.Spec.ENIID, true) {
 			log.Infof(ctx, "remove backoff for eni %v when handling pod (%v %v) due to successful ip release", wep.Spec.ENIID, namespace, name)
 		}
-		ipam.privateIPNumCache[wep.Spec.ENIID]--
+		ipam.decPrivateIPNumCache(wep.Spec.ENIID, true)
 		ipam.lock.Unlock()
+
+		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.ENIID).Dec()
 	}
 	if err != nil && !ipam.isErrorENIPrivateIPNotFound(err, wep) {
 		if cloud.IsErrorRateLimit(err) {
@@ -288,26 +295,28 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		}
 		return nil, err
 	}
+	ipam.removeIPFromCache(wep.Spec.IP, false)
 	log.Infof(ctx, "release private IP %v for pod (%v %v) successfully", wep.Spec.IP, namespace, name)
 
-	// remove finalizers
-	wep.Finalizers = nil
-	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
-	if err != nil {
-		log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
-		return nil, err
+	// ipam may receive allocate request before release request.
+	// For sts pod, wep name will not change.
+	// double check to ensure we don't mistakenly delete wep.
+	if wep.Spec.ContainerID == containerID {
+		// remove finalizers
+		wep.Finalizers = nil
+		_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
+		if err != nil {
+			log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, err)
+			return nil, err
+		}
+		// delete wep
+		err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(ctx, name, *metav1.NewDeleteOptions(0))
+		if err != nil {
+			log.Errorf(ctx, "failed to delete wep for pod (%v %v): %v", namespace, name, err)
+			return nil, err
+		}
+		log.Infof(ctx, "release wep for pod (%v %v) successfully", namespace, name)
 	}
-	// delete wep
-	err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Delete(ctx, name, *metav1.NewDeleteOptions(0))
-	if err != nil {
-		log.Errorf(ctx, "failed to delete wep for pod (%v %v): %v", namespace, name, err)
-		return nil, err
-	}
-	log.Infof(ctx, "release wep for pod (%v %v) successfully", namespace, name)
-
-	ipam.lock.Lock()
-	delete(ipam.allocated, wep.Spec.IP)
-	ipam.lock.Unlock()
 
 	return wep, nil
 }
@@ -428,7 +437,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 	return nil
 }
 
-func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, ipToAllocate string, backoffCap time.Duration) (string, error) {
+func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, ipToAllocate string, node *v1.Node, backoffCap time.Duration) (string, error) {
 	var namespace, name string = wep.Namespace, wep.Name
 	var ipResult string
 	var err error
@@ -477,9 +486,8 @@ func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni,
 	}
 
 	log.Infof(ctx, "add private IP %v for pod (%v %v) successfully", ipResult, namespace, name)
-	ipam.lock.Lock()
-	ipam.privateIPNumCache[eni.EniId]++
-	ipam.lock.Unlock()
+	ipam.incPrivateIPNumCache(eni.EniId, false)
+	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node.Name, eni.SubnetId, eni.EniId).Inc()
 
 	return ipResult, nil
 }
@@ -529,9 +537,9 @@ func (ipam *IPAM) tryAllocateIP(ctx context.Context, eni *enisdk.Eni, pod *v1.Po
 	}
 
 	log.Infof(ctx, "assign private IP %v for pod (%v %v) successfully", ipResult, namespace, name)
-	ipam.lock.Lock()
-	ipam.privateIPNumCache[eni.EniId]++
-	ipam.lock.Unlock()
+
+	ipam.incPrivateIPNumCache(eni.EniId, false)
+	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, pod.Spec.NodeName, eni.SubnetId, eni.EniId).Inc()
 
 	return ipResult, nil
 }
@@ -556,6 +564,26 @@ func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 		log.Infof(ctx, "build allocated pod cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
 	}
 	return nil
+}
+
+func (ipam *IPAM) removeIPFromCache(ipAddr string, lockless bool) {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
+	delete(ipam.allocated, ipAddr)
+}
+
+func (ipam *IPAM) removeAddIPBackoffCache(eniID string, lockless bool) bool {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
+	_, ok := ipam.addIPBackoffCache[eniID]
+	if ok {
+		delete(ipam.addIPBackoffCache, eniID)
+	}
+	return ok
 }
 
 func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
@@ -590,9 +618,20 @@ func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
 			return false, nil
 		}
 
-		// update ippool status of bcc nodes
+		metric.MultiEniMultiIPEniCount.Reset()
+		metric.MultiEniMultiIPEniIPCount.Reset()
+
+		// update ippool status and metrics of bcc nodes
 		for _, node := range nodes {
-			err = ipam.updateIPPoolStatus(ctx, node, enis)
+			instanceID, err := util.GetInstanceIDFromNode(node)
+			if err != nil {
+				log.Errorf(ctx, "failed to get instance id of node %v", node.Name)
+				continue
+			}
+
+			ipam.updateENIMetrics(node, instanceID, enis)
+
+			err = ipam.updateIPPoolStatus(ctx, node, instanceID, enis)
 			if err != nil {
 				log.Errorf(ctx, "failed to update ippool status for node %v: %v", node.Name, err)
 			}
@@ -643,13 +682,13 @@ func (ipam *IPAM) buildENICache(ctx context.Context, nodes []*v1.Node, enis []en
 	return nil
 }
 
-func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, enis []enisdk.Eni) error {
-	eniStatus := map[string]v1alpha1.ENI{}
-	instanceID, err := util.GetInstanceIDFromNode(node)
-	if err != nil {
-		return err
-	}
-	ippoolName := utilippool.GetNodeIPPoolName(node.Name)
+func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, instanceID string, enis []enisdk.Eni) error {
+
+	var (
+		eniStatus  = map[string]v1alpha1.ENI{}
+		ippoolName = utilippool.GetNodeIPPoolName(node.Name)
+	)
+
 	for _, eni := range enis {
 		if eni.Status != utileni.ENIStatusInuse || !utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
 			continue
@@ -704,6 +743,38 @@ func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, enis []
 	}
 
 	return nil
+}
+
+func (ipam *IPAM) updateENIMetrics(node *v1.Node, instanceID string, enis []enisdk.Eni) {
+
+	var (
+		clusterID = metric.MetaInfo.ClusterID
+		vpcID     = metric.MetaInfo.VPCID
+		nodeName  = node.Name
+	)
+
+	// iterate each eni
+	for _, eni := range enis {
+		if utileni.ENIOwnedByNode(&eni, clusterID, instanceID) {
+			metric.MultiEniMultiIPEniCount.WithLabelValues(
+				clusterID,
+				vpcID,
+				nodeName,
+				eni.SubnetId,
+				eni.Status,
+			).Inc()
+		}
+
+		if eni.Status == utileni.ENIStatusInuse && utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
+			metric.MultiEniMultiIPEniIPCount.WithLabelValues(
+				clusterID,
+				vpcID,
+				nodeName,
+				eni.SubnetId,
+				eni.EniId,
+			).Set(float64(len(eni.PrivateIpSet) - 1))
+		}
+	}
 }
 
 func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
@@ -786,6 +857,7 @@ func (ipam *IPAM) gcDeletedSts(ctx context.Context, wepList []*v1alpha1.Workload
 					// we cannot continue to delete wep, otherwise this IP will not gc in the next round, thus leaked
 					continue
 				}
+				ipam.removeIPFromCache(wep.Spec.IP, false)
 
 				// remove finalizers
 				wep.Finalizers = nil
@@ -799,9 +871,6 @@ func (ipam *IPAM) gcDeletedSts(ctx context.Context, wepList []*v1alpha1.Workload
 					log.Errorf(ctx, "gc: failed to delete wep for orphaned pod (%v %v): %v", wep.Namespace, wep.Name, err)
 				} else {
 					log.Infof(ctx, "gc: delete wep for orphaned pod (%v %v) successfully", wep.Namespace, wep.Name)
-					ipam.lock.Lock()
-					delete(ipam.allocated, wep.Spec.IP)
-					ipam.lock.Unlock()
 				}
 
 			} else {
@@ -865,6 +934,8 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 					// we cannot continue to delete wep, otherwise this IP will not gc in the next round, thus leaked
 					continue
 				}
+				ipam.removeIPFromCache(wep.Spec.IP, false)
+
 				// remove finalizers
 				wep.Finalizers = nil
 				_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(ctx, wep, metav1.UpdateOptions{})
@@ -878,9 +949,6 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 					log.Errorf(ctx, "gc: failed to delete wep for orphaned pod (%v %v): %v", wep.Namespace, wep.Name, err)
 				} else {
 					log.Infof(ctx, "gc: delete wep for orphaned pod (%v %v) successfully", wep.Namespace, wep.Name)
-					ipam.lock.Lock()
-					delete(ipam.allocated, wep.Spec.IP)
-					ipam.lock.Unlock()
 				}
 			}
 		}
@@ -891,7 +959,8 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadEndpoint) error {
 	for _, wep := range wepList {
-		if wep.Spec.Type != ipamgeneric.WepTypePod {
+		// only gc non-fix ip pod
+		if isFixIPStatefulSetPodWep(wep) {
 			continue
 		}
 		_, err := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(wep.Namespace).Get(wep.Name)
@@ -915,6 +984,7 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 					// we cannot continue to delete wep, otherwise this IP will not gc in the next round, thus leaked
 					continue
 				}
+				ipam.removeIPFromCache(wep.Spec.IP, false)
 
 				// remove finalizers
 				wep.Finalizers = nil
@@ -928,9 +998,6 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadE
 				if err != nil {
 					log.Errorf(ctx, "gc: failed to delete wep for leaked pod (%v %v): %v", wep.Namespace, wep.Name, err)
 				} else {
-					ipam.lock.Lock()
-					delete(ipam.allocated, wep.Spec.IP)
-					ipam.lock.Unlock()
 					msg := fmt.Sprintf("gc: delete wep for leaked pod (%v %v) successfully", wep.Namespace, wep.Name)
 					log.Info(ctx, msg)
 					ipam.eventRecorder.Event(&v1.ObjectReference{
@@ -1047,6 +1114,22 @@ func (ipam *IPAM) addPrivateIPWithExponentialBackoff(ctx context.Context, privat
 func (ipam *IPAM) deletePrivateIP(ctx context.Context, privateIP string, eniID string) error {
 	ipam.bucket.Wait(1)
 	return ipam.cloud.DeletePrivateIP(ctx, privateIP, eniID)
+}
+
+func (ipam *IPAM) incPrivateIPNumCache(eniID string, lockless bool) {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
+	ipam.privateIPNumCache[eniID]++
+}
+
+func (ipam *IPAM) decPrivateIPNumCache(eniID string, lockless bool) {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
+	ipam.privateIPNumCache[eniID]--
 }
 
 func (ipam *IPAM) isErrorENIPrivateIPNotFound(err error, wep *v1alpha1.WorkloadEndpoint) bool {

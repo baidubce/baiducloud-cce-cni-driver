@@ -20,21 +20,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
+var (
+	maxWorkerNum int = 20
+)
+
 type ENIIPAMGrpcServer struct {
-	bccipamd ipam.Interface
-	bbcipamd ipam.Interface
-	port     int
+	bccipamd       ipam.Interface
+	bbcipamd       ipam.Interface
+	port           int
+	allocWorkers   int
+	releaseWorkers int
+	mutex          sync.Mutex
 }
 
-func New(bccipam ipam.Interface, bbcipam ipam.Interface, port int) *ENIIPAMGrpcServer {
+func New(bccipam ipam.Interface, bbcipam ipam.Interface, port, maxWorkers int) *ENIIPAMGrpcServer {
+	maxWorkerNum = maxWorkers
+
 	return &ENIIPAMGrpcServer{
 		bccipamd: bccipam,
 		bbcipamd: bbcipam,
@@ -71,6 +83,26 @@ func (cb *ENIIPAMGrpcServer) RunRPCHandler(ctx context.Context) error {
 func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIPRequest) (*rpc.AllocateIPReply, error) {
 	ctx = log.EnsureTraceIDInCtx(ctx)
 
+	const (
+		rpcAPI = "AllocateIP"
+	)
+	var (
+		t   = time.Now()
+		err error
+	)
+	defer func(startTime time.Time) {
+		metric.RPCLatency.WithLabelValues(
+			metric.MetaInfo.ClusterID,
+			req.IPType.String(),
+			rpcAPI,
+			fmt.Sprint(err != nil),
+		).Observe(metric.MsSince(t))
+
+		if err != nil {
+			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+		}
+	}(t)
+
 	name := req.K8SPodName
 	namespace := req.K8SPodNamespace
 	containerID := req.K8SPodInfraContainerID
@@ -83,15 +115,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 
 	// get ipamd by request type
 	var ipamd ipam.Interface
-	switch req.IPType {
-	case rpc.IPType_BCCMultiENIMultiIPType:
-		ipamd = cb.bccipamd
-	case rpc.IPType_BBCPrimaryENIMultiIPType:
-		ipamd = cb.bbcipamd
-	default:
-		ipamd = cb.bccipamd
-		log.Warningf(ctx, "unknown ipType %v from cni request, assume runs in BCC", req.IPType)
-	}
+	ipamd = cb.getIpamByIPType(ctx, req.IPType)
 
 	// we are unlikely to hit this
 	if ipamd == nil {
@@ -100,7 +124,26 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 		return rpcReply, nil
 	}
 
+	// request comes in
+	cb.incWorker(true)
+	if cb.getWorker(true) > maxWorkerNum {
+		// request rejected
+		cb.decWorker(true)
+		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+
+		rpcReply.IsSuccess = false
+		rpcReply.ErrMsg = "QPS exceed limit, wait another try"
+		return rpcReply, nil
+	}
+
+	metric.RPCConcurrency.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+	defer metric.RPCConcurrency.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Dec()
+
+	// allocate IP
 	wep, err := ipamd.Allocate(ctx, name, namespace, containerID)
+
+	// request completes
+	cb.decWorker(true)
 
 	defer func() {
 		if data, err := json.Marshal(wep); err == nil {
@@ -135,6 +178,26 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRequest) (*rpc.ReleaseIPReply, error) {
 	ctx = log.EnsureTraceIDInCtx(ctx)
 
+	const (
+		rpcAPI = "ReleaseIP"
+	)
+	var (
+		t   = time.Now()
+		err error
+	)
+	defer func(startTime time.Time) {
+		metric.RPCLatency.WithLabelValues(
+			metric.MetaInfo.ClusterID,
+			req.IPType.String(),
+			rpcAPI,
+			fmt.Sprint(err != nil),
+		).Observe(metric.MsSince(t))
+
+		if err != nil {
+			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+		}
+	}(t)
+
 	name := req.K8SPodName
 	namespace := req.K8SPodNamespace
 	containerID := req.K8SPodInfraContainerID
@@ -147,15 +210,7 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 
 	// get ipamd by request type
 	var ipamd ipam.Interface
-	switch req.IPType {
-	case rpc.IPType_BCCMultiENIMultiIPType:
-		ipamd = cb.bccipamd
-	case rpc.IPType_BBCPrimaryENIMultiIPType:
-		ipamd = cb.bbcipamd
-	default:
-		ipamd = cb.bccipamd
-		log.Warningf(ctx, "unknown ipType %v from cni request, assume runs in BCC", req.IPType)
-	}
+	ipamd = cb.getIpamByIPType(ctx, req.IPType)
 
 	// we are unlikely to hit this
 	if ipamd == nil {
@@ -164,7 +219,25 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 		return rpcReply, nil
 	}
 
+	// request comes in
+	cb.incWorker(false)
+	if cb.getWorker(false) > maxWorkerNum {
+		// request rejected
+		cb.decWorker(false)
+		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+
+		rpcReply.IsSuccess = false
+		rpcReply.ErrMsg = "QPS exceed limit, wait another try"
+		return rpcReply, nil
+	}
+
+	metric.RPCConcurrency.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
+	defer metric.RPCConcurrency.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Dec()
+
 	wep, err := ipamd.Release(ctx, name, namespace, containerID)
+
+	// request completes
+	cb.decWorker(false)
 
 	defer func() {
 		if data, err := json.Marshal(wep); err == nil {
@@ -200,4 +273,46 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 
 func (cb *ENIIPAMGrpcServer) CheckIP(ctx context.Context, req *rpc.CheckIPRequest) (*rpc.CheckIPReply, error) {
 	return &rpc.CheckIPReply{}, nil
+}
+
+func (cb *ENIIPAMGrpcServer) getIpamByIPType(ctx context.Context, ipType rpc.IPType) ipam.Interface {
+	var ipamd ipam.Interface
+	switch ipType {
+	case rpc.IPType_BCCMultiENIMultiIPType:
+		ipamd = cb.bccipamd
+	case rpc.IPType_BBCPrimaryENIMultiIPType:
+		ipamd = cb.bbcipamd
+	default:
+		ipamd = cb.bccipamd
+		log.Warningf(ctx, "unknown ipType %v from cni request, assume runs in BCC", ipType)
+	}
+
+	return ipamd
+}
+
+func (cb *ENIIPAMGrpcServer) incWorker(isAlloc bool) {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if isAlloc {
+		cb.allocWorkers++
+	}
+	cb.releaseWorkers++
+}
+
+func (cb *ENIIPAMGrpcServer) decWorker(isAlloc bool) {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if isAlloc {
+		cb.allocWorkers--
+	}
+	cb.releaseWorkers--
+}
+
+func (cb *ENIIPAMGrpcServer) getWorker(isAlloc bool) int {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if isAlloc {
+		return cb.allocWorkers
+	}
+	return cb.releaseWorkers
 }

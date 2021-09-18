@@ -117,7 +117,7 @@ func New(
 }
 
 func (c *Controller) ReconcileENIs() {
-	err := wait.PollImmediateInfinite(c.eniSyncPeriod, func() (bool, error) {
+	err := wait.PollImmediateInfinite(wait.Jitter(c.eniSyncPeriod, 0.5), func() (bool, error) {
 		ctx := log.NewContext()
 
 		err := c.reconcileENIs(ctx)

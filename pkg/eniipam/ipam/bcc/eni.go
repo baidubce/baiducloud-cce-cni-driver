@@ -105,18 +105,6 @@ func unstableSortENIByPrivateIPNum(enis []*enisdk.Eni) {
 	})
 }
 
-func (ipam *IPAM) findENIWithLeastIP(enis []*enisdk.Eni) *enisdk.Eni {
-	result := enis[util.Random(0, len(enis))]
-
-	for _, eni := range enis {
-		if ipam.privateIPNumCache[eni.EniId] < ipam.privateIPNumCache[result.EniId] {
-			result = eni
-		}
-	}
-
-	return result
-}
-
 func listENIsBySubnet(enis []*enisdk.Eni, subnetID string) []*enisdk.Eni {
 	result := make([]*enisdk.Eni, 0)
 

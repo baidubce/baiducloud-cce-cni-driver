@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/baidubce/bce-sdk-go/bce"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
@@ -125,12 +126,15 @@ func (c *Client) ListENIs(ctx context.Context, vpcID string) ([]eni.Eni, error) 
 	nextMarker := ""
 
 	for isTruncated {
+		t := time.Now()
+
 		listArgs := &eni.ListEniArgs{
 			VpcId:  vpcID,
 			Marker: nextMarker,
 		}
 
 		res, err := c.eniClient.ListEni(listArgs)
+		exportMetric("ListENI", t, err)
 		if err != nil {
 			return nil, err
 		}
@@ -145,10 +149,12 @@ func (c *Client) ListENIs(ctx context.Context, vpcID string) ([]eni.Eni, error) 
 }
 
 func (c *Client) AddPrivateIP(ctx context.Context, privateIP string, eniID string) (string, error) {
+	t := time.Now()
 	resp, err := c.eniClient.AddPrivateIp(&eni.EniPrivateIpArgs{
 		EniId:            eniID,
 		PrivateIpAddress: privateIP,
 	})
+	exportMetricAndLog(ctx, "AddPrivateIP", t, err)
 
 	if err != nil {
 		return "", err
@@ -158,14 +164,19 @@ func (c *Client) AddPrivateIP(ctx context.Context, privateIP string, eniID strin
 }
 
 func (c *Client) DeletePrivateIP(ctx context.Context, privateIP string, eniID string) error {
-	return c.eniClient.DeletePrivateIp(&eni.EniPrivateIpArgs{
+	t := time.Now()
+	err := c.eniClient.DeletePrivateIp(&eni.EniPrivateIpArgs{
 		EniId:            eniID,
 		PrivateIpAddress: privateIP,
 	})
+	exportMetricAndLog(ctx, "DeletePrivateIP", t, err)
+	return err
 }
 
 func (c *Client) CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error) {
+	t := time.Now()
 	resp, err := c.eniClient.CreateEni(args)
+	exportMetric("CreateENI", t, err)
 	if err != nil {
 		return "", err
 	}
@@ -173,25 +184,39 @@ func (c *Client) CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string
 }
 
 func (c *Client) DeleteENI(ctx context.Context, eniID string) error {
-	return c.eniClient.DeleteEni(&eni.DeleteEniArgs{
+	t := time.Now()
+	err := c.eniClient.DeleteEni(&eni.DeleteEniArgs{
 		EniId: eniID,
 	})
+	exportMetric("DeleteENI", t, err)
+	return err
 }
 
 func (c *Client) AttachENI(ctx context.Context, args *eni.EniInstance) error {
-	return c.eniClient.AttachEniInstance(args)
+	t := time.Now()
+	err := c.eniClient.AttachEniInstance(args)
+	exportMetric("AttachENI", t, err)
+	return err
 }
 
 func (c *Client) DetachENI(ctx context.Context, args *eni.EniInstance) error {
-	return c.eniClient.DetachEniInstance(args)
+	t := time.Now()
+	err := c.eniClient.DetachEniInstance(args)
+	exportMetric("DetachENI", t, err)
+	return err
 }
 
 func (c *Client) StatENI(ctx context.Context, eniID string) (*eni.Eni, error) {
-	return c.eniClient.GetEniDetail(eniID)
+	t := time.Now()
+	resp, err := c.eniClient.GetEniDetail(eniID)
+	exportMetric("StatENI", t, err)
+	return resp, nil
 }
 
 func (c *Client) ListRouteTable(ctx context.Context, vpcID, routeTableID string) ([]vpc.RouteRule, error) {
+	t := time.Now()
 	resp, err := c.vpcClient.GetRouteTableDetail(routeTableID, vpcID)
+	exportMetric("ListRouteTable", t, err)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +224,9 @@ func (c *Client) ListRouteTable(ctx context.Context, vpcID, routeTableID string)
 }
 
 func (c *Client) CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleArgs) (string, error) {
+	t := time.Now()
 	resp, err := c.vpcClient.CreateRouteRule(args)
+	exportMetric("CreateRouteRule", t, err)
 	if err != nil {
 		return "", err
 	}
@@ -207,11 +234,16 @@ func (c *Client) CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleA
 }
 
 func (c *Client) DeleteRoute(ctx context.Context, routeID string) error {
-	return c.vpcClient.DeleteRouteRule(routeID, "")
+	t := time.Now()
+	err := c.vpcClient.DeleteRouteRule(routeID, "")
+	exportMetric("DeleteRoute", t, err)
+	return err
 }
 
 func (c *Client) DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error) {
+	t := time.Now()
 	resp, err := c.vpcClient.GetSubnetDetail(subnetID)
+	exportMetric("DescribeSubnet", t, err)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +251,9 @@ func (c *Client) DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subn
 }
 
 func (c *Client) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
+	t := time.Now()
 	resp, err := c.vpcClient.ListSubnets(args)
+	exportMetric("ListSubnets", t, err)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +261,9 @@ func (c *Client) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]v
 }
 
 func (c *Client) DescribeInstance(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+	t := time.Now()
 	resp, err := c.bccClient.GetInstanceDetail(instanceID)
+	exportMetric("DescribeInstance", t, err)
 	if err != nil {
 		return nil, err
 	}
@@ -235,21 +271,36 @@ func (c *Client) DescribeInstance(ctx context.Context, instanceID string) (*bcca
 }
 
 func (c *Client) BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
-	return c.bbcClient.GetInstanceDetail(instanceID)
+	t := time.Now()
+	resp, err := c.bbcClient.GetInstanceDetail(instanceID)
+	exportMetric("BBCGetInstanceDetail", t, err)
+	return resp, err
 }
 
 func (c *Client) BBCGetInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
-	return c.bbcClient.GetInstanceEni(instanceID)
+	t := time.Now()
+	resp, err := c.bbcClient.GetInstanceEni(instanceID)
+	exportMetric("BBCGetInstanceENI", t, err)
+	return resp, err
 }
 
 func (c *Client) BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error) {
-	return c.bbcClient.BatchAddIP(args)
+	t := time.Now()
+	resp, err := c.bbcClient.BatchAddIP(args)
+	exportMetricAndLog(ctx, "BBCBatchAddIP", t, err)
+	return resp, err
 }
 
 func (c *Client) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error {
-	return c.bbcClient.BatchDelIP(args)
+	t := time.Now()
+	err := c.bbcClient.BatchDelIP(args)
+	exportMetricAndLog(ctx, "BBCBatchDelIP", t, err)
+	return err
 }
 
 func (c *Client) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
-	return c.bbcClient.BatchAddIPCrossSubnet(args)
+	t := time.Now()
+	resp, err := c.bbcClient.BatchAddIPCrossSubnet(args)
+	exportMetricAndLog(ctx, "BBCBatchAddIPCrossSubnet", t, err)
+	return resp, err
 }

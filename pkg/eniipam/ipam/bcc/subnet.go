@@ -29,6 +29,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	crdlisters "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8swatcher"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
@@ -103,6 +104,10 @@ func (ipam *IPAM) updateSubnetStatus(ctx context.Context) error {
 			continue
 		}
 
+		// update metrics
+		metric.SubnetAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, resp.ZoneName, resp.SubnetId).Set(float64(resp.AvailableIp))
+
+		// update crd
 		hasNoMoreIP := resp.AvailableIp <= 0
 
 		if crd.Status.AvailableIPNum != resp.AvailableIp || hasNoMoreIP != crd.Status.HasNoMoreIP {

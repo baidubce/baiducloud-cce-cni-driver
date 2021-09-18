@@ -1,17 +1,32 @@
-#!/bin/sh
+#!/bin/bash
 set -u -e
 
 CNI_BINARY_DIR=/opt/cni/bin/
-CNI_PLUGIN_LIST="unnumbered-ptp ipvlan macvlan loopback host-local ptp eni-ipam sysctl portmap"
+CNI_PLUGIN_LIST="unnumbered-ptp ipvlan macvlan bandwidth loopback host-local ptp eni-ipam sysctl portmap"
 
+# mv cni binary to dest
 for PLUGIN in $CNI_PLUGIN_LIST
 do
   mv /$PLUGIN $CNI_BINARY_DIR
 done
 
 CNI_CONF_DIR="/etc/cni/net.d"
+CNI_CONF_NAME="00-cce-cni.conflist"
 CCE_CNI_KUBECONFIG=$CNI_CONF_DIR/cce-cni.d/cce-cni.kubeconfig
 mkdir -p $CNI_CONF_DIR/cce-cni.d
+
+# rename all remaining cni configurations to *.cce_cni_bak
+find $CNI_CONF_DIR \
+     -maxdepth 1 \
+     -type f \
+     \( -name '*.conf' \
+     -or -name '*.conflist' \
+     -or -name '*.json' \
+     \) \
+     -not \( -name '*.cce_cni_bak' \
+     -or -name $CNI_CONF_NAME \) \
+     -exec mv {} {}.cce_cni_bak \;
+
 
 # Generate a "kube-config"
 SERVICE_ACCOUNT_PATH=/var/run/secrets/kubernetes.io/serviceaccount

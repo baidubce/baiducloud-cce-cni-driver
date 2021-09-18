@@ -13,13 +13,16 @@
  *
  */
 
-package cmd
+package root
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	uuid "github.com/satori/go.uuid"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -37,6 +40,7 @@ import (
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
@@ -46,9 +50,10 @@ func NewRootCommand() *cobra.Command {
 	options := &Options{
 		stopCh:                make(chan struct{}),
 		ResyncPeriod:          15 * time.Second,
-		ENISyncPeriod:         10 * time.Second,
-		GCPeriod:              60 * time.Second,
+		ENISyncPeriod:         15 * time.Second,
+		GCPeriod:              180 * time.Second,
 		Port:                  9999,
+		DebugPort:             9998,
 		SubnetSelectionPolicy: string(bccipam.SubnetSelectionPolicyMostFreeIP),
 		LeaderElection: componentbaseconfig.LeaderElectionConfiguration{
 			LeaderElect:       true,
@@ -63,6 +68,7 @@ func NewRootCommand() *cobra.Command {
 		IPMutatingRate:  10,
 		IPMutatingBurst: 5,
 		BatchAddIPNum:   4,
+		MaxWorkerNum:    20,
 	}
 
 	ctx := log.NewContext()
@@ -164,11 +170,17 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			}
 		}
 
-		ipamGrpcBackend := grpc.New(ipamds[0], ipamds[1], opts.Port)
+		ipamGrpcBackend := grpc.New(ipamds[0], ipamds[1], opts.Port, opts.MaxWorkerNum)
 
+		// run metric server
+		go func() {
+			runMetricServer(ctx, opts)
+		}()
+
+		// run grpc server
 		err = ipamGrpcBackend.RunRPCHandler(ctx)
 		if err != nil {
-			log.Fatalf(ctx, "failed to run ipam grpc handler: %v", err)
+			log.Fatalf(ctx, "failed to run ipam grpc server: %v", err)
 		}
 	}
 
@@ -211,6 +223,20 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 	})
 }
 
+func runMetricServer(ctx context.Context, opts *Options) {
+	address := fmt.Sprintf(":%d", opts.DebugPort)
+	log.Infof(ctx, "ipam metrics serving handler on %v", address)
+
+	metric.SetMetricMetaInfo(opts.ClusterID, opts.VPCID)
+
+	metric.RegisterPrometheusMetrics()
+	http.Handle("/metrics", promhttp.Handler())
+	err := http.ListenAndServe(address, nil)
+	if err != nil {
+		log.Fatalf(ctx, "failed to run ipam metrics server: %v", err)
+	}
+}
+
 func (o *Options) addFlags(fs *pflag.FlagSet) {
 	// Global
 	fs.StringVar(&o.KubeConfig, "kubeconfig", o.KubeConfig, "Path to kubeconfig file with authorization information or empty if in cluster")
@@ -226,9 +252,11 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&o.ENISyncPeriod, "eni-sync-period", o.ENISyncPeriod, "How often to rebuild ENI cache")
 	fs.DurationVar(&o.GCPeriod, "gc-period", o.GCPeriod, "How often to gc orphaned pod IP")
 	fs.IntVar(&o.Port, "port", o.Port, "gRPC server listen port")
+	fs.IntVar(&o.DebugPort, "debug-port", o.DebugPort, "debug server listen port")
 	fs.StringVar(&o.SubnetSelectionPolicy, "subnet-selection-policy", o.SubnetSelectionPolicy, "Subnet Selection Policy when creating new ENI. Must be MostFreeIP or LeastENI")
 	fs.Float64Var(&o.IPMutatingRate, "ip-mutating-rate", o.IPMutatingRate, "Private IP Mutating Rate")
 	fs.Int64Var(&o.IPMutatingBurst, "ip-mutating-burst", o.IPMutatingBurst, "Private IP Mutating Burst")
+	fs.IntVar(&o.MaxWorkerNum, "max-worker-num", o.MaxWorkerNum, "Max Worker Num of IPAM")
 	fs.IntVar(&o.BatchAddIPNum, "batch-add-ip-num", o.BatchAddIPNum, "Batch Add Private IP Num")
 	fs.BoolVar(&o.Debug, "debug", o.Debug, "Debug mode")
 	leaderelectionconfig.BindFlags(&o.LeaderElection, fs)

@@ -19,12 +19,15 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/kubernetes/pkg/kubelet/dockershim/network"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
 
 const (
-	WepTypeSts              = "StatefulSet"
-	WepTypePod              = "Pod"
+	WepTypeSts = "StatefulSet"
+	WepTypePod = "Pod"
+
 	WepLabelStsOwnerKey     = "cce.io/owner"
 	WepLabelSubnetIDKey     = "cce.io/subnet-id"
 	WepLabelInstanceTypeKey = "cce.io/instance-type"
@@ -32,9 +35,14 @@ const (
 
 	IPPoolCreationSourceCNI = "cce-cni"
 
-	// CniTimeout set to be slightly less than 220 sec in kubelet
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
-	CniTimeout = 200 * time.Second
+	KubeletCniTimeout = network.CNITimeoutSec * time.Second
+
+	// CCECniTimeout set to be much less than kubelet cni timeout
+	CCECniTimeout = 60 * time.Second
+
+	// Ref: https://github.com/kubernetes/kubernetes/blob/v1.18.9/pkg/kubelet/pod_workers.go#L269-L271
+	CniRetryTimeout = 2 * time.Second
 )
 
 type Interface interface {

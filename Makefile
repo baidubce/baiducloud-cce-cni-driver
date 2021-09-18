@@ -19,7 +19,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.2.5
+VERSION := v1.3.0
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -58,6 +58,7 @@ build:
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/eni-ipam $(HOMEDIR)/cni/eni-ipam
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ipvlan $(HOMEDIR)/cni/ipvlan
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/macvlan $(HOMEDIR)/cni/macvlan
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/bandwidth $(HOMEDIR)/cni/bandwidth
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ptp $(HOMEDIR)/cni/ptp
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/sysctl $(HOMEDIR)/cni/sysctl
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/unnumbered-ptp $(HOMEDIR)/cni/unnumbered-ptp
@@ -79,6 +80,7 @@ package-bin:
 	mv $(HOMEDIR)/eni-ipam $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/ipvlan $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/macvlan $(OUTDIR)/cni-bin/
+	mv $(HOMEDIR)/bandwidth $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/ptp $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/sysctl $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/unnumbered-ptp $(OUTDIR)/cni-bin/

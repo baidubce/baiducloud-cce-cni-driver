@@ -33,7 +33,7 @@ spec:
 sts 固定 IP 的用法：
 1. 创建/扩容 sts 会从子网中随机选择 IP；
 2. 删除 sts Pod， 重建的 Pod IP 会固定；
-3. *缩容/删除 sts，会导致 sts Pod IP 被回收掉；如果再扩容/重建，新建的 Pod 无法拥有之前的 IP*
+3. **缩容/删除 sts，会导致 sts Pod IP 被回收掉；如果再扩容/重建，新建的 Pod 无法拥有之前的 IP**；
 
 
 ## sts 固定 IP 永久保留

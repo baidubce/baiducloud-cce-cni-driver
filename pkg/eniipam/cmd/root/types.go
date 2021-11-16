@@ -26,19 +26,22 @@ import (
 
 type Options struct {
 	cmd.CommonOptions
-	CNIMode               types.ContainerNetworkMode
-	VPCID                 string
-	ENISyncPeriod         time.Duration
-	GCPeriod              time.Duration
-	Port                  int
-	DebugPort             int
-	ResyncPeriod          time.Duration
-	LeaderElection        componentbaseconfig.LeaderElectionConfiguration
-	SubnetSelectionPolicy string
-	Debug                 bool
-	IPMutatingRate        float64
-	IPMutatingBurst       int64
-	MaxWorkerNum          int
-	BatchAddIPNum         int
-	stopCh                chan struct{}
+	CNIMode                    types.ContainerNetworkMode
+	VPCID                      string
+	ENISyncPeriod              time.Duration
+	GCPeriod                   time.Duration
+	Port                       int
+	DebugPort                  int
+	ResyncPeriod               time.Duration
+	LeaderElection             componentbaseconfig.LeaderElectionConfiguration
+	SubnetSelectionPolicy      string
+	Debug                      bool
+	IPMutatingRate             float64
+	IPMutatingBurst            int64
+	AllocateIPConcurrencyLimit int
+	ReleaseIPConcurrencyLimit  int
+	BatchAddIPNum              int
+	IdleIPMaxPoolSize          int
+	IdleIPMinPoolSize          int
+	stopCh                     chan struct{}
 }

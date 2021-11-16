@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -124,11 +125,32 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 func (s *nodeAgent) run(ctx context.Context) error {
 	log.Info(ctx, "node agent starts to run...")
 
+	var (
+		informerFactory    informers.SharedInformerFactory
+		crdInformerFactory crdinformers.SharedInformerFactory
+	)
+
 	cniMode := s.options.config.CNIMode
 	informerResyncPeriod := time.Duration(s.options.config.ResyncPeriod)
 
-	informerFactory := informers.NewSharedInformerFactory(s.kubeClient, informerResyncPeriod)
-	crdInformerFactory := crdinformers.NewSharedInformerFactory(s.crdClient, informerResyncPeriod)
+	if s.options.config.CCE.RouteController.EnableStaticRoute {
+		// list watch all nodes
+		informerFactory = informers.NewSharedInformerFactory(s.kubeClient, informerResyncPeriod)
+	} else {
+		// only list watch local node
+		informerFactory = informers.NewSharedInformerFactoryWithOptions(s.kubeClient, informerResyncPeriod,
+			informers.WithTweakListOptions(func(options *metav1.ListOptions) {
+				options.FieldSelector = "metadata.name=" + s.options.hostName
+			}))
+	}
+
+	crdInformerFactory = crdinformers.NewSharedInformerFactoryWithOptions(s.crdClient, informerResyncPeriod,
+		crdinformers.WithNamespace(v1.NamespaceDefault),
+		crdinformers.WithTweakListOptions(func(options *metav1.ListOptions) {
+			options.Kind = "IPPool"
+			options.APIVersion = "v1alpha1"
+		}),
+	)
 
 	// add Informer to factory for future start
 	crdInformerFactory.Cce().V1alpha1().IPPools().Informer()
@@ -152,6 +174,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 			&s.options.config.CNIConfig,
 		)
 		nodeWatcher.RegisterEventHandler(cniConfigCtrl)
+		go cniConfigCtrl.ReconcileCNIConfig()
 	}
 
 	// all modes needs ippool controller

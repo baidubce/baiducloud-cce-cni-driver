@@ -33,15 +33,25 @@ import (
 )
 
 func BuildConfig(kubeconfig string) (*rest.Config, error) {
+	var (
+		cfg *rest.Config
+		err error
+	)
+
+	defer func() {
+		cfg.QPS = 400
+		cfg.Burst = 400
+	}()
+
 	if kubeconfig != "" {
-		cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
 			return nil, err
 		}
 		return cfg, nil
 	}
 
-	cfg, err := rest.InClusterConfig()
+	cfg, err = rest.InClusterConfig()
 	if err != nil {
 		return nil, err
 	}

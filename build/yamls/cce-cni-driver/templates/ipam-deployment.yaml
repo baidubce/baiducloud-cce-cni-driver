@@ -15,9 +15,20 @@ spec:
     metadata:
       labels:
         app: cce-eni-ipam
+        cce-app: {{- if and (hasKey .Values "IPAMScheduledToMaster") (.Values.IPAMScheduledToMaster) }} "true" {{- else }} "single-replica" {{- end }}
+      annotations:
+        prometheus.io/port: "9998"
+        prometheus.io/scrape: "true"
     spec:
       priorityClassName: system-node-critical
       hostNetwork: true
+      {{- if and (hasKey .Values "IPAMScheduledToMaster") (.Values.IPAMScheduledToMaster) }}
+      nodeSelector:
+        cluster-role: master
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+      {{- end }}
       serviceAccountName: cce-cni
       containers:
         - name: cce-eni-ipam
@@ -56,28 +67,29 @@ spec:
             - --cluster-id={{ .Values.ClusterID }}
             - --region={{ .Values.Region }}
             - --vpc-id={{ .Values.VPCID }}
-            - --eni-sync-period=10s
+            - --eni-sync-period=20s
             - --gc-period=120s
-            - --port=9999
+            - --port=9997
+            - --debug-port=9998
             - --logtostderr=false
             - --alsologtostderr=true
             - --log-file=/var/log/cce/cce-eni-ipam.log
             - --log-file-max-size=1800
           ports:
             - name: grpc
-              containerPort: 9999
+              containerPort: 9997
             - name: debug
               containerPort: 9998
           readinessProbe:
             tcpSocket:
-              port: 9999
+              port: 9997
             initialDelaySeconds: 15
             periodSeconds: 2
           resources:
             limits:
-              memory: 300Mi
+              memory: 500Mi
             requests:
-              memory: 100Mi
+              memory: 500Mi
       volumes:
         - name: log-dir
           hostPath:
@@ -99,4 +111,4 @@ spec:
     app: cce-eni-ipam
   ports:
     - port: 80
-      targetPort: 9999
+      targetPort: 9997

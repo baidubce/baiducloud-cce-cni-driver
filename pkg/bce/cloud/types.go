@@ -26,7 +26,7 @@ import (
 )
 
 type Interface interface {
-	ListENIs(ctx context.Context, vpcID string) ([]eni.Eni, error)
+	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string) (string, error)
 	DeletePrivateIP(ctx context.Context, privateIP string, eniID string) error
 	CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error)

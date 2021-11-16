@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/im7mortal/kmutex"
 	"github.com/juju/ratelimit"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -33,7 +34,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/keymutex"
 )
 
 const (
@@ -46,14 +46,25 @@ type subnet struct {
 	availableCnt int
 }
 
+type privateIPAddrKey struct {
+	instanceID string
+	subnetID   string
+	nodeName   string
+	ipAddr     string
+}
+
 type IPAM struct {
 	lock     sync.RWMutex
-	nodeLock keymutex.KeyMutex
+	debug    bool
+	nodeLock *kmutex.Kmutex
 
 	datastore         *datastorev2.DataStore
 	addIPBackoffCache map[string]*wait.Backoff
 	allocated         map[string]*v1alpha1.WorkloadEndpoint
 	cacheHasSynced    bool
+
+	// possibleLeakedIPCache stores possible leaked ip cache.
+	possibleLeakedIPCache map[privateIPAddrKey]time.Time
 
 	eventBroadcaster record.EventBroadcaster
 	eventRecorder    record.EventRecorder
@@ -71,8 +82,10 @@ type IPAM struct {
 	vpcID     string
 	clusterID string
 
-	bucket        *ratelimit.Bucket
-	batchAddIPNum int
+	bucket            *ratelimit.Bucket
+	batchAddIPNum     int
+	idleIPMinPoolSize int
+	idleIPMaxPoolSize int
 
 	// nodeENIMap is a map whose key is node name and value is eni Id
 	nodeENIMap map[string]string

@@ -52,7 +52,7 @@ func NewRootCommand() *cobra.Command {
 		ResyncPeriod:          15 * time.Second,
 		ENISyncPeriod:         15 * time.Second,
 		GCPeriod:              180 * time.Second,
-		Port:                  9999,
+		Port:                  9997,
 		DebugPort:             9998,
 		SubnetSelectionPolicy: string(bccipam.SubnetSelectionPolicyMostFreeIP),
 		LeaderElection: componentbaseconfig.LeaderElectionConfiguration{
@@ -64,11 +64,14 @@ func NewRootCommand() *cobra.Command {
 			ResourceName:      "cce-ipam",
 			ResourceNamespace: "kube-system",
 		},
-		Debug:           false,
-		IPMutatingRate:  10,
-		IPMutatingBurst: 5,
-		BatchAddIPNum:   4,
-		MaxWorkerNum:    20,
+		Debug:                      false,
+		IPMutatingRate:             10,
+		IPMutatingBurst:            5,
+		BatchAddIPNum:              4,
+		IdleIPMaxPoolSize:          0,
+		IdleIPMinPoolSize:          0,
+		AllocateIPConcurrencyLimit: 20,
+		ReleaseIPConcurrencyLimit:  30,
 	}
 
 	ctx := log.NewContext()
@@ -126,6 +129,7 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.ResyncPeriod,
 			opts.ENISyncPeriod,
 			opts.GCPeriod,
+			opts.Debug,
 		)
 		if err != nil {
 			log.Fatalf(ctx, "failed to create bcc ipamd: %v", err)
@@ -143,6 +147,9 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.BatchAddIPNum,
 			opts.IPMutatingRate,
 			opts.IPMutatingBurst,
+			opts.IdleIPMinPoolSize,
+			opts.IdleIPMaxPoolSize,
+			opts.Debug,
 		)
 		if err != nil {
 			log.Fatalf(ctx, "failed to create bbc ipamd: %v", err)
@@ -170,7 +177,13 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			}
 		}
 
-		ipamGrpcBackend := grpc.New(ipamds[0], ipamds[1], opts.Port, opts.MaxWorkerNum)
+		ipamGrpcBackend := grpc.New(
+			ipamds[0],
+			ipamds[1],
+			opts.Port,
+			opts.AllocateIPConcurrencyLimit,
+			opts.ReleaseIPConcurrencyLimit,
+			opts.Debug)
 
 		// run metric server
 		go func() {
@@ -256,8 +269,11 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.SubnetSelectionPolicy, "subnet-selection-policy", o.SubnetSelectionPolicy, "Subnet Selection Policy when creating new ENI. Must be MostFreeIP or LeastENI")
 	fs.Float64Var(&o.IPMutatingRate, "ip-mutating-rate", o.IPMutatingRate, "Private IP Mutating Rate")
 	fs.Int64Var(&o.IPMutatingBurst, "ip-mutating-burst", o.IPMutatingBurst, "Private IP Mutating Burst")
-	fs.IntVar(&o.MaxWorkerNum, "max-worker-num", o.MaxWorkerNum, "Max Worker Num of IPAM")
+	fs.IntVar(&o.AllocateIPConcurrencyLimit, "allocate-ip-concurrency-limit", o.AllocateIPConcurrencyLimit, "Allocate IP Concurrency Limit")
+	fs.IntVar(&o.ReleaseIPConcurrencyLimit, "release-ip-concurrency-limit", o.ReleaseIPConcurrencyLimit, "Release IP Concurrency Limit")
 	fs.IntVar(&o.BatchAddIPNum, "batch-add-ip-num", o.BatchAddIPNum, "Batch Add Private IP Num")
+	fs.IntVar(&o.IdleIPMaxPoolSize, "idle-ip-max-pool-size", o.IdleIPMaxPoolSize, "Idle IP Max Pool Size")
+	fs.IntVar(&o.IdleIPMinPoolSize, "idle-ip-min-pool-size", o.IdleIPMinPoolSize, "Idle IP Min Pool Size")
 	fs.BoolVar(&o.Debug, "debug", o.Debug, "Debug mode")
 	leaderelectionconfig.BindFlags(&o.LeaderElection, fs)
 }

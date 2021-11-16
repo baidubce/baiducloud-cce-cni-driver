@@ -43,6 +43,8 @@ const (
 
 	// Ref: https://github.com/kubernetes/kubernetes/blob/v1.18.9/pkg/kubelet/pod_workers.go#L269-L271
 	CniRetryTimeout = 2 * time.Second
+
+	LeakedPrivateIPExpiredTimeout = 10 * time.Minute
 )
 
 type Interface interface {

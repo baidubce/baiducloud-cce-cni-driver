@@ -4,12 +4,13 @@ go 1.16
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a
-	github.com/baidubce/bce-sdk-go v0.9.70
+	github.com/baidubce/bce-sdk-go v0.9.93
 	github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins v0.8.7
 	github.com/golang/mock v1.4.4
 	github.com/golang/protobuf v1.4.2
 	github.com/gorilla/mux v1.8.0
+	github.com/im7mortal/kmutex v1.0.1
 	github.com/j-keck/arping v1.0.1
 	github.com/json-iterator/go v1.1.10 // indirect
 	github.com/juju/ratelimit v1.0.1
@@ -33,6 +34,7 @@ require (
 )
 
 replace (
+	github.com/im7mortal/kmutex => github.com/im7mortal/kmutex v1.0.2-0.20211009180904-795f0d162683
 	google.golang.org/grpc v1.30.0 => google.golang.org/grpc v1.29.1
 	k8s.io/api => k8s.io/api v0.18.9
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.18.9

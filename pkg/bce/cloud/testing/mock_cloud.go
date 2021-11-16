@@ -257,7 +257,7 @@ func (mr *MockInterfaceMockRecorder) DetachENI(arg0, arg1 interface{}) *gomock.C
 }
 
 // ListENIs mocks base method
-func (m *MockInterface) ListENIs(arg0 context.Context, arg1 string) ([]eni.Eni, error) {
+func (m *MockInterface) ListENIs(arg0 context.Context, arg1 eni.ListEniArgs) ([]eni.Eni, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListENIs", arg0, arg1)
 	ret0, _ := ret[0].([]eni.Eni)

@@ -80,9 +80,9 @@ spec:
                   fieldPath: spec.nodeName
           resources:
             limits:
-              memory: 300Mi
+              memory: 200Mi
             requests:
-              memory: 100Mi
+              memory: 200Mi
       terminationGracePeriodSeconds: 10
       volumes:
         - name: cni-bin-dir

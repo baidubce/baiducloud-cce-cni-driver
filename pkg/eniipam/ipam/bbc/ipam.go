@@ -22,9 +22,11 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+	"github.com/im7mortal/kmutex"
 	"github.com/juju/ratelimit"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -34,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/clock"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -52,8 +55,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
+	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
@@ -76,6 +81,9 @@ func NewIPAM(
 	batchAddIPNum int,
 	ipMutatingRate float64,
 	ipMutatingBurst int64,
+	idleIPMinPoolSize int,
+	idleIPMaxPoolSize int,
+	debug bool,
 ) (ipam.Interface, error) {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
@@ -87,25 +95,30 @@ func NewIPAM(
 	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, resyncPeriod)
 
 	ipam := &IPAM{
-		eventBroadcaster:  eventBroadcaster,
-		eventRecorder:     recorder,
-		kubeInformer:      kubeInformer,
-		kubeClient:        kubeClient,
-		crdInformer:       crdInformer,
-		crdClient:         crdClient,
-		cloud:             bceClient,
-		clock:             clock.RealClock{},
-		cniMode:           cniMode,
-		vpcID:             vpcID,
-		clusterID:         clusterID,
-		datastore:         datastorev2.NewDataStore(),
-		addIPBackoffCache: make(map[string]*wait.Backoff),
-		allocated:         make(map[string]*v1alpha1.WorkloadEndpoint),
-		bucket:            ratelimit.NewBucketWithRate(ipMutatingRate, ipMutatingBurst),
-		nodeENIMap:        make(map[string]string),
-		batchAddIPNum:     batchAddIPNum,
-		cacheHasSynced:    false,
-		gcPeriod:          gcPeriod,
+		eventBroadcaster:      eventBroadcaster,
+		eventRecorder:         recorder,
+		kubeInformer:          kubeInformer,
+		kubeClient:            kubeClient,
+		crdInformer:           crdInformer,
+		crdClient:             crdClient,
+		cloud:                 bceClient,
+		clock:                 clock.RealClock{},
+		cniMode:               cniMode,
+		vpcID:                 vpcID,
+		clusterID:             clusterID,
+		datastore:             datastorev2.NewDataStore(),
+		addIPBackoffCache:     make(map[string]*wait.Backoff),
+		allocated:             make(map[string]*v1alpha1.WorkloadEndpoint),
+		bucket:                ratelimit.NewBucketWithRate(ipMutatingRate, ipMutatingBurst),
+		nodeENIMap:            make(map[string]string),
+		possibleLeakedIPCache: make(map[privateIPAddrKey]time.Time),
+		batchAddIPNum:         batchAddIPNum,
+		idleIPMinPoolSize:     idleIPMinPoolSize,
+		idleIPMaxPoolSize:     idleIPMaxPoolSize,
+		cacheHasSynced:        false,
+		gcPeriod:              gcPeriod,
+		nodeLock:              kmutex.New(),
+		debug:                 debug,
 	}
 	return ipam, nil
 }
@@ -161,23 +174,25 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		log.Warningf(ctx, "warn: create subnet crs failed: %v", err)
 	}
 
-	// add key lock for each node
-	if !ipam.nodeLock.WaitLock(node.Name, ipamgeneric.CniRetryTimeout) {
-		msg := fmt.Sprintf("%v cannot add more ip due to memory or one of %v has no available ip", node.Name, candidateSubnets)
-		log.Error(ctx, msg)
-		return nil, goerrors.New(msg)
-	}
-	defer ipam.nodeLock.UnLock(node.Name)
-
 	// check if we need to rebuild cache
 	if !ipam.datastore.NodeExistsInStore(node.Name) {
-		log.Infof(ctx, "rebuild cache for node %v starts", node.Name)
-		err = ipam.rebuildNodeDataStoreCache(ctx, node, instanceID)
-		if err != nil {
-			log.Errorf(ctx, "rebuild cache for node %v error: %v", node.Name, err)
-			return nil, err
+		t := time.Now()
+		ipam.nodeLock.Lock(node.Name)
+		if ipam.debug {
+			metric.RPCPerPodLockLatency.WithLabelValues(
+				metric.MetaInfo.ClusterID, namespace, name, containerID, "rebuildNodeDataStoreCache").Set(metric.MsSince(t))
 		}
-		log.Infof(ctx, "rebuild cache for node %v ends", node.Name)
+		if !ipam.datastore.NodeExistsInStore(node.Name) {
+			log.Infof(ctx, "rebuild cache for node %v starts", node.Name)
+			err = ipam.rebuildNodeDataStoreCache(ctx, node, instanceID)
+			if err != nil {
+				ipam.nodeLock.Unlock(node.Name)
+				log.Errorf(ctx, "rebuild cache for node %v error: %v", node.Name, err)
+				return nil, err
+			}
+			log.Infof(ctx, "rebuild cache for node %v ends", node.Name)
+		}
+		ipam.nodeLock.Unlock(node.Name)
 	}
 
 	// get node stats from store, to further check if pool is corrupted
@@ -190,8 +205,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 
 	log.Infof(ctx, "total, used before allocate for node %v: %v %v", node.Name, total, used)
 
-	unassignedIPs, _ := ipam.datastore.GetUnassignedPrivateIPByNode(node.Name)
-	log.Infof(ctx, "unassigned ip in datastore before allocate for node %v: %v", node.Name, unassignedIPs)
+	idleIPs, _ := ipam.datastore.GetUnassignedPrivateIPByNode(node.Name)
+	log.Infof(ctx, "idle ip in datastore before allocate for node %v: %v", node.Name, idleIPs)
 
 	// if pool status is corrupted, clean and wait until rebuilding
 	// we are unlikely to hit this
@@ -203,14 +218,23 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 
 	// if pool cannot allocate ip, then batch add ips
 	if !ipam.poolCanAllocateIP(ctx, node.Name, candidateSubnets) {
-		start := time.Now()
-		err = ipam.increasePool(ctx, node.Name, instanceID, candidateSubnets, pod)
-		if err != nil {
-			msg := fmt.Sprintf("increase pool for node %v failed: %v", node.Name, err)
-			log.Error(ctx, msg)
-			ipam.eventRecorder.Event(node, v1.EventTypeWarning, "IncreasePoolFailed", msg)
+		t := time.Now()
+		ipam.nodeLock.Lock(node.Name)
+		if ipam.debug {
+			metric.RPCPerPodLockLatency.WithLabelValues(
+				metric.MetaInfo.ClusterID, namespace, name, containerID, "increasePool").Set(metric.MsSince(t))
 		}
-		log.Infof(ctx, "increase pool takes %v to finish", time.Since(start))
+		if !ipam.poolCanAllocateIP(ctx, node.Name, candidateSubnets) {
+			start := time.Now()
+			err = ipam.increasePool(ctx, node.Name, instanceID, candidateSubnets, pod)
+			if err != nil {
+				msg := fmt.Sprintf("increase pool for node %v failed: %v", node.Name, err)
+				log.Error(ctx, msg)
+				ipam.eventRecorder.Event(node, v1.EventTypeWarning, "IncreasePoolFailed", msg)
+			}
+			log.Infof(ctx, "increase pool for node %v takes %v to finish", node.Name, time.Since(start))
+		}
+		ipam.nodeLock.Unlock(node.Name)
 	}
 
 	// try to allocate ip by subnets for both cases: pod that requires specific subnets or not
@@ -221,6 +245,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		log.Error(ctx, msg)
 		return nil, goerrors.New(msg)
 	}
+	log.Infof(ctx, "allocate private IP for pod (%v %v) with %v successfully", namespace, name, ipResult)
 
 	wep := &v1alpha1.WorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
@@ -242,15 +267,32 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 
 	// create wep
+	t := time.Now()
 	_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Create(ctx, wep, metav1.CreateOptions{})
 	if err != nil {
 		log.Errorf(ctx, "failed to create wep for pod (%v %v): %v", namespace, name, err)
-		if delErr := ipam.datastore.ReleasePodPrivateIP(node.Name, ipSubnet, ipResult); delErr != nil {
-			log.Errorf(ctx, "rollback: error releasing private IP %v from datastore for pod (%v %v): %v", ipResult, namespace, name, delErr)
+		if errors.IsAlreadyExists(err) {
+			log.Warningf(ctx, "wep for pod (%v %v) already exists", namespace, name)
+			tmpWep, getErr := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(namespace).Get(name)
+			if getErr != nil {
+				log.Errorf(ctx, "failed to get wep (%v %v): %v", namespace, name)
+				return nil, err
+			}
+			wep.ResourceVersion = tmpWep.ResourceVersion
+			_, updateErr := ipam.crdClient.CceV1alpha1().WorkloadEndpoints(namespace).Update(ctx, wep, metav1.UpdateOptions{})
+			if updateErr != nil {
+				log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", namespace, name, updateErr)
+				_ = ipam.datastore.ReleasePodPrivateIP(node.Name, ipSubnet, ipResult)
+				return nil, updateErr
+			}
+		} else {
+			if delErr := ipam.datastore.ReleasePodPrivateIP(node.Name, ipSubnet, ipResult); delErr != nil {
+				log.Errorf(ctx, "rollback: error releasing private IP %v from datastore for pod (%v %v): %v", ipResult, namespace, name, delErr)
+			}
+			return nil, err
 		}
-		return nil, err
 	}
-	log.Infof(ctx, "create wep with spec %+v for pod (%v %v) successfully", wep.Spec, namespace, name)
+	log.Infof(ctx, "create wep with spec %+v for pod (%v %v) successfully, elapsed %v", wep.Spec, namespace, name, time.Since(t))
 
 	ipam.lock.Lock()
 	if _, ok := ipam.addIPBackoffCache[wep.Spec.InstanceID]; ok {
@@ -264,9 +306,9 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	if err == nil {
 		log.Infof(ctx, "total, used after allocate for node %v: %v %v", node.Name, total, used)
 	}
-	unassignedIPs, err = ipam.datastore.GetUnassignedPrivateIPByNode(node.Name)
+	idleIPs, err = ipam.datastore.GetUnassignedPrivateIPByNode(node.Name)
 	if err == nil {
-		log.Infof(ctx, "unassigned ip in datastore after allocate for node %v: %v", node.Name, unassignedIPs)
+		log.Infof(ctx, "idle ip in datastore after allocate for node %v: %v", node.Name, idleIPs)
 	}
 
 	return wep, nil
@@ -354,6 +396,19 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		return nil, nil
 	}
 
+	total, used, err := ipam.datastore.GetNodeStats(wep.Spec.Node)
+	idle := total - used
+	if err == nil && idle >= 0 && idle < ipam.idleIPMaxPoolSize {
+		// mark ip as unassigned in datastore, then delete wep
+		log.Infof(ctx, "try to only release wep for pod (%v %v) due to idle ip (%v) less than max idle pool", namespace, name, idle)
+		err = ipam.datastore.ReleasePodPrivateIP(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
+		if err != nil {
+			log.Errorf(ctx, "release: error releasing private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
+		} else {
+			goto delWep
+		}
+	}
+
 	// delete eni ip, delete fip crd
 	log.Infof(ctx, "try to release private IP and wep for pod (%v %v)", namespace, name)
 	err = ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
@@ -390,6 +445,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		log.Errorf(ctx, "release: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
 	}
 
+delWep:
 	// ipam may receive allocate request before release request.
 	// For sts pod, wep name will not change.
 	// double check to ensure we don't mistakenly delete wep.
@@ -410,15 +466,16 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		log.Infof(ctx, "release wep for pod (%v %v) successfully", namespace, name)
 	}
 
-	ipam.removeIPFromCache(wep.Spec.IP)
+	ipam.removeIPFromCache(wep.Spec.IP, false)
+	ipam.removeIPFromLeakedCache(wep.Spec.InstanceID, wep.Spec.SubnetID, wep.Spec.Node, wep.Spec.IP)
 
-	total, used, err := ipam.datastore.GetNodeStats(wep.Spec.Node)
+	total, used, err = ipam.datastore.GetNodeStats(wep.Spec.Node)
 	if err == nil {
 		log.Infof(ctx, "total, used after release for node %v: %v %v", wep.Spec.Node, total, used)
 	}
-	unassignedIPs, err := ipam.datastore.GetUnassignedPrivateIPByNode(wep.Spec.Node)
+	idleIPs, err := ipam.datastore.GetUnassignedPrivateIPByNode(wep.Spec.Node)
 	if err == nil {
-		log.Infof(ctx, "unassigned ip in datastore after release for node %v: %v", wep.Spec.Node, unassignedIPs)
+		log.Infof(ctx, "idle ip in datastore after release for node %v: %v", wep.Spec.Node, idleIPs)
 	}
 
 	return wep, nil
@@ -468,6 +525,9 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		return err
 	}
 
+	// rebuild datastore cache
+	ipam.buildAllocatedNodeCache(ctx)
+
 	ipam.cacheHasSynced = true
 
 	go func() {
@@ -496,8 +556,14 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 			return false, nil
 		}
 
-		// release non-sts wep if pod not found
+		// release wep if pod not found
 		err = ipam.gcLeakedPod(ctx, wepList)
+		if err != nil {
+			return false, nil
+		}
+
+		// release leaked ip
+		err = ipam.gcLeakedIP(ctx)
 		if err != nil {
 			return false, nil
 		}
@@ -517,74 +583,247 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 }
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*v1alpha1.WorkloadEndpoint) error {
+	var (
+		wg sync.WaitGroup
+		ch = make(chan struct{}, 5)
+	)
+
 	for _, wep := range wepList {
 		_, err := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(wep.Namespace).Get(wep.Name)
 		if err != nil {
 			if errors.IsNotFound(err) {
-				msg := fmt.Sprintf("gc: try to release leaked wep (%v %v)", wep.Namespace, wep.Name)
-				log.Info(ctx, msg)
-				ipam.eventRecorder.Event(&v1.ObjectReference{
-					Kind: "wep",
-					Name: fmt.Sprintf("%v %v", wep.Namespace, wep.Name),
-				}, v1.EventTypeWarning, "PodLeaked", msg)
+				ch <- struct{}{}
+				wg.Add(1)
 
-				// delete ip
-				err = ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
-					InstanceId: wep.Spec.InstanceID,
-					PrivateIps: []string{wep.Spec.IP},
-				})
+				go func(wep *v1alpha1.WorkloadEndpoint) {
+					defer func() {
+						wg.Done()
+						<-ch
+					}()
 
-				if err != nil {
-					log.Errorf(ctx, "gc: failed to delete private IP %v on %v for leaked pod (%v %v): %v", wep.Spec.IP, wep.Spec.InstanceID, wep.Namespace, wep.Name, err)
-					if cloud.IsErrorRateLimit(err) {
-						time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+					wep = wep.DeepCopy()
+
+					log.Infof(ctx, "gc: try to release leaked wep (%v %v)", wep.Namespace, wep.Name)
+
+					total, used, err := ipam.datastore.GetNodeStats(wep.Spec.Node)
+					idle := total - used
+					if err == nil && idle >= 0 && idle < ipam.idleIPMaxPoolSize {
+						// mark ip as unassigned in datastore, then delete wep
+						log.Infof(ctx, "gc: try to only release wep for pod (%v %v) due to idle ip (%v) less than max idle pool", wep.Namespace, wep.Name, idle)
+						err = ipam.datastore.ReleasePodPrivateIP(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
+						if err != nil {
+							log.Errorf(ctx, "gc: error releasing private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
+						} else {
+							goto delWep
+						}
 					}
-					if !(cloud.IsErrorBBCENIPrivateIPNotFound(err) && ipam.clock.Since(wep.Spec.UpdateAt.Time) >= minPrivateIPLifeTime) {
-						log.Errorf(ctx, "gc: stop delete wep for leaked pod (%v %v), try next round", wep.Namespace, wep.Name)
-						continue
+
+					// delete ip
+					err = ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
+						InstanceId: wep.Spec.InstanceID,
+						PrivateIps: []string{wep.Spec.IP},
+					})
+
+					if err != nil {
+						log.Errorf(ctx, "gc: failed to delete private IP %v on %v for leaked pod (%v %v): %v", wep.Spec.IP, wep.Spec.InstanceID, wep.Namespace, wep.Name, err)
+						if cloud.IsErrorRateLimit(err) {
+							time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+						}
+						if !(cloud.IsErrorBBCENIPrivateIPNotFound(err) && ipam.clock.Since(wep.Spec.UpdateAt.Time) >= minPrivateIPLifeTime) {
+							log.Errorf(ctx, "gc: stop delete wep for leaked pod (%v %v), try next round", wep.Namespace, wep.Name)
+							return
+						}
+					} else {
+						log.Infof(ctx, "gc: delete private IP %v on %v for leaked pod (%v %v) successfully", wep.Spec.IP, wep.Spec.InstanceID, wep.Namespace, wep.Name)
 					}
-				} else {
-					log.Infof(ctx, "gc: delete private IP %v on %v for leaked pod (%v %v) successfully", wep.Spec.IP, wep.Spec.InstanceID, wep.Namespace, wep.Name)
-				}
 
-				// delete ip from datastore
-				err = ipam.datastore.ReleasePodPrivateIP(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
-				if err != nil {
-					log.Errorf(ctx, "gc: error releasing private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
-				}
-				err = ipam.datastore.DeletePrivateIPFromStore(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
-				if err != nil {
-					log.Errorf(ctx, "gc: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
-				}
+					// delete ip from datastore
+					err = ipam.datastore.ReleasePodPrivateIP(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
+					if err != nil {
+						log.Errorf(ctx, "gc: error releasing private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
+					}
+					err = ipam.datastore.DeletePrivateIPFromStore(wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.IP)
+					if err != nil {
+						log.Errorf(ctx, "gc: error deleting private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
+					}
 
-				// remove finalizers
-				wep.Finalizers = nil
-				_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(ctx, wep, metav1.UpdateOptions{})
-				if err != nil {
-					log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", wep.Namespace, wep.Name, err)
-					continue
-				}
-				// delete wep
-				err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Delete(ctx, wep.Name, *metav1.NewDeleteOptions(0))
-				if err != nil {
-					log.Errorf(ctx, "gc: failed to delete wep for leaked pod (%v %v): %v", wep.Namespace, wep.Name, err)
-				} else {
-					msg := fmt.Sprintf("gc: delete wep for leaked pod (%v %v) successfully", wep.Namespace, wep.Name)
-					log.Info(ctx, msg)
-					ipam.eventRecorder.Event(&v1.ObjectReference{
-						Kind: "wep",
-						Name: fmt.Sprintf("%v %v", wep.Namespace, wep.Name),
-					}, v1.EventTypeWarning, "PodLeaked", msg)
-
-					ipam.removeIPFromCache(wep.Spec.IP)
-				}
+				delWep:
+					// remove finalizers
+					wep.Finalizers = nil
+					_, err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(ctx, wep, metav1.UpdateOptions{})
+					if err != nil {
+						log.Errorf(ctx, "failed to update wep for pod (%v %v): %v", wep.Namespace, wep.Name, err)
+						return
+					}
+					// delete wep
+					err = ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Delete(ctx, wep.Name, *metav1.NewDeleteOptions(0))
+					if err != nil {
+						log.Errorf(ctx, "gc: failed to delete wep for leaked pod (%v %v): %v", wep.Namespace, wep.Name, err)
+					} else {
+						log.Infof(ctx, "gc: delete wep for leaked pod (%v %v) successfully", wep.Namespace, wep.Name)
+						ipam.removeIPFromCache(wep.Spec.IP, false)
+						ipam.removeIPFromLeakedCache(wep.Spec.InstanceID, wep.Spec.SubnetID, wep.Spec.Node, wep.Spec.IP)
+					}
+				}(wep)
 			} else {
+				// get pod error, but is not 404
 				log.Errorf(ctx, "gc: failed to get pod (%v %v): %v", wep.Namespace, wep.Name, err)
 			}
 		}
 	}
 
+	wg.Wait()
+
 	return nil
+}
+
+func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
+	var (
+		podIPSet = sets.NewString()
+	)
+
+	// list all pods
+	pods, err := ipam.kubeInformer.Core().V1().Pods().Lister().List(labels.Everything())
+	if err != nil {
+		log.Errorf(ctx, "gc: error list pods in cluster: %v", err)
+		return err
+	}
+
+	// store pod ip temporarily
+	for _, pod := range pods {
+		if !pod.Spec.HostNetwork && !k8sutil.IsPodFinished(pod) {
+			podIPSet.Insert(pod.Status.PodIP)
+		}
+	}
+
+	err = ipam.buildPossibleLeakedIPCache(ctx, podIPSet)
+	if err != nil {
+		return err
+	}
+
+	ipam.pruneExpiredLeakedIP(ctx)
+
+	return nil
+}
+
+func (ipam *IPAM) buildPossibleLeakedIPCache(ctx context.Context, podIPSet sets.String) error {
+	var (
+		wg sync.WaitGroup
+		ch = make(chan struct{}, 3)
+	)
+
+	bbcNodeSelector, _ := bbcNodeListerSelector()
+	nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(bbcNodeSelector)
+	if err != nil {
+		log.Errorf(ctx, "gc: failed to list bbc nodes: %v", err)
+		return err
+	}
+
+	// check each node
+	for _, node := range nodes {
+		ch <- struct{}{}
+		wg.Add(1)
+
+		go func(node *v1.Node) {
+			defer func() {
+				wg.Done()
+				<-ch
+			}()
+
+			ctx := log.NewContext()
+			instanceID, err := util.GetInstanceIDFromNode(node)
+			if err != nil {
+				log.Errorf(ctx, "gc: failed to get instance id of node %v: %v", node.Name, err)
+				return
+			}
+
+			idleIPs, err := ipam.datastore.GetUnassignedPrivateIPByNode(node.Name)
+			if err != nil {
+				log.Errorf(ctx, "gc: failed to idle ips in datastore of node %v: %v", node.Name, err)
+				return
+			}
+
+			idleIPSet := sets.NewString(idleIPs...)
+
+			resp, err := ipam.cloud.BBCGetInstanceENI(ctx, instanceID)
+			if err != nil {
+				log.Errorf(ctx, "get instance eni failed: %v", err)
+			}
+
+			ipam.lock.Lock()
+			defer ipam.lock.Unlock()
+
+			for _, ip := range resp.PrivateIpSet {
+				if !ip.Primary {
+					key := privateIPAddrKey{instanceID, ip.SubnetId, node.Name, ip.PrivateIpAddress}
+					// if ip not in pod and neither in datastore as unassigned
+					if !podIPSet.Has(ip.PrivateIpAddress) && !idleIPSet.Has(ip.PrivateIpAddress) {
+						log.Warningf(ctx, "gc: node %v may has IP %v leaked", node.Name, ip.PrivateIpAddress)
+						if _, ok := ipam.possibleLeakedIPCache[key]; !ok {
+							ipam.possibleLeakedIPCache[key] = ipam.clock.Now()
+						}
+					} else {
+						// if ip in pod, maybe a false positive
+						if _, ok := ipam.possibleLeakedIPCache[key]; ok {
+							log.Warningf(ctx, "gc: remove IP %v on node %v from possibleLeakedIPCache", ip.PrivateIpAddress, node.Name)
+						}
+						delete(ipam.possibleLeakedIPCache, key)
+					}
+				}
+			}
+
+		}(node)
+	}
+
+	wg.Wait()
+
+	return nil
+}
+
+func (ipam *IPAM) pruneExpiredLeakedIP(ctx context.Context) {
+	var (
+		leakedIPs []privateIPAddrKey
+	)
+
+	ipam.lock.Lock()
+	for key, activeTime := range ipam.possibleLeakedIPCache {
+		if ipam.clock.Since(activeTime) > ipamgeneric.LeakedPrivateIPExpiredTimeout {
+			log.Infof(ctx, "gc: found leaked ip on instance %v: %v", key.instanceID, key.ipAddr)
+			leakedIPs = append(leakedIPs, privateIPAddrKey{key.instanceID, key.subnetID, key.nodeName, key.ipAddr})
+			delete(ipam.possibleLeakedIPCache, key)
+		}
+	}
+	ipam.lock.Unlock()
+
+	// let's cleanup leaked ips
+	for _, tuple := range leakedIPs {
+		err := ipam.batchDelIP(ctx, &bbc.BatchDelIpArgs{
+			InstanceId: tuple.instanceID,
+			PrivateIps: []string{tuple.ipAddr},
+		})
+
+		if err != nil {
+			log.Errorf(ctx, "gc: failed to delete private IP %v on %v: %v", tuple.ipAddr, tuple.nodeName, err)
+			if !cloud.IsErrorBBCENIPrivateIPNotFound(err) {
+				log.Errorf(ctx, "gc: stop delete private IP %v on %v, try next round", tuple.ipAddr, tuple.nodeName)
+				continue
+			}
+		} else {
+			log.Infof(ctx, "gc: delete leaked private IP %v on %v successfully", tuple.ipAddr, tuple.nodeName)
+		}
+
+		// delete ip from datastore
+		err = ipam.datastore.ReleasePodPrivateIP(tuple.nodeName, tuple.subnetID, tuple.ipAddr)
+		if err != nil {
+			log.Errorf(ctx, "gc: error releasing private IP %v on node %v from datastore: %v", tuple.ipAddr, tuple.nodeName, err)
+		}
+		err = ipam.datastore.DeletePrivateIPFromStore(tuple.nodeName, tuple.subnetID, tuple.ipAddr)
+		if err != nil {
+			log.Errorf(ctx, "gc: error deleting private IP %v on node %v from datastore: %v", tuple.ipAddr, tuple.nodeName, err)
+		}
+
+		ipam.removeIPFromCache(tuple.ipAddr, false)
+	}
 }
 
 func (ipam *IPAM) gcDeletedNode(ctx context.Context) error {
@@ -601,7 +840,9 @@ func (ipam *IPAM) gcDeletedNode(ctx context.Context) error {
 				}
 
 				// clean up node eni map
+				ipam.lock.Lock()
 				delete(ipam.nodeENIMap, node)
+				ipam.lock.Unlock()
 
 				continue
 			}
@@ -650,6 +891,7 @@ func (ipam *IPAM) increasePool(
 	var err error
 	var errs []error
 
+	t := time.Now()
 	for _, sbn := range subnets {
 		batchAddResult, err = ipam.tryBatchAddIP(ctx, node, instanceID, sbn.subnetID, pod, ipam.backoffCap(len(subnets)))
 		if err == nil {
@@ -659,6 +901,7 @@ func (ipam *IPAM) increasePool(
 		errs = append(errs, err)
 		log.Errorf(ctx, "batch add private ip(s) for %v in subnet %s failed: %v, try next subnet...", node, sbn.subnetID, err)
 	}
+	log.Infof(ctx, "tryBatchAddIP elapsed %v", time.Since(t))
 
 	// none of the subnets succeeded
 	if batchAddResult == nil {
@@ -667,7 +910,7 @@ func (ipam *IPAM) increasePool(
 		return err
 	}
 
-	// finally add ip to store
+	// add ip to store finally
 	for _, ip := range batchAddResult.PrivateIps {
 		err = ipam.datastore.AddPrivateIPToStore(node, batchAddResultSubnet, ip, false)
 		if err != nil {
@@ -681,6 +924,10 @@ func (ipam *IPAM) increasePool(
 }
 
 func (ipam *IPAM) batchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
+	t := time.Now()
+	defer func(t time.Time) {
+		log.Infof(ctx, "batchAddIPCrossSubnet with rate limit elapsed %v", time.Since(t))
+	}(t)
 	ipam.bucket.Wait(1)
 	return ipam.cloud.BBCBatchAddIPCrossSubnet(ctx, args)
 }
@@ -838,11 +1085,13 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 		return goerrors.New(msg)
 	}
 
+	ipam.lock.Lock()
 	// if node was moved out and rejoined in, should cleanup previous backoff cache
 	delete(ipam.addIPBackoffCache, instanceID)
-
 	// build node eni map
 	ipam.nodeENIMap[node.Name] = resp.Id
+	ipam.lock.Unlock()
+
 	log.Infof(ctx, "eni id of node %v is: %v", node.Name, resp.Id)
 
 	// add node to store
@@ -905,10 +1154,61 @@ func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
 	return nil
 }
 
-func (ipam *IPAM) removeIPFromCache(ipAddr string) {
-	ipam.lock.Lock()
+func (ipam *IPAM) buildAllocatedNodeCache(ctx context.Context) {
+	var (
+		wg sync.WaitGroup
+		ch = make(chan struct{}, 10)
+	)
+
+	bbcNodeSelector, _ := bbcNodeListerSelector()
+	nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(bbcNodeSelector)
+	if err != nil {
+		log.Errorf(ctx, "failed to list bbc nodes: %v", err)
+		return
+	}
+
+	for _, node := range nodes {
+		ch <- struct{}{}
+		wg.Add(1)
+
+		go func(node *v1.Node) {
+			defer func() {
+				wg.Done()
+				<-ch
+			}()
+
+			ctx := log.NewContext()
+			instanceID, err := util.GetInstanceIDFromNode(node)
+			if err != nil {
+				log.Errorf(ctx, "failed to get instance id of node %v: %v", node.Name, err)
+				return
+			}
+			err = ipam.rebuildNodeDataStoreCache(ctx, node, instanceID)
+			if err != nil {
+				log.Errorf(ctx, "rebuild cache for node %v error: %v", node.Name, err)
+				return
+			}
+			log.Infof(ctx, "rebuild cache for node %v successfully", node.Name)
+
+		}(node)
+	}
+
+	wg.Wait()
+}
+
+func (ipam *IPAM) removeIPFromCache(ipAddr string, lockless bool) {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
 	delete(ipam.allocated, ipAddr)
-	ipam.lock.Unlock()
+}
+
+func (ipam *IPAM) removeIPFromLeakedCache(intanceID, subnetID, node, ipAddr string) {
+	ipam.lock.Lock()
+	defer ipam.lock.Unlock()
+
+	delete(ipam.possibleLeakedIPCache, privateIPAddrKey{intanceID, subnetID, node, ipAddr})
 }
 
 func (ipam *IPAM) createSubnetCRs(ctx context.Context, candidateSubnets []string) error {
@@ -961,6 +1261,14 @@ func GetPodSpecificSubnetsFromAnnotation(pod *v1.Pod) []string {
 func wepListerSelector() (labels.Selector, error) {
 	// for wep owned by bbc, use selector "cce.io/instance-type=bbc"
 	requirement, err := labels.NewRequirement(ipamgeneric.WepLabelInstanceTypeKey, selection.Equals, []string{string(metadata.InstanceTypeExBBC)})
+	if err != nil {
+		return nil, err
+	}
+	return labels.NewSelector().Add(*requirement), nil
+}
+
+func bbcNodeListerSelector() (labels.Selector, error) {
+	requirement, err := labels.NewRequirement(v1.LabelInstanceType, selection.In, []string{"BBC"})
 	if err != nil {
 		return nil, err
 	}

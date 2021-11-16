@@ -119,7 +119,7 @@ func New(
 	return c, nil
 }
 
-func (c *Client) ListENIs(ctx context.Context, vpcID string) ([]eni.Eni, error) {
+func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
 
 	isTruncated := true
@@ -129,8 +129,10 @@ func (c *Client) ListENIs(ctx context.Context, vpcID string) ([]eni.Eni, error) 
 		t := time.Now()
 
 		listArgs := &eni.ListEniArgs{
-			VpcId:  vpcID,
-			Marker: nextMarker,
+			VpcId:      args.VpcId,
+			Name:       args.Name,
+			InstanceId: args.InstanceId,
+			Marker:     nextMarker,
 		}
 
 		res, err := c.eniClient.ListEni(listArgs)

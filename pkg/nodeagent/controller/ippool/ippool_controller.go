@@ -155,19 +155,6 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		}
 	}
 
-	if !isLocalNode {
-		// if node is deleted, then delete default pool
-		_, err := nodeLister.Get(nodeKey)
-		if kerrors.IsNotFound(err) {
-			// clean up pool of deleted node
-			poolName := utilpool.GetNodeIPPoolName(nodeKey)
-			log.Errorf(ctx, "node %v is deleted, delete default ippool %v", nodeKey, poolName)
-			if err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Delete(ctx, poolName, *metav1.NewDeleteOptions(0)); err != nil && !kerrors.IsNotFound(err) {
-				log.Errorf(ctx, "failed to delete ippool %v: %v", poolName, err)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -269,9 +256,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
 		if len(result.Spec.PodSubnets) == 0 {
-			msg := fmt.Sprintf("node %v in zone %v has no pod subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
-			log.Error(ctx, msg)
-			c.eventRecorder.Event(&v1.ObjectReference{Kind: "PodSubnet", Name: "PodSubnetEmpty"}, v1.EventTypeWarning, "PodSubnetEmpty", msg)
+			result.Spec.PodSubnets = append(result.Spec.PodSubnets, c.instance.SubnetId)
 		}
 
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, result, metav1.UpdateOptions{})

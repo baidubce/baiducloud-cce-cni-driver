@@ -38,9 +38,10 @@ import (
 )
 
 const (
-	ENIAttachTimeout     int = 50
-	ENIAttachMaxRetry    int = 10
-	ENIReadyTimeToAttach     = 5 * time.Second
+	ENIAttachTimeout        int = 50
+	ENIAttachMaxRetry       int = 10
+	ENIReadyTimeToAttach        = 5 * time.Second
+	CreateENIMaxConcurrency     = 10
 )
 
 // findSuitableENIs find suitable enis for pod
@@ -118,11 +119,17 @@ func listENIsBySubnet(enis []*enisdk.Eni, subnetID string) []*enisdk.Eni {
 }
 
 func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) error {
-	enis, err := ipam.cloud.ListENIs(ctx, ipam.vpcID)
+	listArgs := enisdk.ListEniArgs{
+		VpcId: ipam.vpcID,
+		Name:  fmt.Sprintf("%s/", ipam.clusterID),
+	}
+	enis, err := ipam.cloud.ListENIs(ctx, listArgs)
 	if err != nil {
 		log.Errorf(ctx, "failed to list enis when trying to increase eni: %v", err)
 		return err
 	}
+
+	var needNewENINodeCount = 0
 
 	// check each node
 	for _, node := range nodes {
@@ -155,9 +162,14 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 			return err
 		}
 
-		// TODO: there may be a potential concurrency issue
 		if needNewENI {
+			if needNewENINodeCount > CreateENIMaxConcurrency {
+				log.Infof(ctx, "ipam decided to add a new eni to node %v, but skipped due to max eni creation concurrency", node.Name)
+				continue
+			}
+
 			log.Infof(ctx, "ipam decided to add a new eni to node %v", node.Name)
+			needNewENINodeCount++
 			go func(n *v1.Node) {
 				err := ipam.createOneENI(ctx, n)
 				if err != nil {
@@ -377,7 +389,7 @@ func (ipam *IPAM) createOneENI(ctx context.Context, node *v1.Node) error {
 		}
 	case SubnetSelectionPolicyLeastENI:
 		// list all enis in vpc
-		enis, err := ipam.cloud.ListENIs(ctx, ipam.vpcID)
+		enis, err := ipam.cloud.ListENIs(ctx, enisdk.ListEniArgs{VpcId: ipam.vpcID, Name: fmt.Sprintf("%s/", ipam.clusterID)})
 		if err != nil {
 			log.Errorf(ctx, "failed to list enis in vpc %s: %v", ipam.vpcID, err)
 			return err

@@ -22,6 +22,7 @@ RUN apt-get install -y --no-install-recommends \
     telnet \
     netcat \
     ethtool \
+    procps \
     silversearcher-ag \
     less
 

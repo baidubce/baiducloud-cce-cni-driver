@@ -50,12 +50,19 @@ const (
 	SubnetSelectionPolicyMostFreeIP SubnetSelectionPolicy = "MostFreeIP"
 )
 
+type eniAndIPAddrKey struct {
+	eniID  string
+	ipAddr string
+}
+
 type IPAM struct {
 	lock sync.RWMutex
 	// key is node name, value is list of enis attached
 	eniCache map[string][]*enisdk.Eni
 	// privateIPNumCache stores allocated IP num of each eni. key is eni id.
 	privateIPNumCache map[string]int
+	// possibleLeakedIPCache stores possible leaked ip cache.
+	possibleLeakedIPCache map[eniAndIPAddrKey]time.Time
 	// addIPBackoffCache to slow down add ip API call if subnet or vm cannot allocate more ip
 	addIPBackoffCache map[string]*wait.Backoff
 	// ipam will rebuild cache if restarts, should not handle request from cni if cacheHasSynced is false

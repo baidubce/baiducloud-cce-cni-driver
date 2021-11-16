@@ -51,3 +51,22 @@ var (
 		[]string{"cluster", "ip_type", "rpc_api"},
 	)
 )
+
+// Debug Only
+var (
+	RPCPerPodLatency = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "cni_rpc_per_pod_latency",
+			Help: "cni rpc per pod latency",
+		},
+		[]string{"cluster", "ip_type", "rpc_api", "error", "namespace", "name", "container_id"},
+	)
+
+	RPCPerPodLockLatency = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "cni_rpc_per_pod_lock_latency",
+			Help: "cni rpc per pod lock latency",
+		},
+		[]string{"cluster", "namespace", "name", "container_id", "phase"},
+	)
+)

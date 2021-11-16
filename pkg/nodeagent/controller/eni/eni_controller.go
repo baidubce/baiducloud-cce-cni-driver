@@ -158,7 +158,11 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 	defer log.Infof(ctx, "reconcile enis for %v ends...", c.nodeName)
 
 	// list all enis in vpc
-	enis, err := c.cloudClient.ListENIs(ctx, c.vpcID)
+	listArgs := enisdk.ListEniArgs{
+		VpcId:      c.vpcID,
+		InstanceId: c.instanceID,
+	}
+	enis, err := c.cloudClient.ListENIs(ctx, listArgs)
 	if err != nil {
 		log.Errorf(ctx, "failed to list enis in vpc %s: %v", c.vpcID, err)
 		if cloud.IsErrorRateLimit(err) {
@@ -166,6 +170,8 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 		}
 		return err
 	}
+
+	// TODO: free leaked eni
 
 	// list available enis
 	availableENIs := c.listAvailableENIs(ctx, enis)

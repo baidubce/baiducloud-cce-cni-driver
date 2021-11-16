@@ -21,3 +21,5 @@ CCECNIImage: registry.baidubce.com/cce-plugin-dev/cce-cni:test
 EnableVPCRoute: true
 EnableStaticRoute: false
 
+# Prometheus Monitor
+IPAMScheduledToMaster: false

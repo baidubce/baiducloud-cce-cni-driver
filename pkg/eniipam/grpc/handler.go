@@ -32,7 +32,8 @@ import (
 )
 
 var (
-	maxWorkerNum int = 20
+	allocateIPConcurrencyLimit = 20
+	releaseIPConcurrencyLimit  = 30
 )
 
 type ENIIPAMGrpcServer struct {
@@ -41,16 +42,31 @@ type ENIIPAMGrpcServer struct {
 	port           int
 	allocWorkers   int
 	releaseWorkers int
+	debug          bool
 	mutex          sync.Mutex
 }
 
-func New(bccipam ipam.Interface, bbcipam ipam.Interface, port, maxWorkers int) *ENIIPAMGrpcServer {
-	maxWorkerNum = maxWorkers
+func New(
+	bccipam ipam.Interface,
+	bbcipam ipam.Interface,
+	port int,
+	allocLimit int,
+	releaseLimit int,
+	debug bool,
+) *ENIIPAMGrpcServer {
+	// set concurrency limit
+	if allocLimit > 0 {
+		allocateIPConcurrencyLimit = allocLimit
+	}
+	if releaseLimit > 0 {
+		releaseIPConcurrencyLimit = releaseLimit
+	}
 
 	return &ENIIPAMGrpcServer{
 		bccipamd: bccipam,
 		bbcipamd: bbcipam,
 		port:     port,
+		debug:    debug,
 	}
 }
 
@@ -87,31 +103,49 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 		rpcAPI = "AllocateIP"
 	)
 	var (
-		t   = time.Now()
-		err error
+		t        = time.Now()
+		err      error
+		rpcReply = &rpc.AllocateIPReply{
+			IPType: req.IPType,
+		}
 	)
+	var (
+		name        = req.K8SPodName
+		namespace   = req.K8SPodNamespace
+		containerID = req.K8SPodInfraContainerID
+	)
+
 	defer func(startTime time.Time) {
 		metric.RPCLatency.WithLabelValues(
 			metric.MetaInfo.ClusterID,
 			req.IPType.String(),
 			rpcAPI,
-			fmt.Sprint(err != nil),
+			fmt.Sprint(!rpcReply.IsSuccess),
 		).Observe(metric.MsSince(t))
 
-		if err != nil {
+		if cb.debug {
+			metric.RPCPerPodLatency.WithLabelValues(
+				metric.MetaInfo.ClusterID,
+				req.IPType.String(),
+				rpcAPI,
+				fmt.Sprint(!rpcReply.IsSuccess),
+				namespace, name, containerID,
+			).Set(metric.MsSince(t))
+		}
+
+		if !rpcReply.IsSuccess {
 			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 		}
 	}(t)
 
-	name := req.K8SPodName
-	namespace := req.K8SPodNamespace
-	containerID := req.K8SPodInfraContainerID
 	log.Infof(ctx, "====> allocate request for pod (%v %v) recv <====", namespace, name)
 	log.Infof(ctx, "[Request Body]: %v", req.String())
-
-	rpcReply := &rpc.AllocateIPReply{
-		IPType: req.IPType,
-	}
+	defer func() {
+		if data, err := json.Marshal(rpcReply); err == nil {
+			log.Infof(ctx, "alloc resp: %v", string(data))
+		}
+		log.Infof(ctx, "====> allocate response for pod (%v %v) sent <====", namespace, name)
+	}()
 
 	// get ipamd by request type
 	var ipamd ipam.Interface
@@ -126,7 +160,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 
 	// request comes in
 	cb.incWorker(true)
-	if cb.getWorker(true) > maxWorkerNum {
+	if cb.getWorker(true) > allocateIPConcurrencyLimit {
 		// request rejected
 		cb.decWorker(true)
 		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
@@ -144,13 +178,6 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 
 	// request completes
 	cb.decWorker(true)
-
-	defer func() {
-		if data, err := json.Marshal(wep); err == nil {
-			log.Infof(ctx, "alloc resp: %v", string(data))
-		}
-		log.Infof(ctx, "====> allocate response for pod (%v %v) sent <====", namespace, name)
-	}()
 
 	if err != nil {
 		rpcReply.IsSuccess = false
@@ -182,31 +209,39 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 		rpcAPI = "ReleaseIP"
 	)
 	var (
-		t   = time.Now()
-		err error
+		t        = time.Now()
+		err      error
+		rpcReply = &rpc.ReleaseIPReply{
+			IPType: req.IPType,
+		}
 	)
+	var (
+		name        = req.K8SPodName
+		namespace   = req.K8SPodNamespace
+		containerID = req.K8SPodInfraContainerID
+	)
+
 	defer func(startTime time.Time) {
 		metric.RPCLatency.WithLabelValues(
 			metric.MetaInfo.ClusterID,
 			req.IPType.String(),
 			rpcAPI,
-			fmt.Sprint(err != nil),
+			fmt.Sprint(!rpcReply.IsSuccess),
 		).Observe(metric.MsSince(t))
 
-		if err != nil {
+		if !rpcReply.IsSuccess {
 			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 		}
 	}(t)
 
-	name := req.K8SPodName
-	namespace := req.K8SPodNamespace
-	containerID := req.K8SPodInfraContainerID
 	log.Infof(ctx, "====> release request for pod (%v %v) recv <====", namespace, name)
 	log.Infof(ctx, "[Request Body]: %v", req.String())
-
-	rpcReply := &rpc.ReleaseIPReply{
-		IPType: req.IPType,
-	}
+	defer func() {
+		if data, err := json.Marshal(rpcReply); err == nil {
+			log.Infof(ctx, "release resp: %v", string(data))
+		}
+		log.Infof(ctx, "====> release response for pod (%v %v) sent <====", namespace, name)
+	}()
 
 	// get ipamd by request type
 	var ipamd ipam.Interface
@@ -221,7 +256,7 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 
 	// request comes in
 	cb.incWorker(false)
-	if cb.getWorker(false) > maxWorkerNum {
+	if cb.getWorker(false) > releaseIPConcurrencyLimit {
 		// request rejected
 		cb.decWorker(false)
 		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
@@ -238,13 +273,6 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 
 	// request completes
 	cb.decWorker(false)
-
-	defer func() {
-		if data, err := json.Marshal(wep); err == nil {
-			log.Infof(ctx, "release resp: %v", string(data))
-		}
-		log.Infof(ctx, "====> release response for pod (%v %v) sent <====", namespace, name)
-	}()
 
 	if err != nil {
 		rpcReply.IsSuccess = false

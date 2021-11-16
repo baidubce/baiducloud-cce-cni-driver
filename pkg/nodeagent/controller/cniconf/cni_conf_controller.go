@@ -22,11 +22,13 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+	"time"
 
 	uuid "github.com/satori/go.uuid"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 
@@ -45,6 +47,7 @@ const (
 	ipvlanRequiredKernelVersion = "4.9"
 	ipvlanKernelModuleName      = "ipvlan"
 	vethDefaultMTU              = 1500
+	forceRecreatePeriod         = 60 * time.Second
 )
 
 func New(
@@ -71,6 +74,14 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 	ctx := log.NewContext()
 
 	return c.syncCNIConfig(ctx, nodeKey)
+}
+
+func (c *Controller) ReconcileCNIConfig() {
+	wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
+		ctx := log.NewContext()
+		c.syncCNIConfig(ctx, c.nodeName)
+		return false, nil
+	})
 }
 
 func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {

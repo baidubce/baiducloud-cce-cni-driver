@@ -52,6 +52,9 @@ func RegisterPrometheusMetrics() {
 	prometheus.Register(RPCErrorCounter)
 	prometheus.Register(RPCRejectedCounter)
 
+	prometheus.Register(RPCPerPodLatency)
+	prometheus.Register(RPCPerPodLockLatency)
+
 	prometheus.Register(MultiEniMultiIPEniCount)
 	prometheus.Register(MultiEniMultiIPEniIPCount)
 

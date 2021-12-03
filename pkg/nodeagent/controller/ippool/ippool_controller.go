@@ -18,6 +18,7 @@ package ippool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -48,10 +49,6 @@ import (
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
-const (
-	DefaultPreAttachedENINum = 2
-)
-
 // Controller manipulates IPPool CRDs
 type Controller struct {
 	// Common
@@ -69,6 +66,7 @@ type Controller struct {
 	cloudClient         cloud.Interface
 	eniSubnetCandidates []string // cluster-level candidate subnets for eni
 	eniSecurityGroups   []string
+	preAttachedENINum   int
 	// Primary ENI Secondary IP
 	podSubnetCandidates []string // cluster-level candidate subnets for pod
 	// misc
@@ -85,6 +83,7 @@ func New(
 	instanceType metadata.InstanceTypeEx,
 	eniSubnetList []string,
 	securityGroupList []string,
+	preAttachedENINum int,
 	podSubnetList []string,
 ) *Controller {
 	ctx := log.NewContext()
@@ -102,13 +101,15 @@ func New(
 	}
 
 	c.eniSubnetCandidates = eniSubnetList
-	log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
-
 	c.eniSecurityGroups = securityGroupList
-	log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
-
 	c.podSubnetCandidates = podSubnetList
-	log.Infof(ctx, "cluster-level pod candidate subnets are: %v", c.podSubnetCandidates)
+	c.preAttachedENINum = preAttachedENINum
+
+	if !types.IsCCECNIModeBasedOnVPCRoute(cniMode) {
+		log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
+		log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
+		log.Infof(ctx, "cluster-level pod candidate subnets are: %v", c.podSubnetCandidates)
+	}
 
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
@@ -188,8 +189,20 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		result.Spec.ENI.AvailabilityZone = c.instance.ZoneName
 		result.Spec.ENI.VPCID = c.instance.VpcId
 		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.eniSubnetCandidates)
-		result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
 		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
+
+		if len(result.Spec.ENI.SecurityGroups) == 0 {
+			// respect user specified eni security group via configuration file,
+			if len(c.eniSecurityGroups) != 0 {
+				result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
+			} else {
+				ids, err := c.getInstanceSecurityGroupID(ctx)
+				if err != nil {
+					return err
+				}
+				result.Spec.ENI.SecurityGroups = ids
+			}
+		}
 
 		if len(result.Spec.ENI.Subnets) == 0 {
 			msg := fmt.Sprintf("node %v in zone %v has no eni subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
@@ -255,7 +268,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 		result.Spec.PodSubnets = c.findSameZoneSubnets(ctx, c.podSubnetCandidates)
 		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
-		if len(result.Spec.PodSubnets) == 0 {
+		if len(result.Spec.PodSubnets) == 0 && c.instance.SubnetId != "" {
 			result.Spec.PodSubnets = append(result.Spec.PodSubnets, c.instance.SubnetId)
 		}
 
@@ -405,6 +418,23 @@ func (c *Controller) findSameZoneSubnets(ctx context.Context, subnets []string) 
 	return filteredSubnets
 }
 
+func (c *Controller) getInstanceSecurityGroupID(ctx context.Context) ([]string, error) {
+	var ids []string
+
+	securityGroups, err := c.cloudClient.ListSecurityGroup(ctx, "", c.instanceID)
+	if err != nil {
+		msg := fmt.Sprintf("failed to list security groups of instance %v: %v", c.instanceID, err)
+		log.Error(ctx, msg)
+		return nil, errors.New(msg)
+	}
+
+	for _, s := range securityGroups {
+		ids = append(ids, s.Id)
+	}
+
+	return ids, nil
+}
+
 // patchENICapacityInfoToNode patches eni capacity info to node if not exists.
 // so user can reset these values.
 func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, maxIPPerENI int) error {
@@ -414,7 +444,7 @@ func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, 
 	}
 
 	// in accordance with 1c1g bcc
-	preAttachedENINum := mathutil.Min(DefaultPreAttachedENINum, maxENINum)
+	preAttachedENINum := mathutil.Min(c.preAttachedENINum, maxENINum)
 
 	if node.Annotations == nil {
 		node.Annotations = make(map[string]string)
@@ -435,7 +465,7 @@ func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, 
 	if _, ok := node.Annotations[utileni.NodeAnnotationWarmIPTarget]; !ok {
 		isCreated = false
 		// set default warm-ip-target
-		node.Annotations[utileni.NodeAnnotationWarmIPTarget] = strconv.Itoa(maxIPPerENI - 1)
+		node.Annotations[utileni.NodeAnnotationWarmIPTarget] = strconv.Itoa(maxIPPerENI / 2)
 	}
 
 	if _, ok := node.Annotations[utileni.NodeAnnotationPreAttachedENINum]; !ok {

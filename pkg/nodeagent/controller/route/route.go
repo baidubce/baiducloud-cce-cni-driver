@@ -285,8 +285,10 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 			}
 			// create target route
 			if _, err := rc.CloudClient.CreateRouteRule(ctx, createRouteArg); err != nil {
-				log.Errorf(ctx, "failed to create target route <%s %s -> %s>: %v", createRouteArg.SourceAddress, createRouteArg.DestinationAddress, createRouteArg.NexthopId, err)
-				return err
+				if !cloud.IsErrorRouteRuleRepeated(err) {
+					log.Errorf(ctx, "failed to create target route <%s %s -> %s>: %v", createRouteArg.SourceAddress, createRouteArg.DestinationAddress, createRouteArg.NexthopId, err)
+					return err
+				}
 			}
 
 			log.Infof(ctx, "create target route successfully: <%s %s -> %s>", createRouteArg.SourceAddress, createRouteArg.DestinationAddress, createRouteArg.NexthopId)

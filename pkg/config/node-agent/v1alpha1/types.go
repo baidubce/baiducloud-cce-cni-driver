@@ -95,6 +95,8 @@ type ENIControllerConfiguration struct {
 	ENISyncPeriod types.Duration `json:"eniSyncPeriod"`
 	// RouteTableOffset route policy offset, default 127
 	RouteTableOffset int `json:"routeTableOffset"`
+	// PreAttachedENINum num of pre attached eni on node,default 2
+	PreAttachedENINum int `json:"preAttachedENINum"`
 }
 
 type PodSubnetControllerConfiguration struct {

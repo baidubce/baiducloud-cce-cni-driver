@@ -98,8 +98,8 @@ func ENICreatedByCCE(eni *enisdk.Eni) bool {
 	if len(parts) != eniNamePartNum {
 		return false
 	}
-	// parts[0] is clusterId and parts[1] is instanceId
-	if !(strings.HasPrefix(parts[0], "c-") || strings.HasPrefix(parts[0], "cce-")) || !strings.HasPrefix(parts[1], "i-") {
+	// parts[1] is instanceId
+	if !strings.HasPrefix(parts[1], "i-") {
 		return false
 	}
 

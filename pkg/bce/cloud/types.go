@@ -42,6 +42,8 @@ type Interface interface {
 	DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error)
 	ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error)
 
+	ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error)
+
 	DescribeInstance(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error)
 
 	BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error)

@@ -201,6 +201,10 @@ func (fake *FakeBceCloud) ListSubnets(ctx context.Context, args *vpc.ListSubnetA
 	return nil, nil
 }
 
+func (fake *FakeBceCloud) ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error) {
+	return nil, nil
+}
+
 func (fake *FakeBceCloud) StatENI(ctx context.Context, eniID string) (*eni.Eni, error) {
 	return &eni.Eni{}, nil
 }

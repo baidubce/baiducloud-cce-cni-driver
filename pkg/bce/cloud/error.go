@@ -16,9 +16,10 @@
 package cloud
 
 import (
-	"github.com/baidubce/bce-sdk-go/bce"
 	"net/http"
 	"strings"
+
+	"github.com/baidubce/bce-sdk-go/bce"
 )
 
 type ErrorReason string
@@ -33,6 +34,7 @@ const (
 	ErrorReasonVmMemoryCanNotAttachMoreIpException ErrorReason = "VmMemoryCanNotAttachMoreIpException"
 	ErrorReasonBBCENIPrivateIPNotFound             ErrorReason = "BBCENIPrivateIPNotFound"
 	ErrorReasonBBCENIPrivateIPExceedLimit          ErrorReason = "BBCENIPrivateIPExceedLimit"
+	ErrorReasonRouteRuleRepeated                   ErrorReason = "RouteRuleRepeated"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -57,6 +59,8 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonBBCENIPrivateIPExceedLimit
 		case caseInsensitiveContains(errMsg, "PrivateIpInUseException"):
 			return ErrorReasonPrivateIPInUse
+		case caseInsensitiveContains(errMsg, "RouteRuleRepeated"):
+			return ErrorReasonRouteRuleRepeated
 		}
 	}
 	return ErrorReasonUnknown
@@ -93,6 +97,10 @@ func IsErrorBBCENIPrivateIPNotFound(err error) bool {
 
 func IsErrorBBCENIPrivateIPExceedLimit(err error) bool {
 	return ReasonForError(err) == ErrorReasonBBCENIPrivateIPExceedLimit
+}
+
+func IsErrorRouteRuleRepeated(err error) bool {
+	return ReasonForError(err) == ErrorReasonRouteRuleRepeated
 }
 
 func caseInsensitiveContains(s, substr string) bool {

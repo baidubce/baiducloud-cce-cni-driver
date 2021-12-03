@@ -48,6 +48,16 @@ func TestGetInstanceIDFromNode(t *testing.T) {
 			args: args{
 				node: &v1.Node{
 					Spec: v1.NodeSpec{
+						ProviderID: "i-xxxxx",
+					},
+				},
+			},
+			want: "i-xxxxx",
+		},
+		{
+			args: args{
+				node: &v1.Node{
+					Spec: v1.NodeSpec{
 						ProviderID: "",
 					},
 				},

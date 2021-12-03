@@ -272,6 +272,36 @@ func (c *Client) DescribeInstance(ctx context.Context, instanceID string) (*bcca
 	return &resp.Instance, nil
 }
 
+func (c *Client) ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error) {
+	var securityGroups []bccapi.SecurityGroupModel
+
+	isTruncated := true
+	nextMarker := ""
+
+	for isTruncated {
+		t := time.Now()
+
+		args := bccapi.ListSecurityGroupArgs{
+			Marker:     nextMarker,
+			InstanceId: instanceID,
+			VpcId:      vpcID,
+		}
+
+		res, err := c.bccClient.ListSecurityGroup(&args)
+		exportMetricAndLog(ctx, "ListSecurityGroup", t, err)
+		if err != nil {
+			return nil, err
+		}
+
+		securityGroups = append(securityGroups, res.SecurityGroups...)
+
+		nextMarker = res.NextMarker
+		isTruncated = res.IsTruncated
+	}
+
+	return securityGroups, nil
+}
+
 func (c *Client) BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
 	t := time.Now()
 	resp, err := c.bbcClient.GetInstanceDetail(instanceID)

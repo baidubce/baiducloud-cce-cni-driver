@@ -110,6 +110,8 @@ ServiceCIDR: # cluster service cidr
 CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
 ```
 
+For more details, check [values.yaml](build/yamls/cce-cni-driver/values.yaml).
+
 ## Running the tests
 
 ### Unit Test

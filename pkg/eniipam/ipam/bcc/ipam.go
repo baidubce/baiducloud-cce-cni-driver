@@ -290,7 +290,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 
 		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.ENIID).Dec()
 	}
-	if err != nil && !ipam.isErrorENIPrivateIPNotFound(err, wep) {
+	if err != nil && !(ipam.isErrorENIPrivateIPNotFound(err, wep) || cloud.IsErrorENINotFound(err)) {
 		if cloud.IsErrorRateLimit(err) {
 			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 		}
@@ -688,7 +688,7 @@ func (ipam *IPAM) buildENICache(ctx context.Context, nodes []*v1.Node, enis []en
 	}
 
 	for idx, eni := range enis {
-		if eni.Status != utileni.ENIStatusInuse || !utileni.ENICreatedByCCE(&eni) {
+		if eni.Status != utileni.ENIStatusInuse {
 			continue
 		}
 

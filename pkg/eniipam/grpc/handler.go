@@ -18,6 +18,7 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
@@ -34,6 +36,8 @@ import (
 var (
 	allocateIPConcurrencyLimit = 20
 	releaseIPConcurrencyLimit  = 30
+
+	errorMsgQPSExceedLimit = "QPS exceed limit, wait another try"
 )
 
 type ENIIPAMGrpcServer struct {
@@ -133,7 +137,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 			).Set(metric.MsSince(t))
 		}
 
-		if !rpcReply.IsSuccess {
+		if !rpcReply.IsSuccess && !isRateLimitErrorMessage(rpcReply.ErrMsg) {
 			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 		}
 	}(t)
@@ -166,7 +170,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 
 		rpcReply.IsSuccess = false
-		rpcReply.ErrMsg = "QPS exceed limit, wait another try"
+		rpcReply.ErrMsg = errorMsgQPSExceedLimit
 		return rpcReply, nil
 	}
 
@@ -229,7 +233,7 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 			fmt.Sprint(!rpcReply.IsSuccess),
 		).Observe(metric.MsSince(t))
 
-		if !rpcReply.IsSuccess {
+		if !rpcReply.IsSuccess && !isRateLimitErrorMessage(rpcReply.ErrMsg) {
 			metric.RPCErrorCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 		}
 	}(t)
@@ -262,7 +266,7 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 
 		rpcReply.IsSuccess = false
-		rpcReply.ErrMsg = "QPS exceed limit, wait another try"
+		rpcReply.ErrMsg = errorMsgQPSExceedLimit
 		return rpcReply, nil
 	}
 
@@ -343,4 +347,9 @@ func (cb *ENIIPAMGrpcServer) getWorker(isAlloc bool) int {
 		return cb.allocWorkers
 	}
 	return cb.releaseWorkers
+}
+
+// isRateLimitErrorMessage checks error message from cni and iaas openapi perspective
+func isRateLimitErrorMessage(msg string) bool {
+	return msg == errorMsgQPSExceedLimit || cloud.IsErrorRateLimit(errors.New(msg))
 }

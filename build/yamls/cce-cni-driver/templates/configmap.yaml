@@ -15,6 +15,10 @@ data:
       region: {{ .Values.Region }}
       clusterID: {{ .Values.ClusterID }}
       vpcID: {{ .Values.VPCID }}
+      {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+      accessKeyID: {{ .Values.AccessKeyID }}
+      secretAccessKey: {{ .Values.SecretAccessKey }}
+      {{- end }}
       containerNetworkCIDRIPv4: {{ .Values.ContainerNetworkCIDRIPv4 }}
       containerNetworkCIDRIPv6: {{ .Values.ContainerNetworkCIDRIPv6 }}
       routeController:
@@ -30,7 +34,7 @@ data:
           - {{ . }}
         {{- end }}
         routeTableOffset: 127
-        eniSyncPeriod: 30s
+        eniSyncPeriod: 180s
       podSubnetController:
         subnetList:
         {{- range .Values.PodSubnetList }}

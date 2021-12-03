@@ -20,12 +20,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/golang/mock/gomock"
-
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	mockipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
+	"github.com/golang/mock/gomock"
 )
 
 func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
@@ -178,6 +177,46 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ReleaseIP() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_isRateLimitErrorMessage(t *testing.T) {
+	type args struct {
+		msg string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "ipam rpc reject",
+			args: args{
+				msg: errorMsgQPSExceedLimit,
+			},
+			want: true,
+		},
+		{
+			name: "ipam rpc reject",
+			args: args{
+				msg: "Code: RateLimit; Message: There are too many connections. The host is bcc.bj.baidubce.com; RequestId: 8a2d7eca-7c3d-4ee3-b835-66366085759b",
+			},
+			want: true,
+		},
+		{
+			name: "no eni",
+			args: args{
+				msg: "no eni binded to node xxx",
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRateLimitErrorMessage(tt.args.msg); got != tt.want {
+				t.Errorf("isRateLimitErrorMessage() = %v, want %v", got, tt.want)
 			}
 		})
 	}

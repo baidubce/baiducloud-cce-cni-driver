@@ -284,6 +284,10 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 		o.config.CCE.ENIController.RouteTableOffset = 127
 	}
 
+	if o.config.CCE.ENIController.PreAttachedENINum <= 0 {
+		o.config.CCE.ENIController.PreAttachedENINum = 2
+	}
+
 	return nil
 }
 

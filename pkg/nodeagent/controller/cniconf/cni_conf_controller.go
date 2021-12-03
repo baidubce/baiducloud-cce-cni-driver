@@ -205,6 +205,16 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 			}
 			configData.InstanceType = string(insType)
 		}
+
+		if configData.InstanceType == string(metadata.InstanceTypeExBCC) {
+			if c.cniMode == types.CCEModeBBCSecondaryIPIPVlan {
+				c.cniMode = types.CCEModeSecondaryIPIPVlan
+			}
+
+			if c.cniMode == types.CCEModeBBCSecondaryIPVeth {
+				c.cniMode = types.CCEModeSecondaryIPVeth
+			}
+		}
 	}
 
 	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) {

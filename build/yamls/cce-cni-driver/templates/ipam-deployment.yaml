@@ -67,6 +67,10 @@ spec:
             - --cluster-id={{ .Values.ClusterID }}
             - --region={{ .Values.Region }}
             - --vpc-id={{ .Values.VPCID }}
+            {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+            - --access-key={{ .Values.AccessKeyID }}
+            - --secret-access-key={{ .Values.SecretAccessKey }}
+            {{- end }}
             - --eni-sync-period=20s
             - --gc-period=120s
             - --port=9997

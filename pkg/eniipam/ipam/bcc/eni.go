@@ -41,7 +41,7 @@ const (
 	ENIAttachTimeout        int = 50
 	ENIAttachMaxRetry       int = 10
 	ENIReadyTimeToAttach        = 5 * time.Second
-	CreateENIMaxConcurrency     = 10
+	CreateENIMaxConcurrency     = 15
 )
 
 // findSuitableENIs find suitable enis for pod
@@ -143,6 +143,8 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 			continue
 		}
 
+		ipam.gcLeakedENI(ctx, node, enis)
+
 		// after creating eni, wait 5s to attach, the status will be available or attaching
 		// check node has available/attaching eni, prevent duplicate creation
 		if ipam.nodeHasNewlyCreatedENI(ctx, node, enis) {
@@ -180,6 +182,33 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 
 	}
 	return nil
+}
+
+func (ipam *IPAM) gcLeakedENI(ctx context.Context, node *v1.Node, enis []enisdk.Eni) {
+	instanceID, _ := util.GetInstanceIDFromNode(node)
+
+	for _, eni := range enis {
+		// if eni not owned by node, just ignore
+		if !utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
+			continue
+		}
+
+		ctime, err := time.Parse(time.RFC3339, eni.CreatedTime)
+		if err != nil {
+			log.Errorf(ctx, "failed to parse eni %v created time", eni.EniId)
+			continue
+		}
+
+		// available more than some time is seen as leaked
+		if eni.Status == utileni.ENIStatusAvailable && time.Since(ctime) > 3*time.Minute {
+			err = ipam.cloud.DeleteENI(ctx, eni.EniId)
+			if err != nil {
+				log.Errorf(ctx, "failed to delete leaked eni %v on node %v", eni.EniId, node.Name)
+			} else {
+				log.Infof(ctx, "delete leaked eni %v on node %v successfully", eni.EniId, node.Name)
+			}
+		}
+	}
 }
 
 func (ipam *IPAM) nodeHasNewlyCreatedENI(ctx context.Context, node *v1.Node, enis []enisdk.Eni) bool {

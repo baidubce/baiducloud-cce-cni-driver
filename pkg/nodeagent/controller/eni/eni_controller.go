@@ -37,13 +37,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
-	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
+	cidrutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/cidr"
 	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/nlmonitor"
 	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
 	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 )
@@ -117,7 +118,17 @@ func New(
 }
 
 func (c *Controller) ReconcileENIs() {
-	err := wait.PollImmediateInfinite(wait.Jitter(c.eniSyncPeriod, 0.5), func() (bool, error) {
+	ctx := log.NewContext()
+
+	lm, err := nlmonitor.NewLinkMonitor(c)
+	if err != nil {
+		log.Errorf(ctx, "new link monitor error: %v", err)
+	} else {
+		defer lm.Close()
+		log.Info(ctx, "new link monitor successfully")
+	}
+
+	err = wait.PollImmediateInfinite(wait.Jitter(c.eniSyncPeriod, 0.5), func() (bool, error) {
 		ctx := log.NewContext()
 
 		err := c.reconcileENIs(ctx)
@@ -157,33 +168,35 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 	log.Infof(ctx, "reconcile enis for %v begins...", c.nodeName)
 	defer log.Infof(ctx, "reconcile enis for %v ends...", c.nodeName)
 
-	// list all enis in vpc
-	listArgs := enisdk.ListEniArgs{
-		VpcId:      c.vpcID,
-		InstanceId: c.instanceID,
-	}
-	enis, err := c.cloudClient.ListENIs(ctx, listArgs)
-	if err != nil {
-		log.Errorf(ctx, "failed to list enis in vpc %s: %v", c.vpcID, err)
-		if cloud.IsErrorRateLimit(err) {
-			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+	// list enis attached to node
+
+	var (
+		listENIArgs = enisdk.ListEniArgs{
+			VpcId:      c.vpcID,
+			InstanceId: c.instanceID,
 		}
-		return err
-	}
 
-	// TODO: free leaked eni
+		listENIBackoff = wait.Backoff{
+			Steps:    5,
+			Duration: 2 * time.Second,
+			Factor:   4.5,
+			Jitter:   0.2,
+		}
 
-	// list available enis
-	availableENIs := c.listAvailableENIs(ctx, enis)
-	if len(availableENIs) != 0 {
-		log.Infof(ctx, "node %v has %d available enis", c.nodeName, len(availableENIs))
-		// sleep to wait ipam attaching eni
-		time.Sleep(bccipam.ENIReadyTimeToAttach * 2)
-		// free leaked available enis after sleep
-		err = c.freeLeakedAvailableENIs(ctx, availableENIs)
+		enis = make([]enisdk.Eni, 0)
+	)
+
+	err := wait.ExponentialBackoff(listENIBackoff, func() (bool, error) {
+		var err error
+		enis, err = c.cloudClient.ListENIs(ctx, listENIArgs)
 		if err != nil {
-			log.Errorf(ctx, "failed to free all available enis: %v", err)
+			log.Errorf(ctx, "failed to list enis attached to instance %s: %v", c.instanceID, err)
+			return false, nil
 		}
+		return true, nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// set eni link up
@@ -212,35 +225,10 @@ func (c *Controller) listAvailableENIs(ctx context.Context, enis []enisdk.Eni) [
 	return reusableENIs
 }
 
-// freeLeakedAvailableENIs frees ENIs that are available and owned by this node
-func (c *Controller) freeLeakedAvailableENIs(ctx context.Context, enis []enisdk.Eni) error {
-	var errs []error
-	for _, eni := range enis {
-		// check eni status before delete
-		resp, err := c.cloudClient.StatENI(ctx, eni.EniId)
-		if err != nil {
-			log.Errorf(ctx, "failed to stat eni %v: %v", eni.EniId, err)
-			continue
-		}
-		if resp.Status != utileni.ENIStatusAvailable {
-			continue
-		}
-
-		err = c.cloudClient.DeleteENI(ctx, eni.EniId)
-		if err != nil {
-			log.Errorf(ctx, "failed to delete eni %v: %v", eni.EniId, err)
-			errs = append(errs, err)
-		} else {
-			log.Infof(ctx, "free leaked eni %v successfully", eni.EniId)
-		}
-	}
-
-	return utilerrors.NewAggregate(errs)
-
-}
-
 func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) error {
-	eniStatus := make(map[string]v1alpha1.ENI)
+	var (
+		eniStatus = make(map[string]v1alpha1.ENI)
+	)
 
 	for _, eni := range enis {
 		if !utileni.ENIOwnedByNode(&eni, c.clusterID, c.instanceID) {
@@ -335,7 +323,7 @@ func (c *Controller) setLinkUP(ctx context.Context, intf netlink.Link) error {
 }
 
 func (c *Controller) delScopeLinkRoute(ctx context.Context, intf netlink.Link) error {
-	addrs, err := netlink.AddrList(intf, netlink.FAMILY_V4)
+	addrs, err := c.netlink.AddrList(intf, netlink.FAMILY_V4)
 	if err != nil {
 		return err
 	}
@@ -345,7 +333,7 @@ func (c *Controller) delScopeLinkRoute(ctx context.Context, intf netlink.Link) e
 			IP:   addr.IP.Mask(addr.Mask),
 			Mask: addr.Mask,
 		}
-		err = netlink.RouteDel(&netlink.Route{
+		err = c.netlink.RouteDel(&netlink.Route{
 			Dst:       &dst,
 			Scope:     netlink.SCOPE_LINK,
 			LinkIndex: intf.Attrs().Index,
@@ -412,7 +400,7 @@ func (c *Controller) addFromENIRule(ctx context.Context, eni *enisdk.Eni, intf n
 	}
 
 	var gateway net.IP
-	defautRt, err := c.findLinkDefaultRoute(ctx, intf)
+	defaultRt, err := c.findLinkDefaultRoute(ctx, intf)
 	if err != nil {
 		log.Errorf(ctx, "failed to get gateway of eni %v from link default route: %v", eni.EniId, err)
 		log.Infof(ctx, "fall back to get gateway of eni %v from meta-data", eni.EniId)
@@ -424,28 +412,42 @@ func (c *Controller) addFromENIRule(ctx context.Context, eni *enisdk.Eni, intf n
 		}
 		gateway = gw
 	} else {
-		gateway = defautRt.Gw
+		gateway = defaultRt.Gw
 	}
 
 	log.Infof(ctx, "eni %v with primary IP %v has gateway: %v", eni.EniId, primaryIP, gateway)
-	_, dstNet, _ := net.ParseCIDR("0.0.0.0/0")
-	// ip route add default via {eniGW} dev ethX table {rtTable} onlink
-	rt := &netlink.Route{
-		LinkIndex: intf.Attrs().Index,
-		Dst:       dstNet,
-		Table:     rtTable,
-		Gw:        gateway,
-	}
-	rt.SetFlag(netlink.FLAG_ONLINK)
 
-	err = c.netlink.RouteReplace(rt)
-	if err != nil {
-		msg := fmt.Sprintf("failed to replace default route %+v in table %v: %v", *rt, rtTable, err)
-		log.Error(ctx, msg)
-		return errors.New(msg)
+	natgreLink, useBigNat := c.bigNatLinkExists(ctx)
+	if useBigNat {
+		log.Infof(ctx, "detect bignat used...")
+		c.addBigNatRoutes(ctx, natgreLink, intf, gateway, rtTable)
+	} else {
+		// ip route replace default via {eniGW} dev ethX table {rtTable} onlink
+		rt, err := c.replaceRoute(cidrutil.IPv4ZeroCIDR, gateway, intf, rtTable, true)
+		if err != nil {
+			msg := fmt.Sprintf("failed to replace default route %+v in table %v: %v", *rt, rtTable, err)
+			log.Error(ctx, msg)
+			return errors.New(msg)
+		}
 	}
 
 	return nil
+}
+
+func (c *Controller) replaceRoute(dst *net.IPNet, gw net.IP, dev netlink.Link, table int, onlink bool) (*netlink.Route, error) {
+	rt := &netlink.Route{
+		LinkIndex: dev.Attrs().Index,
+		Dst:       dst,
+		Table:     table,
+		Gw:        gw,
+	}
+	if onlink {
+		rt.SetFlag(netlink.FLAG_ONLINK)
+	} else {
+		rt.Scope = netlink.SCOPE_LINK
+	}
+
+	return rt, c.netlink.RouteReplace(rt)
 }
 
 // addPrimaryIP add eni primary IP to
@@ -567,3 +569,42 @@ func getInterfaceIndex(intf netlink.Link) (int, error) {
 	}
 	return int(index), nil
 }
+
+func (c *Controller) HandleNewlink(link netlink.Link) {
+	ctx := log.NewContext()
+
+	_, err := getInterfaceIndex(link)
+	if err != nil {
+		return
+	}
+
+	if link.Type() != "device" {
+		return
+	}
+
+	// use link name and link type to filter out eni link
+	log.Infof(ctx, "netlink monitor detected eni link %v added", link.Attrs().Name)
+	err = c.reconcileENIs(ctx)
+	if err != nil {
+		log.Errorf(ctx, "error reconciling enis: %v", err)
+	}
+
+	if err == nil {
+		patchErr := k8sutil.UpdateNetworkingCondition(
+			ctx,
+			c.kubeClient,
+			c.nodeName,
+			true,
+			"AllENIReady",
+			"NotAllENIReady",
+			"CCE ENI Controller reconciles ENI",
+			"CCE ENI Controller failed to reconcile ENI",
+		)
+
+		if patchErr != nil {
+			log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
+		}
+	}
+}
+
+func (c *Controller) HandleDellink(link netlink.Link) {}

@@ -105,6 +105,7 @@ ServiceCIDR: # cluster service cidr
 CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
 ```
 
+更多的信息请查阅 [values.yaml](build/yamls/cce-cni-driver/values.yaml)。
 
 ## 测试
 

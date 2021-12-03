@@ -188,6 +188,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.options.instanceType,
 		s.options.config.CCE.ENIController.ENISubnetList,
 		s.options.config.CCE.ENIController.SecurityGroupList,
+		s.options.config.CCE.ENIController.PreAttachedENINum,
 		s.options.config.CCE.PodSubnetController.SubnetList,
 	)
 	nodeWatcher.RegisterEventHandler(ippoolCtrl)

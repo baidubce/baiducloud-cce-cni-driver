@@ -44,6 +44,9 @@ var (
 		// VPC-CNI BBC
 		types.CCEModeBBCSecondaryIPVeth:   CCETemplateFileBasePath + "cce-cni-bbc-secondary-ip-veth.tmpl",
 		types.CCEModeBBCSecondaryIPIPVlan: CCETemplateFileBasePath + "cce-cni-bbc-secondary-ip-ipvlan.tmpl",
+		// HostLocal
+		types.CCEModeHostLocalSecondaryIPVeth:   CCETemplateFileBasePath + "cce-cni-host-local-secondary-ip-veth.tmpl",
+		types.CCEModeHostLocalSecondaryIPIPVlan: CCETemplateFileBasePath + "cce-cni-host-local-secondary-ip-ipvlan.tmpl",
 	}
 )
 
@@ -72,5 +75,16 @@ type CNIConfigData struct {
 	LocalDNSAddress string
 	InstanceType    string
 
+	// Subnet is node PodCIDR for vpc route mode
 	Subnet string
+
+	// HostLocalRange is host-local plugin RangeSet
+	HostLocalRangeSet []HostLocalRange
+}
+
+type HostLocalRange struct {
+	RangeStart string
+	RangeEnd   string
+	Subnet     string
+	Gateway    string
 }

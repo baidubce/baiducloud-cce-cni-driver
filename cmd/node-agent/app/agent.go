@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"time"
 
+	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
@@ -79,6 +81,13 @@ func NewAgentCommand() *cobra.Command {
 }
 
 func newNodeAgent(o *Options) (*nodeAgent, error) {
+
+	var (
+		kubeClient  kubernetes.Interface
+		crdClient   clientset.Interface
+		cloudClient cloud.Interface
+	)
+
 	// k8s Client
 	kubeClient, err := utilk8s.NewKubeClient(o.config.Kubeconfig)
 	if err != nil {
@@ -92,21 +101,23 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cni-node-agent", Host: o.hostName})
 
 	// CRD Client
-	crdClient, err := utilk8s.NewCRDClient(o.config.Kubeconfig)
+	crdClient, err = utilk8s.NewCRDClient(o.config.Kubeconfig)
 	if err != nil {
 		return nil, err
 	}
 
-	cloudClient, err := cloud.New(
-		o.config.CCE.Region,
-		o.config.CCE.ClusterID,
-		o.config.CCE.AccessKeyID,
-		o.config.CCE.SecretAccessKey,
-		kubeClient,
-		false,
-	)
-	if err != nil {
-		return nil, err
+	if !types.IsCCEHostLocalSecondaryIPMode(o.config.CNIMode) {
+		cloudClient, err = cloud.New(
+			o.config.CCE.Region,
+			o.config.CCE.ClusterID,
+			o.config.CCE.AccessKeyID,
+			o.config.CCE.SecretAccessKey,
+			kubeClient,
+			false,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	s := &nodeAgent{
@@ -177,21 +188,23 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		go cniConfigCtrl.ReconcileCNIConfig()
 	}
 
-	// all modes needs ippool controller
-	ippoolCtrl := ippoolctrl.New(
-		s.kubeClient,
-		s.cloudClient,
-		s.crdClient,
-		s.options.config.CNIMode,
-		s.options.hostName,
-		s.options.instanceID,
-		s.options.instanceType,
-		s.options.config.CCE.ENIController.ENISubnetList,
-		s.options.config.CCE.ENIController.SecurityGroupList,
-		s.options.config.CCE.ENIController.PreAttachedENINum,
-		s.options.config.CCE.PodSubnetController.SubnetList,
-	)
-	nodeWatcher.RegisterEventHandler(ippoolCtrl)
+	if !types.IsCCEHostLocalSecondaryIPMode(cniMode) {
+		// all modes needs ippool controller except host-local
+		ippoolCtrl := ippoolctrl.New(
+			s.kubeClient,
+			s.cloudClient,
+			s.crdClient,
+			s.options.config.CNIMode,
+			s.options.hostName,
+			s.options.instanceID,
+			s.options.instanceType,
+			s.options.config.CCE.ENIController.ENISubnetList,
+			s.options.config.CCE.ENIController.SecurityGroupList,
+			s.options.config.CCE.ENIController.PreAttachedENINum,
+			s.options.config.CCE.PodSubnetController.SubnetList,
+		)
+		nodeWatcher.RegisterEventHandler(ippoolCtrl)
+	}
 
 	// all modes runs gc
 	gcCtrl := gc.New()

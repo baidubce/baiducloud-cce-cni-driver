@@ -126,3 +126,7 @@ spec:
                 path: cce-cni-bbc-secondary-ip-ipvlan.tmpl
               - key: cce-cni-bbc-secondary-ip-veth
                 path: cce-cni-bbc-secondary-ip-veth.tmpl
+              - key: cce-cni-host-local-secondary-ip-veth
+                path: cce-cni-host-local-secondary-ip-veth.tmpl
+              - key: cce-cni-host-local-secondary-ip-ipvlan
+                path: cce-cni-host-local-secondary-ip-ipvlan.tmpl

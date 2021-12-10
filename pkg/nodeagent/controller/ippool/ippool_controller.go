@@ -105,7 +105,7 @@ func New(
 	c.podSubnetCandidates = podSubnetList
 	c.preAttachedENINum = preAttachedENINum
 
-	if !types.IsCCECNIModeBasedOnVPCRoute(cniMode) {
+	if types.IsCCECNIModeBasedOnSecondaryIP(cniMode) {
 		log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
 		log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
 		log.Infof(ctx, "cluster-level pod candidate subnets are: %v", c.podSubnetCandidates)

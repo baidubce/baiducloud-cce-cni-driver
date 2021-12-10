@@ -1,11 +1,12 @@
-{{- $deployCNIModeList := list "vpc-route-veth" "vpc-route-ipvlan" "vpc-route-auto-detect" "kubenet" }}
+{{- $deployCNIModeList := list "vpc-secondary-ip-veth" "vpc-secondary-ip-ipvlan" "vpc-secondary-ip-auto-detect" "bbc-vpc-secondary-ip-veth" "bbc-vpc-secondary-ip-ipvlan" "bbc-vpc-secondary-ip-auto-detect" }}
+{{- if has .Values.CNIMode $deployCNIModeList }}
 kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: cce-eni-ipam
   namespace: kube-system
 spec:
-  replicas: {{- if has .Values.CNIMode $deployCNIModeList }} 0 {{- else }} 3 {{- end }}
+  replicas: 3
   strategy:
     type: Recreate
   selector:
@@ -116,3 +117,4 @@ spec:
   ports:
     - port: 80
       targetPort: 9997
+{{- end }}

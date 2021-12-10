@@ -234,3 +234,87 @@ data:
             }
         ]
     }
+  cce-cni-host-local-secondary-ip-veth: |
+    {
+        "name":"{{ printf "{{ .NetworkName }}" }}",
+        "cniVersion":"0.3.1",
+        "plugins":[
+            {
+                "type":"ptp",
+                "enableARPProxy":true,
+                "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
+                "ipam":{
+                    "type":"host-local",
+                    "ranges":[
+                        [
+                            {{ printf "{{ range $i, $r := .HostLocalRangeSet }}" }}
+                            {{ printf "{{- if $i }},{{- end }}" }}
+                            {
+                              {{ printf "\"subnet\":\"{{ .Subnet }}\"," }}
+                              {{ printf "\"rangeStart\":\"{{ .RangeStart }}\"," }}
+                              {{ printf "\"rangeEnd\":\"{{ .RangeEnd }}\"" }}
+                            }
+                            {{ printf "{{- end }}" }}
+                        ]
+                    ],
+                    "routes":[
+                        {
+                            "dst":"0.0.0.0/0"
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "portmap",
+                "capabilities": {"portMappings": true},
+                "externalSetMarkChain": "KUBE-MARK-MASQ"
+            }
+        ]
+    }
+  cce-cni-host-local-secondary-ip-ipvlan: |
+    {
+        "name":"{{ printf "{{ .NetworkName }}" }}",
+        "cniVersion": "0.3.1",
+        "plugins":[
+            {
+                "type": "ipvlan",
+                "master": "{{ printf "{{ .MasterInterface }}" }}",
+                "mode": "l3",
+                "omitGateway":true,
+                "ipam": {
+                    "type": "host-local",
+                    "ranges":[
+                        [
+                            {{ printf "{{ range $i, $r := .HostLocalRangeSet }}" }}
+                            {{ printf "{{- if $i }},{{- end }}" }}
+                            {
+                              {{ printf "\"subnet\":\"{{ .Subnet }}\"," }}
+                              {{ printf "\"rangeStart\":\"{{ .RangeStart }}\"," }}
+                              {{ printf "\"rangeEnd\":\"{{ .RangeEnd }}\"" }}
+                            }
+                            {{ printf "{{- end }}" }}
+                        ]
+                    ],
+                    "routes":[
+                        {
+                            "dst":"0.0.0.0/0"
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "unnumbered-ptp",
+                "hostInterface": "{{ printf "{{ .MasterInterface }}" }}",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
+                "containerInterface": "eth1",
+                "serviceCIDR": "{{ .Values.ServiceCIDR }}",
+                "localDNSAddr": "{{ printf "{{ .LocalDNSAddress }}" }}"
+            },
+            {
+                "type": "portmap",
+                "capabilities": {"portMappings": true},
+                "externalSetMarkChain": "KUBE-MARK-MASQ"
+            }
+        ]
+    }

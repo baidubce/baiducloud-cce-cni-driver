@@ -39,6 +39,11 @@ const (
 	CCEModeBBCSecondaryIPIPVlan ContainerNetworkMode = "bbc-vpc-secondary-ip-ipvlan"
 	// CCEModeBBCSecondaryIPAutoDetect using vpc secondary ip and auto detects veth or ipvlan due to kernel version (BBC only)
 	CCEModeBBCSecondaryIPAutoDetect ContainerNetworkMode = "bbc-vpc-secondary-ip-auto-detect"
+
+	// CCEModeHostLocalSecondaryIP using pre-allocated secondary ip on primary eni (BCC and BBC both ok)
+	CCEModeHostLocalSecondaryIPVeth       ContainerNetworkMode = "host-local-secondary-ip-veth"
+	CCEModeHostLocalSecondaryIPIPVlan     ContainerNetworkMode = "host-local-secondary-ip-ipvlan"
+	CCEModeHostLocalSecondaryIPAutoDetect ContainerNetworkMode = "host-local-secondary-ip-auto-detect"
 )
 
 func IsCCECNIModeBasedOnVPCRoute(mode ContainerNetworkMode) bool {
@@ -58,6 +63,8 @@ func IsCCECNIModeAutoDetect(mode ContainerNetworkMode) bool {
 	case CCEModeSecondaryIPAutoDetect:
 		return true
 	case CCEModeBBCSecondaryIPAutoDetect:
+		return true
+	case CCEModeHostLocalSecondaryIPAutoDetect:
 		return true
 	default:
 		return false
@@ -89,15 +96,22 @@ func IsCCECNIModeBasedOnSecondaryIP(mode ContainerNetworkMode) bool {
 		IsCCECNIModeBasedOnBBCSecondaryIP(mode)
 }
 
-func IsCCECNIMode(mode ContainerNetworkMode) bool {
-	return IsCCECNIModeBasedOnVPCRoute(mode) ||
-		IsCCECNIModeBasedOnBCCSecondaryIP(mode) ||
-		IsCCECNIModeBasedOnBBCSecondaryIP(mode)
-}
-
-func IsKubenetMode(mode ContainerNetworkMode) bool {
-	if mode == K8sNetworkModeKubenet {
+func IsCCEHostLocalSecondaryIPMode(mode ContainerNetworkMode) bool {
+	if mode == CCEModeHostLocalSecondaryIPVeth ||
+		mode == CCEModeHostLocalSecondaryIPIPVlan ||
+		mode == CCEModeHostLocalSecondaryIPAutoDetect {
 		return true
 	}
 	return false
+}
+
+func IsCCECNIMode(mode ContainerNetworkMode) bool {
+	return IsCCECNIModeBasedOnVPCRoute(mode) ||
+		IsCCECNIModeBasedOnBCCSecondaryIP(mode) ||
+		IsCCECNIModeBasedOnBBCSecondaryIP(mode) ||
+		IsCCEHostLocalSecondaryIPMode(mode)
+}
+
+func IsKubenetMode(mode ContainerNetworkMode) bool {
+	return mode == K8sNetworkModeKubenet
 }

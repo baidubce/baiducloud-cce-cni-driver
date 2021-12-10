@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"text/template"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	k8snet "k8s.io/utils/net"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
@@ -38,6 +40,7 @@ import (
 	v1alpha1network "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
+	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
@@ -77,7 +80,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 }
 
 func (c *Controller) ReconcileCNIConfig() {
-	wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
+	wait.PollImmediateInfinite(wait.Jitter(forceRecreatePeriod, 0.2), func() (bool, error) {
 		ctx := log.NewContext()
 		c.syncCNIConfig(ctx, c.nodeName)
 		return false, nil
@@ -174,6 +177,8 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 				c.cniMode = types.CCEModeBBCSecondaryIPIPVlan
 			case types.CCEModeRouteAutoDetect:
 				c.cniMode = types.CCEModeRouteIPVlan
+			case types.CCEModeHostLocalSecondaryIPAutoDetect:
+				c.cniMode = types.CCEModeHostLocalSecondaryIPIPVlan
 			}
 		} else {
 			switch c.cniMode {
@@ -183,6 +188,8 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 				c.cniMode = types.CCEModeBBCSecondaryIPVeth
 			case types.CCEModeRouteAutoDetect:
 				c.cniMode = types.CCEModeRouteVeth
+			case types.CCEModeHostLocalSecondaryIPAutoDetect:
+				c.cniMode = types.CCEModeHostLocalSecondaryIPVeth
 			}
 		}
 	}
@@ -230,6 +237,31 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 			configData.Subnet = ipPool.Spec.IPv6Ranges[0].CIDR
 		} else {
 			return nil, fmt.Errorf("ippool %s spec subnet is empty", ipPoolName)
+		}
+	}
+
+	if types.IsCCEHostLocalSecondaryIPMode(c.cniMode) {
+		subnetCIDR, addrs, err := c.getPrimaryENISecondaryIPs(ctx)
+		if err != nil {
+			log.Errorf(ctx, "failed to get secondary ips of primary eni: %v", err)
+			return nil, err
+		}
+
+		if len(addrs) == 0 {
+			log.Warningf(ctx, "node %v has no pre-allocated secondary ip, will set NetworkUnavailable true", c.nodeName)
+			c.patchNetworkUnavailable(ctx, false)
+		} else {
+			c.patchNetworkUnavailable(ctx, true)
+		}
+
+		configData.HostLocalRangeSet = make([]HostLocalRange, 0)
+
+		for _, ip := range addrs {
+			configData.HostLocalRangeSet = append(configData.HostLocalRangeSet, HostLocalRange{
+				Subnet:     subnetCIDR,
+				RangeStart: ip,
+				RangeEnd:   ip,
+			})
 		}
 	}
 
@@ -296,6 +328,79 @@ func (c *Controller) createOrUpdateCNIConfigFileContent(ctx context.Context, cni
 	}
 
 	return nil
+}
+
+func (c *Controller) getPrimaryENISecondaryIPs(ctx context.Context) (string, []string, error) {
+	// find primary eni
+	linkName, err := c.netutil.DetectDefaultRouteInterfaceName()
+	if err != nil {
+		log.Errorf(ctx, "failed to detect default route interface: %v", err)
+		return "", nil, err
+	}
+
+	link, err := c.netutil.InterfaceByName(linkName)
+	if err != nil {
+		log.Errorf(ctx, "failed to get interface by link name %v: %v", linkName, err)
+		return "", nil, err
+	}
+
+	// get primary ip and secondary ips
+	primaryIP, secondaryIPs, err := c.metaClient.GetLinkPrimaryAndSecondaryIPs(link.HardwareAddr.String())
+	if err != nil {
+		log.Errorf(ctx, "failed to get primary ip and secondary ips of link %v: %v", linkName, err)
+		return "", nil, err
+	}
+
+	var (
+		ipv4SecondaryIPs []string
+	)
+	for _, ip := range secondaryIPs {
+		if k8snet.IsIPv6String(ip) {
+			continue
+		}
+		if !k8snet.IsIPv4String(ip) {
+			return "", nil, fmt.Errorf("%v is not a valid IPv4 address", ip)
+		}
+
+		ipv4SecondaryIPs = append(ipv4SecondaryIPs, ip)
+	}
+
+	// get subnet cidr from metadata
+	mask, err := c.metaClient.GetLinkMask(link.HardwareAddr.String(), primaryIP)
+	if err != nil {
+		log.Errorf(ctx, "failed to get link %v mask: %v", linkName, err)
+		return "", nil, err
+	}
+
+	subnetCIDR := net.IPNet{
+		IP:   net.ParseIP(primaryIP),
+		Mask: net.IPMask(net.ParseIP(mask).To4()),
+	}
+
+	_, sbn, err := net.ParseCIDR(subnetCIDR.String())
+	if err != nil {
+		log.Errorf(ctx, "failed to parse CIDR %v: %v", subnetCIDR.String(), err)
+		return "", nil, err
+	}
+
+	return sbn.String(), ipv4SecondaryIPs, nil
+}
+
+func (c *Controller) patchNetworkUnavailable(ctx context.Context, ready bool) {
+	patchErr := k8sutil.UpdateNetworkingCondition(
+		ctx,
+		c.kubeClient,
+		c.nodeName,
+		ready,
+		"PreAllocatedIPFound",
+		"NoPreAllocatedIPFound",
+		"CCE CNI Found PreAllocated IP",
+		"CCE CNI Found No PreAllocated IP",
+	)
+
+	if patchErr != nil {
+		log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
+	}
 }
 
 func renderTemplate(ctx context.Context, tplContent string, dataObject *CNIConfigData) (string, error) {

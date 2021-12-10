@@ -218,7 +218,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			log.Errorf(ctx, "rollback: error deleting private IP %v for pod (%v %v): %v", ipResult, namespace, name, delErr)
 		} else {
 			ipam.decPrivateIPNumCache(ipAddedENI.EniId, false)
-			metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node.Name, ipAddedENI.SubnetId, ipAddedENI.EniId).Dec()
+			metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, ipAddedENI.SubnetId).Dec()
 		}
 		return nil, err
 	}
@@ -288,7 +288,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		ipam.decPrivateIPNumCache(wep.Spec.ENIID, true)
 		ipam.lock.Unlock()
 
-		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, wep.Spec.Node, wep.Spec.SubnetID, wep.Spec.ENIID).Dec()
+		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, wep.Spec.SubnetID).Dec()
 	}
 	if err != nil && !(ipam.isErrorENIPrivateIPNotFound(err, wep) || cloud.IsErrorENINotFound(err)) {
 		if cloud.IsErrorRateLimit(err) {
@@ -491,7 +491,7 @@ func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni,
 
 	log.Infof(ctx, "add private IP %v for pod (%v %v) successfully", ipResult, namespace, name)
 	ipam.incPrivateIPNumCache(eni.EniId, false)
-	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node.Name, eni.SubnetId, eni.EniId).Inc()
+	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eni.SubnetId).Inc()
 
 	return ipResult, nil
 }
@@ -543,7 +543,7 @@ func (ipam *IPAM) tryAllocateIP(ctx context.Context, eni *enisdk.Eni, pod *v1.Po
 	log.Infof(ctx, "assign private IP %v for pod (%v %v) successfully", ipResult, namespace, name)
 
 	ipam.incPrivateIPNumCache(eni.EniId, false)
-	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, pod.Spec.NodeName, eni.SubnetId, eni.EniId).Inc()
+	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eni.SubnetId).Inc()
 
 	return ipResult, nil
 }
@@ -637,14 +637,7 @@ func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
 		metric.MultiEniMultiIPEniIPCount.Reset()
 
 		// update ippool status and metrics of bcc nodes
-		for _, node := range nodes {
-			instanceID, err := util.GetInstanceIDFromNode(node)
-			if err != nil {
-				log.Warningf(ctx, "failed to get instance id of node %v, skip updating metrics", node.Name)
-				continue
-			}
-			ipam.updateENIMetrics(node, instanceID, enis)
-		}
+		ipam.updateENIMetrics(enis)
 
 		for _, node := range nodes {
 			instanceID, err := util.GetInstanceIDFromNode(node)
@@ -701,6 +694,27 @@ func (ipam *IPAM) buildENICache(ctx context.Context, nodes []*v1.Node, enis []en
 	}
 
 	return nil
+}
+
+func (ipam *IPAM) updateENIMetrics(enis []enisdk.Eni) {
+	for _, eni := range enis {
+		if utileni.ENIOwnedByCluster(&eni, metric.MetaInfo.ClusterID) {
+			metric.MultiEniMultiIPEniCount.WithLabelValues(
+				metric.MetaInfo.ClusterID,
+				metric.MetaInfo.VPCID,
+				eni.SubnetId,
+				eni.Status,
+			).Inc()
+		}
+
+		if eni.Status == utileni.ENIStatusInuse && utileni.ENIOwnedByCluster(&eni, metric.MetaInfo.ClusterID) {
+			metric.MultiEniMultiIPEniIPCount.WithLabelValues(
+				metric.MetaInfo.ClusterID,
+				eni.VpcId,
+				eni.SubnetId,
+			).Add((float64(len(eni.PrivateIpSet) - 1)))
+		}
+	}
 }
 
 func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, instanceID string, enis []enisdk.Eni) error {
@@ -764,38 +778,6 @@ func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, instanc
 	}
 
 	return nil
-}
-
-func (ipam *IPAM) updateENIMetrics(node *v1.Node, instanceID string, enis []enisdk.Eni) {
-
-	var (
-		clusterID = metric.MetaInfo.ClusterID
-		vpcID     = metric.MetaInfo.VPCID
-		nodeName  = node.Name
-	)
-
-	// iterate each eni
-	for _, eni := range enis {
-		if utileni.ENIOwnedByNode(&eni, clusterID, instanceID) {
-			metric.MultiEniMultiIPEniCount.WithLabelValues(
-				clusterID,
-				vpcID,
-				nodeName,
-				eni.SubnetId,
-				eni.Status,
-			).Inc()
-		}
-
-		if eni.Status == utileni.ENIStatusInuse && utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
-			metric.MultiEniMultiIPEniIPCount.WithLabelValues(
-				clusterID,
-				vpcID,
-				nodeName,
-				eni.SubnetId,
-				eni.EniId,
-			).Set(float64(len(eni.PrivateIpSet) - 1))
-		}
-	}
 }
 
 func (ipam *IPAM) gc(stopCh <-chan struct{}) error {

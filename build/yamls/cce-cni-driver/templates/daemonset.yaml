@@ -56,9 +56,11 @@ spec:
               mountPath: /etc/kubernetes
             - name: cce-cni-config-template
               mountPath: /etc/kubernetes/cni
+            {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
             - name: cce-plugin-token
               mountPath: /var/run/secrets/cce/cce-plugin-token
               readOnly: true
+            {{- end }}
           env:
             - name: CCE_GATEWAY_ENDPOINT
               value: "{{ .Values.CCEGatewayEndpoint }}"
@@ -95,10 +97,12 @@ spec:
           hostPath:
             path: /var/log/cce
             type: "DirectoryOrCreate"
+        {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
         - name: cce-plugin-token
           secret:
             defaultMode: 0400
             secretName: cce-plugin-token
+        {{- end }}
         - name: lib-modules
           hostPath:
             path: /lib/modules/

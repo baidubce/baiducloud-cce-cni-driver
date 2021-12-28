@@ -7,6 +7,7 @@ require (
 	github.com/baidubce/bce-sdk-go v0.9.93
 	github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins v0.8.7
+	github.com/evanphx/json-patch v4.9.0+incompatible
 	github.com/golang/mock v1.4.4
 	github.com/golang/protobuf v1.4.2
 	github.com/gorilla/mux v1.8.0

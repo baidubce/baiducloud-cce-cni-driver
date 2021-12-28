@@ -23,7 +23,9 @@ import (
 	"io/ioutil"
 	"time"
 
+	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/spf13/pflag"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -45,6 +47,8 @@ const (
 	defaultCNIConfigDir         = "/etc/cni/net.d/"
 	defaultInformerResyncPeriod = 20 * time.Second
 	defaultENISyncPeriod        = 30 * time.Second
+
+	CNIPatchConfigLabel = "cce-cni-patch-config"
 )
 
 // newOptions returns initialized Options
@@ -55,10 +59,17 @@ func newOptions() *Options {
 		metaClient: metadata.NewClient(),
 	}
 
+	ctx := log.NewContext()
+
 	// try best to create kubeclient
 	config, err := rest.InClusterConfig()
-	if err == nil {
-		opts.kubeClient, _ = kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Errorf(ctx, "newOptions: failed to get in cluster config: %v", err)
+	} else {
+		opts.kubeClient, err = kubernetes.NewForConfig(config)
+		if err != nil {
+			log.Errorf(ctx, "newOptions: failed to create kube client: %v", err)
+		}
 	}
 
 	return opts
@@ -67,13 +78,30 @@ func newOptions() *Options {
 // complete completes all the required options.
 func (o *Options) complete(ctx context.Context, args []string) error {
 	if len(o.configFile) > 0 {
-		c, err := o.loadConfigFromFile(ctx, o.configFile)
+		log.Infof(ctx, "agent using config file %v", o.configFile)
+		c, globalCfg, err := o.loadConfigFromFile(ctx, o.configFile)
 		if err != nil {
 			log.Errorf(ctx, "error parsing node agent config file %v: %v", o.configFile, err)
 			return err
 		}
 
-		log.Infof(ctx, "agent using config file %v", o.configFile)
+		needPatch, patchName, err := o.getPatchConfigName(ctx)
+		if err == nil && needPatch {
+			log.Infof(ctx, "node agent detected patch configmap: %v", patchName)
+			patch, err := o.getPatchConfigData(ctx, patchName)
+			if err == nil {
+				log.Infof(ctx, "node agent patch config: %v", string(patch))
+				c, err = o.mergeConfigAndUnmarshal(ctx, globalCfg, []byte(patch))
+				if err != nil {
+					log.Error(ctx, "merge json error: %v", err)
+					return err
+				}
+			} else {
+				log.Warningf(ctx, "fallback to default config due to error: %v", err)
+			}
+		} else {
+			log.Infof(ctx, "no patch config specified or error: %v", err)
+		}
 
 		o.config = c
 	}
@@ -114,25 +142,25 @@ func (o *Options) run(ctx context.Context) error {
 }
 
 // loadConfigFromFile loads the contents of file and decodes it as a NodeAgentConfiguration object.
-func (o *Options) loadConfigFromFile(ctx context.Context, file string) (*agentconfig.NodeAgentConfiguration, error) {
+func (o *Options) loadConfigFromFile(ctx context.Context, file string) (*agentconfig.NodeAgentConfiguration, []byte, error) {
 	data, err := ioutil.ReadFile(file)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	json, err := utilyaml.ToJSON(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	c := &agentconfig.NodeAgentConfiguration{}
 	if err := utiljson.Unmarshal(json, c); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	log.Infof(ctx, "node agent config: %v", string(json))
 
-	return c, nil
+	return c, json, nil
 }
 
 // addFlags adds flags to fs and binds them to options.
@@ -296,25 +324,89 @@ func (o *Options) validateCCE() error {
 	return nil
 }
 
+func (o *Options) getK8sNode(ctx context.Context) (*v1.Node, error) {
+	if o.node != nil {
+		return o.node, nil
+	}
+
+	if o.kubeClient == nil {
+		return nil, fmt.Errorf("kubeclient is nil")
+	}
+
+	nodeName, err := utilenv.GetNodeName(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	n, err := o.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	o.node = n
+
+	return n, nil
+}
+
 func (o *Options) getNodeInstanceID(ctx context.Context) (string, error) {
 	instanceID, err := o.metaClient.GetInstanceID()
 	if err == nil {
 		return instanceID, nil
 	}
 
-	if o.kubeClient != nil {
-		log.Warning(ctx, "metadata error, fallback to get instance id from node providerID")
-		nodeName, err := utilenv.GetNodeName(ctx)
+	log.Warning(ctx, "metadata error, fallback to get instance id from node providerID")
+	node, err := o.getK8sNode(ctx)
+	if err == nil {
+		instanceID, err = ipamutil.GetInstanceIDFromNode(node)
 		if err == nil {
-			n, err := o.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-			if err == nil {
-				instanceID, err = ipamutil.GetInstanceIDFromNode(n)
-				if err == nil {
-					return instanceID, nil
-				}
-			}
+			return instanceID, nil
 		}
 	}
 
 	return "", fmt.Errorf("failed to get instance id from metadata api: %v", err)
+}
+
+func (o *Options) getPatchConfigName(ctx context.Context) (bool, string, error) {
+	node, err := o.getK8sNode(ctx)
+	if err != nil {
+		return false, "", err
+	}
+
+	patchConfigName, patchConfigSpecified := node.Labels[CNIPatchConfigLabel]
+
+	return patchConfigSpecified, patchConfigName, nil
+}
+
+func (o *Options) getPatchConfigData(ctx context.Context, name string) (string, error) {
+	cm, err := o.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	patch := cm.Data["config"]
+	json, err := utilyaml.ToJSON([]byte(patch))
+
+	return string(json), err
+}
+
+func (o *Options) mergeConfigAndUnmarshal(ctx context.Context, config, patch []byte) (*agentconfig.NodeAgentConfiguration, error) {
+	var (
+		jsonBytes []byte = config
+		err       error
+	)
+
+	if len(patch) != 0 {
+		// MergePatch in RFC7386
+		jsonBytes, err = jsonpatch.MergePatch(config, patch)
+		if err != nil {
+			return nil, err
+		}
+		log.Infof(ctx, "node agent merged config result: %v", string(jsonBytes))
+	}
+
+	c := &agentconfig.NodeAgentConfiguration{}
+	if err := utiljson.Unmarshal(jsonBytes, c); err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }

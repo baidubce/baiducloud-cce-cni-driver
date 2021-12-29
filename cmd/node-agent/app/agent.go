@@ -115,7 +115,8 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 			kubeClient,
 			false,
 		)
-		if err != nil {
+		if err != nil &&
+			!(types.IsCCECNIModeBasedOnVPCRoute(o.config.CNIMode) && !o.config.CCE.RouteController.EnableVPCRoute) {
 			return nil, err
 		}
 	}

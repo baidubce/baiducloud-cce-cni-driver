@@ -69,7 +69,7 @@ cce:
 
 ![](./images/derived-config.png)
 
-> 注意：若在现有节点上设置或更换动态配置，需要对 agent 进行重启才能够应用
+> 注意：若在现有节点上设置或更换派生配置，需要对 agent 进行重启才能够应用
 
 ## 关于合并配置
 
@@ -110,14 +110,14 @@ CCE CNI 使用了 [json-patch](https://github.com/evanphx/json-patch) 库来对�
 
 ### 1 预分配辅助 IP 模式与 VPC 路由模式混合
 
-用户在参考 [CCE CNI 使用预分配辅助 IP 模式](deploy-with-pre-allocated-ip.md) 说明后，期望自建集群中部分节点可以混布使用 VPC 路由的模式。
+用户在参考 [CCE CNI 使用预分配辅助 IP 模式](deploy-with-pre-allocated-ip.md) 说明后，期望自建集群中部分节点可以混布使用 VPC 路由的模式，并且用户自己维护 VPC 实例路由。
 
 可参考如下操作步骤：
 
 1. 确保使用 VPC 路由模式的 node 中 `.spec.podCIDR` 字段非空且是期望的容器网段；
 2. 给使用 VPC 路由模式的 node 打上 label
 ```
-kubectl label node xxxx cce-cni-patch-config=route-mode
+kubectl label node <node> cce-cni-patch-config=route-mode
 ```
 3. 提交如下 yaml
 ```yaml
@@ -130,6 +130,7 @@ data:
   config: |
     cniMode: vpc-route-ipvlan
     cce:
-      accessKeyID: <ak>
-      secretAccessKey: <sk>
+      routeController:
+        enableVPCRoute: false
+        enableStaticRoute: false
 ```

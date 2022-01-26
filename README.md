@@ -70,7 +70,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
 
 # Route Controller
 EnableVPCRoute: true
@@ -93,7 +93,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
 ```
 
 #### BBC Secondary IP Mode
@@ -107,7 +107,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
 ```
 
 For more details, check [values.yaml](build/yamls/cce-cni-driver/values.yaml).

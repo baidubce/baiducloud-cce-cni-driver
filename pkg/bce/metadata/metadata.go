@@ -16,12 +16,16 @@
 package metadata
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 const (
@@ -36,6 +40,9 @@ var (
 	InstanceTypeExBBC     InstanceTypeEx = "bbc"
 	InstanceTypeExBCC     InstanceTypeEx = "bcc"
 	InstanceTypeExUnknown InstanceTypeEx = "unknown"
+
+	IPTypePrimary   = "primary"
+	IPTypeSecondary = "secondary"
 
 	ErrorNotImplemented = errors.New("meta-data API not implemented")
 )
@@ -58,17 +65,26 @@ var _ Interface = &Client{}
 type Client struct {
 	host   string
 	scheme string
+	debug  bool
 }
 
 func NewClient() *Client {
 	c := &Client{
 		host:   metadataHost,
 		scheme: metadataScheme,
+		debug:  false,
 	}
+
+	if _, exists := os.LookupEnv("DEBUG_METADATA"); exists {
+		c.debug = true
+	}
+
 	return c
 }
 
 func (c *Client) sendRequest(path string) ([]byte, error) {
+	ctx := log.NewContext()
+
 	url := url.URL{
 		Scheme: c.scheme,
 		Host:   c.host,
@@ -84,6 +100,11 @@ func (c *Client) sendRequest(path string) ([]byte, error) {
 	bodyContent, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	if c.debug {
+		log.Infof(ctx, "curl metadata path: %s", path)
+		log.Infof(ctx, "get response body: %s", string(bodyContent))
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
@@ -196,4 +217,76 @@ func (c *Client) GetLinkMask(macAddress, ipAddress string) (string, error) {
 	}
 	mask := strings.TrimSpace(string(body))
 	return mask, nil
+}
+
+func (c *Client) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	// eg. /1.0/meta-data/network/interfaces/macs/fa:26:00:01:6f:37/fixed_ips
+	// response:
+	// 192.168.96.13/
+	// 192.168.96.14/
+	// 192.168.96.15/
+	// 192.168.96.16/
+	path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/fixed_ips", macAddress)
+	body, err := c.sendRequest(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		ipAddrs []string
+	)
+
+	reader := strings.NewReader(strings.TrimSpace(string(body)))
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		ipAddrs = append(ipAddrs, strings.TrimSuffix(line, "/"))
+	}
+
+	return ipAddrs, nil
+}
+
+func (c *Client) GetLinkPrimaryIP(macAddress string) (string, error) {
+	ipAddrs, err := c.GetLinkFixedIPs(macAddress)
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range ipAddrs {
+		path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/fixed_ips/%s/ip_type", macAddress, addr)
+		body, err := c.sendRequest(path)
+		if err != nil {
+			return "", err
+		}
+		ipType := strings.TrimSpace(string(body))
+		if ipType == IPTypePrimary {
+			return addr, nil
+		}
+	}
+
+	return "", errors.New("primary ip not found")
+}
+
+func (c *Client) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	primaryIP, err := c.GetLinkPrimaryIP(macAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	ipAddrs, err := c.GetLinkFixedIPs(macAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		secondaryIPs []string
+	)
+
+	for _, addr := range ipAddrs {
+		if addr != primaryIP {
+			secondaryIPs = append(secondaryIPs, addr)
+		}
+	}
+
+	return secondaryIPs, nil
 }

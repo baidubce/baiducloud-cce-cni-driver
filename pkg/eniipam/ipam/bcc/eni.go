@@ -34,6 +34,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
+	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
@@ -140,6 +141,12 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 		instanceType := util.GetNodeInstanceType(node)
 		if instanceType != metadata.InstanceTypeExBCC {
 			log.V(6).Infof(ctx, "node %v has instance type %v, skip increasing eni", node.Name, instanceType)
+			continue
+		}
+
+		// skip if node not ready
+		if k8sutil.IsNodeNotReady(node) {
+			log.Infof(ctx, "node %v is not ready, skip increasing eni", node.Name)
 			continue
 		}
 

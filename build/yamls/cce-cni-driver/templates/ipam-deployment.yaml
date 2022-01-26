@@ -25,10 +25,14 @@ spec:
       {{- if and (hasKey .Values "IPAMScheduledToMaster") (.Values.IPAMScheduledToMaster) }}
       nodeSelector:
         cluster-role: master
+      {{- end }}
       tolerations:
+      {{- if and (hasKey .Values "IPAMScheduledToMaster") (.Values.IPAMScheduledToMaster) }}
         - key: node-role.kubernetes.io/master
           operator: Exists
       {{- end }}
+        - key: node.kubernetes.io/network-unavailable
+          operator: Exists
       serviceAccountName: cce-cni
       containers:
         - name: cce-eni-ipam
@@ -39,9 +43,11 @@ spec:
           volumeMounts:
             - name: log-dir
               mountPath: /var/log/cce
+            {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
             - name: cce-plugin-token
               mountPath: /var/run/secrets/cce/cce-plugin-token
               readOnly: true
+            {{- end }}
           env:
             - name: CCE_GATEWAY_ENDPOINT
               value: "{{ .Values.CCEGatewayEndpoint }}"
@@ -99,10 +105,12 @@ spec:
           hostPath:
             path: /var/log/cce
             type: "DirectoryOrCreate"
+        {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
         - name: cce-plugin-token
           secret:
             defaultMode: 0400
             secretName: cce-plugin-token
+        {{- end }}
 ---
 kind: Service
 apiVersion: v1

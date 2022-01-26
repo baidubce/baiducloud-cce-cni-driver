@@ -19,7 +19,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.3.1
+VERSION := v1.3.2
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -132,5 +132,5 @@ clean:
 	rm -rf $(OUTDIR)
 	rm -rf $(GOPATH)/pkg/darwin_amd64
 
-# avoid filename conflict and speed up build 
+# avoid filename conflict and speed up build
 .PHONY: all prepare compile test package clean build

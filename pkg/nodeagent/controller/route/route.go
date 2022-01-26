@@ -343,7 +343,23 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 		log.Infof(ctx, "node %v has podCIDRs %s", rc.NodeName, podCIDRs)
 
 		err = rc.ensureVPCRoute(ctx)
-		// only update when route ready, never taint node
+		// we only taint node if:
+		// 1. create route failed due to quota
+		// 2. NetworkUnavailable not exists or true.
+		if err != nil && cloud.IsErrorQuotaLimitExceeded(err) &&
+			k8sutil.GetNetworkingCondition(ctx, rc.KubeClient, rc.NodeName) != v1.ConditionFalse {
+			patchErr = k8sutil.UpdateNetworkingCondition(
+				ctx,
+				rc.KubeClient,
+				rc.NodeName,
+				false,
+				"RouteCreated",
+				"NoRouteCreated",
+				"CCE RouteController created a route",
+				"CCE RouteController failed to create a route",
+			)
+		}
+
 		if err == nil {
 			patchErr = k8sutil.UpdateNetworkingCondition(
 				ctx,
@@ -358,7 +374,7 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 		}
 
 		if err != nil {
-			log.Errorf(ctx, "syncRoute for node %v error: %v", nodeName, err)
+			log.Errorf(ctx, "sync route for node %v error: %v", nodeName, err)
 			rc.EventRecorder.Eventf(eventObject, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.NodeName, err)
 			return err
 		}

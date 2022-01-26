@@ -35,6 +35,7 @@ const (
 	ErrorReasonBBCENIPrivateIPNotFound             ErrorReason = "BBCENIPrivateIPNotFound"
 	ErrorReasonBBCENIPrivateIPExceedLimit          ErrorReason = "BBCENIPrivateIPExceedLimit"
 	ErrorReasonRouteRuleRepeated                   ErrorReason = "RouteRuleRepeated"
+	ErrorReasonQuotaLimitExceeded                  ErrorReason = "QuotaLimitExceeded"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -61,6 +62,8 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonPrivateIPInUse
 		case caseInsensitiveContains(errMsg, "RouteRuleRepeated"):
 			return ErrorReasonRouteRuleRepeated
+		case caseInsensitiveContains(errMsg, "QuotaLimitExceeded"):
+			return ErrorReasonQuotaLimitExceeded
 		}
 	}
 	return ErrorReasonUnknown
@@ -101,6 +104,10 @@ func IsErrorBBCENIPrivateIPExceedLimit(err error) bool {
 
 func IsErrorRouteRuleRepeated(err error) bool {
 	return ReasonForError(err) == ErrorReasonRouteRuleRepeated
+}
+
+func IsErrorQuotaLimitExceeded(err error) bool {
+	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded
 }
 
 func caseInsensitiveContains(s, substr string) bool {

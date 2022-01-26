@@ -95,6 +95,15 @@ func IsPodFinished(pod *v1.Pod) bool {
 	return false
 }
 
+func IsNodeReady(node *v1.Node) bool {
+	_, condition := nodeutil.GetNodeCondition(&node.Status, v1.NodeReady)
+	return condition != nil && condition.Status == v1.ConditionTrue
+}
+
+func IsNodeNotReady(node *v1.Node) bool {
+	return !IsNodeReady(node)
+}
+
 func UpdateNetworkingCondition(
 	ctx context.Context,
 	kubeClient kubernetes.Interface,
@@ -157,4 +166,22 @@ func UpdateNetworkingCondition(
 	}
 
 	return nil
+}
+
+func GetNetworkingCondition(
+	ctx context.Context,
+	kubeClient kubernetes.Interface,
+	nodeName string,
+) v1.ConditionStatus {
+	node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		return v1.ConditionUnknown
+	}
+
+	_, condition := nodeutil.GetNodeCondition(&(node.Status), v1.NodeNetworkUnavailable)
+	if condition != nil {
+		return condition.Status
+	}
+
+	return v1.ConditionUnknown
 }

@@ -24,7 +24,7 @@ var (
 			Name: "multi_eni_multi_ip_eni_count",
 			Help: "eni count of bcc",
 		},
-		[]string{"cluster", "vpc", "node", "subnet", "eni_status"},
+		[]string{"cluster", "vpc", "subnet", "eni_status"},
 	)
 
 	MultiEniMultiIPEniIPCount = prometheus.NewGaugeVec(
@@ -32,7 +32,7 @@ var (
 			Name: "multi_eni_multi_ip_eniip_count",
 			Help: "eni ip count of bcc (exclude primary ip)",
 		},
-		[]string{"cluster", "vpc", "node", "subnet", "eni"},
+		[]string{"cluster", "vpc", "subnet"},
 	)
 )
 

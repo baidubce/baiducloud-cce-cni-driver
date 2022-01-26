@@ -70,7 +70,7 @@ VPCID: vpc-tvbxj4isix0h
 ClusterID: baidu-k8s
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
 
 ServiceCIDR: 172.31.0.0/16
 
@@ -98,7 +98,7 @@ PodSubnetList:
   - sbn-z03uhz0138xh
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.1
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
 
 ServiceCIDR: 192.168.0.0/16
 

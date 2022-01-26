@@ -16,6 +16,7 @@
 package cniconf
 
 import (
+	hostlocal "github.com/containernetworking/plugins/plugins/ipam/host-local/backend/allocator"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
@@ -72,5 +73,9 @@ type CNIConfigData struct {
 	LocalDNSAddress string
 	InstanceType    string
 
+	// Subnet is node PodCIDR for vpc route mode
 	Subnet string
+
+	// HostLocalRange is host-local plugin RangeSet
+	HostLocalRange hostlocal.RangeSet
 }

@@ -61,6 +61,7 @@ const (
 
 var (
 	eniNameMatcher = regexp.MustCompile(`eth(\d+)`)
+	eniNamePrefix  = "eth"
 )
 
 // Controller manages ENI at node level
@@ -120,6 +121,7 @@ func New(
 func (c *Controller) ReconcileENIs() {
 	ctx := log.NewContext()
 
+	// run netlink monitor, bootstrap eni initialization process
 	lm, err := nlmonitor.NewLinkMonitor(c)
 	if err != nil {
 		log.Errorf(ctx, "new link monitor error: %v", err)
@@ -128,10 +130,13 @@ func (c *Controller) ReconcileENIs() {
 		log.Info(ctx, "new link monitor successfully")
 	}
 
+	go c.taintNodeIfNoEniBound()
+
+	// reconcile eni regularly
 	err = wait.PollImmediateInfinite(wait.Jitter(c.eniSyncPeriod, 0.5), func() (bool, error) {
 		ctx := log.NewContext()
 
-		err := c.reconcileENIs(ctx)
+		eniCnt, err := c.reconcileENIs(ctx)
 		if err != nil {
 			log.Errorf(ctx, "error reconciling enis: %v", err)
 			c.eventRecorder.Eventf(&v1.ObjectReference{
@@ -140,18 +145,8 @@ func (c *Controller) ReconcileENIs() {
 			}, v1.EventTypeWarning, "ENI Not Ready", "CCE ENI Controller failed to reconcile enis: %v", err)
 		}
 		// only update when eni ready, never taint node
-		if err == nil {
-			patchErr := k8sutil.UpdateNetworkingCondition(
-				ctx,
-				c.kubeClient,
-				c.nodeName,
-				true,
-				"AllENIReady",
-				"NotAllENIReady",
-				"CCE ENI Controller reconciles ENI",
-				"CCE ENI Controller failed to reconcile ENI",
-			)
-
+		if eniCnt > 0 {
+			patchErr := c.updateNetworkingCondition(ctx, true)
 			if patchErr != nil {
 				log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
 			}
@@ -164,12 +159,11 @@ func (c *Controller) ReconcileENIs() {
 	}
 }
 
-func (c *Controller) reconcileENIs(ctx context.Context) error {
+func (c *Controller) reconcileENIs(ctx context.Context) (int, error) {
 	log.Infof(ctx, "reconcile enis for %v begins...", c.nodeName)
 	defer log.Infof(ctx, "reconcile enis for %v ends...", c.nodeName)
 
 	// list enis attached to node
-
 	var (
 		listENIArgs = enisdk.ListEniArgs{
 			VpcId:      c.vpcID,
@@ -196,19 +190,19 @@ func (c *Controller) reconcileENIs(ctx context.Context) error {
 		return true, nil
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// set eni link up
 	// add eni link ip addr
 	// report link index
-	err = c.setupENINetwork(ctx, enis)
+	eniCnt, err := c.setupENINetwork(ctx, enis)
 	if err != nil {
 		log.Errorf(ctx, "failed to update ippool %v status: %v", c.ippoolName, err)
-		return err
+		return 0, err
 	}
 
-	return nil
+	return eniCnt, nil
 }
 
 // listAvailableENIs lists ENIs that are available and owned by this node
@@ -225,9 +219,10 @@ func (c *Controller) listAvailableENIs(ctx context.Context, enis []enisdk.Eni) [
 	return reusableENIs
 }
 
-func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) error {
+func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) (int, error) {
 	var (
-		eniStatus = make(map[string]v1alpha1.ENI)
+		eniStatus         = make(map[string]v1alpha1.ENI)
+		readyENICount int = 0
 	)
 
 	for _, eni := range enis {
@@ -238,6 +233,8 @@ func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) err
 		linkIndex, err := c.setupENILink(ctx, &eni)
 		if err != nil {
 			log.Errorf(ctx, "failed to ensure eni %v ready: %v", eni.EniId, err)
+		} else {
+			readyENICount++
 		}
 		eniStatus[eni.EniId] = v1alpha1.ENI{
 			ID:               eni.EniId,
@@ -269,10 +266,10 @@ func (c *Controller) setupENINetwork(ctx context.Context, enis []enisdk.Eni) err
 
 	if retryErr != nil {
 		log.Errorf(ctx, "retry: error updating ippool %v status: %v", c.ippoolName, retryErr)
-		return retryErr
+		return 0, retryErr
 	}
 
-	return nil
+	return readyENICount, nil
 }
 
 func (c *Controller) setupENILink(ctx context.Context, eni *enisdk.Eni) (int, error) {
@@ -573,34 +570,24 @@ func getInterfaceIndex(intf netlink.Link) (int, error) {
 func (c *Controller) HandleNewlink(link netlink.Link) {
 	ctx := log.NewContext()
 
+	if link.Type() != "device" {
+		return
+	}
+
 	_, err := getInterfaceIndex(link)
 	if err != nil {
 		return
 	}
 
-	if link.Type() != "device" {
-		return
-	}
-
 	// use link name and link type to filter out eni link
 	log.Infof(ctx, "netlink monitor detected eni link %v added", link.Attrs().Name)
-	err = c.reconcileENIs(ctx)
+	eniCnt, err := c.reconcileENIs(ctx)
 	if err != nil {
 		log.Errorf(ctx, "error reconciling enis: %v", err)
 	}
 
-	if err == nil {
-		patchErr := k8sutil.UpdateNetworkingCondition(
-			ctx,
-			c.kubeClient,
-			c.nodeName,
-			true,
-			"AllENIReady",
-			"NotAllENIReady",
-			"CCE ENI Controller reconciles ENI",
-			"CCE ENI Controller failed to reconcile ENI",
-		)
-
+	if eniCnt > 0 {
+		patchErr := c.updateNetworkingCondition(ctx, true)
 		if patchErr != nil {
 			log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
 		}
@@ -608,3 +595,46 @@ func (c *Controller) HandleNewlink(link netlink.Link) {
 }
 
 func (c *Controller) HandleDellink(link netlink.Link) {}
+
+func (c *Controller) updateNetworkingCondition(ctx context.Context, ready bool) error {
+	return k8sutil.UpdateNetworkingCondition(
+		ctx,
+		c.kubeClient,
+		c.nodeName,
+		ready,
+		"AllENIReady",
+		"NotAllENIReady",
+		"CCE ENI Controller reconciles ENI",
+		"CCE ENI Controller failed to reconcile ENI",
+	)
+}
+
+func (c *Controller) taintNodeIfNoEniBound() error {
+	_ = wait.PollImmediateInfinite(wait.Jitter(time.Second*30, 0.5), func() (done bool, err error) {
+		var (
+			eniLinkFound bool
+		)
+
+		ctx := log.NewContext()
+		// try several eni links...
+		for i := 1; i <= 7; i++ {
+			eniLinkName := fmt.Sprintf("%s%d", eniNamePrefix, i)
+			link, err := c.netlink.LinkByName(eniLinkName)
+			if err == nil && link.Type() == "device" {
+				eniLinkFound = true
+				break
+			}
+		}
+
+		if !eniLinkFound {
+			patchErr := c.updateNetworkingCondition(ctx, false)
+			if patchErr != nil {
+				log.Errorf(ctx, "eni: update networking condition for node %v error: %v", c.nodeName, patchErr)
+			}
+		}
+
+		return false, nil
+	})
+
+	return nil
+}

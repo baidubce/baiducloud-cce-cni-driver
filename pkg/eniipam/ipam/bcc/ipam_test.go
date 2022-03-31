@@ -260,6 +260,12 @@ func TestIPAM_Allocate(t *testing.T) {
 					},
 				}, metav1.CreateOptions{})
 
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+					},
+				}, metav1.CreateOptions{})
+
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
@@ -329,6 +335,12 @@ func TestIPAM_Allocate(t *testing.T) {
 					},
 				}, metav1.CreateOptions{})
 
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+					},
+				}, metav1.CreateOptions{})
+
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
@@ -389,6 +401,12 @@ func TestIPAM_Allocate(t *testing.T) {
 					},
 					Spec: v1.PodSpec{
 						NodeName: "test-node",
+					},
+				}, metav1.CreateOptions{})
+
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
 					},
 				}, metav1.CreateOptions{})
 

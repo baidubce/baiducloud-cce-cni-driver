@@ -16,6 +16,7 @@
 package app
 
 import (
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 
@@ -39,6 +40,8 @@ type Options struct {
 	instanceType metadata.InstanceTypeEx
 	// subnetID is the subnetID of this node.
 	subnetID string
+	// node is the cache of k8s node
+	node *v1.Node
 	// errCh is the channel that errors will be sent.
 	errCh chan error
 

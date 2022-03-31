@@ -7,6 +7,7 @@ require (
 	github.com/baidubce/bce-sdk-go v0.9.93
 	github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins v0.8.7
+	github.com/evanphx/json-patch v5.6.0+incompatible
 	github.com/golang/mock v1.4.4
 	github.com/golang/protobuf v1.4.2
 	github.com/gorilla/mux v1.8.0
@@ -14,6 +15,7 @@ require (
 	github.com/j-keck/arping v1.0.1
 	github.com/json-iterator/go v1.1.10 // indirect
 	github.com/juju/ratelimit v1.0.1
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.0.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.0.0

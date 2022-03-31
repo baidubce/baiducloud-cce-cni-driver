@@ -259,24 +259,6 @@ func TestENICreatedByCCE(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "False Prefix:i-",
-			fields: fields{
-				eni: &enisdk.Eni{
-					Name: "12345678/i-12345678/nodename/123456",
-				},
-			},
-			want: false,
-		},
-		{
-			name: "Format Correct but not cce",
-			fields: fields{
-				eni: &enisdk.Eni{
-					Name: "12345678/12345678/nodename/123456",
-				},
-			},
-			want: false,
-		},
-		{
 			name: "Nil",
 			fields: fields{
 				eni: nil,
@@ -323,17 +305,6 @@ func TestENIOwnedByNode(t *testing.T) {
 				instanceID: "i-12345678",
 			},
 			want: true,
-		},
-		{
-			name: "Not Create By CCE",
-			fields: fields{
-				eni: &enisdk.Eni{
-					Name: "12345678/i-12345678/nodename/123456",
-				},
-				clusterID:  "12345678",
-				instanceID: "i-12345678",
-			},
-			want: false,
 		},
 		{
 			name: "Cluster Not Match",

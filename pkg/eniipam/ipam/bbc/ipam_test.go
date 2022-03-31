@@ -9,6 +9,7 @@ import (
 
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/golang/mock/gomock"
+	"github.com/im7mortal/kmutex"
 	"github.com/juju/ratelimit"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -90,7 +91,7 @@ func TestIPAM_Allocate(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
 		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
+		nodeLock         *kmutex.Kmutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
@@ -185,6 +186,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
+					nodeLock:         kmutex.New(),
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -268,6 +270,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:             ctrl,
 					lock:             sync.RWMutex{},
+					nodeLock:         kmutex.New(),
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -323,6 +326,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				crdClient:        tt.fields.crdClient,
 				cloud:            tt.fields.cloud,
 				lock:             tt.fields.lock,
+				nodeLock:         tt.fields.nodeLock,
 				cniMode:          tt.fields.cniMode,
 				vpcID:            tt.fields.vpcID,
 				clusterID:        tt.fields.clusterID,

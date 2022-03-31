@@ -65,7 +65,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.3
 
 # Route Controller
 EnableVPCRoute: true
@@ -88,7 +88,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.3
 ```
 
 #### BBC 主网卡辅助 IP 模式
@@ -102,7 +102,7 @@ CCEGatewayEndpoint: cce-gateway.bj.baidubce.com
 BCCEndpoint: bcc.bj.baidubce.com
 BBCEndpoint: bbc.bj.baidubce.com
 ServiceCIDR: # cluster service cidr
-CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.2
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:v1.3.3
 ```
 
 更多的信息请查阅 [values.yaml](build/yamls/cce-cni-driver/values.yaml)。

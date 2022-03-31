@@ -207,6 +207,10 @@ func (rc *RouteController) getPodCIDRs(ctx context.Context) ([]string, error) {
 		podCIDRs = append(podCIDRs, iprange.CIDR)
 	}
 
+	if len(rc.PodCIDRs) == 0 {
+		return nil, fmt.Errorf("node.spec.podCIDRs is empty")
+	}
+
 	rc.PodCIDRs = podCIDRs
 	return rc.PodCIDRs, nil
 }
@@ -242,6 +246,10 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 			return err
 		}
 		if isResponsible {
+			// ignore pod cidr empty
+			if len(rc.PodCIDRs) == 0 {
+				continue
+			}
 			// this is the target route
 			if slice.ContainsString(rc.PodCIDRs, route.DestinationAddress, nil) && shouldAdvertiseRoute {
 				isRouteExist[route.DestinationAddress] = true
@@ -252,7 +260,7 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 				log.Errorf(ctx, "failed to remove old route %+v: %v", route, err)
 				return err
 			}
-			log.Infof(ctx, "remove old route: %+v", route)
+			log.Warningf(ctx, "remove old route: %+v", route)
 			continue
 		}
 		log.V(6).Infof(ctx, "keep other route: %+v", route)

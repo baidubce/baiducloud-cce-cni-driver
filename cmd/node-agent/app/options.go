@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"strings"
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch"
@@ -47,6 +48,9 @@ const (
 	defaultCNIConfigDir         = "/etc/cni/net.d/"
 	defaultInformerResyncPeriod = 20 * time.Second
 	defaultENISyncPeriod        = 30 * time.Second
+
+	securityGroupIDPrefix           = "g-"
+	enterpriseSecurityGroupIDPrefix = "esg-"
 )
 
 const (
@@ -102,8 +106,17 @@ func (o *Options) complete(ctx context.Context, args []string) error {
 			} else {
 				log.Warningf(ctx, "fallback to default config due to error: %v", err)
 			}
-		} else {
-			log.Infof(ctx, "no patch config specified or error: %v", err)
+		}
+		// if we encounter an error here, eg. kube-proxy starts later than agent, thus io timeout
+		// we just return error, make this agent restarts.
+		// otherwise, we might misconfigure what user really expects.
+		if err != nil {
+			msg := fmt.Sprintf("get patch config error: %v", err)
+			log.Error(ctx, msg)
+			return errors.New(msg)
+		}
+		if !needPatch {
+			log.Infof(ctx, "no patch config specified on node")
 		}
 
 		o.config = c
@@ -174,6 +187,11 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 // applyDefaults apply default options for node agent
 func (o *Options) applyDefaults(ctx context.Context) error {
 	var err error
+
+	// we are unlikely to hit this
+	if o.metaClient == nil {
+		return fmt.Errorf("meta client is nil")
+	}
 
 	// get instance type
 	o.instanceType, err = o.metaClient.GetInstanceTypeEx()
@@ -282,7 +300,7 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 		o.kubeClient,
 		false)
 	if err == nil {
-		instance, err := o.bceClient.DescribeInstance(ctx, o.instanceID)
+		instance, err := o.bceClient.GetBCCInstanceDetail(ctx, o.instanceID)
 		if err == nil {
 			if subnetIDUnavailable {
 				o.subnetID = instance.SubnetId
@@ -316,7 +334,7 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 	}
 
 	if o.config.CCE.ENIController.PreAttachedENINum <= 0 {
-		o.config.CCE.ENIController.PreAttachedENINum = 2
+		o.config.CCE.ENIController.PreAttachedENINum = 1
 	}
 
 	return nil
@@ -324,6 +342,36 @@ func (o *Options) applyCCEConfigDefaults(ctx context.Context) error {
 
 // TODO:
 func (o *Options) validateCCE() error {
+	if !(types.IsCCECNIModeBasedOnVPCRoute(o.config.CNIMode) || types.IsKubenetMode(o.config.CNIMode)) {
+		err := validateSecurityGroups(o.config.CCE.ENIController.SecurityGroupList)
+		if err != nil {
+			return err
+		}
+
+		err = validateEnterpriseSecurityGroups(o.config.CCE.ENIController.EnterpriseSecurityGroupList)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateSecurityGroups(secgroups []string) error {
+	for _, s := range secgroups {
+		if s == "" || !strings.HasPrefix(s, securityGroupIDPrefix) {
+			return fmt.Errorf("security group id %v is not valid", s)
+		}
+	}
+	return nil
+}
+
+func validateEnterpriseSecurityGroups(esecgroups []string) error {
+	for _, s := range esecgroups {
+		if s == "" || !strings.HasPrefix(s, enterpriseSecurityGroupIDPrefix) {
+			return fmt.Errorf("enterprise security group id %v is not valid", s)
+		}
+	}
 	return nil
 }
 

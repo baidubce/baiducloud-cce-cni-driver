@@ -74,6 +74,25 @@ func (p *PriorityQueue) Pop() (interface{}, error) {
 	return item.value, nil
 }
 
+// Top returns the element with the highest priority from the queue.
+func (p *PriorityQueue) Top() (interface{}, error) {
+	if len(*p.itemHeap) == 0 {
+		return nil, ErrorEmptyQueue
+	}
+
+	return (*p.itemHeap)[0].value, nil
+}
+
+// Remove removes element
+func (p *PriorityQueue) Remove(x interface{}) {
+	item, ok := p.lookup[x]
+	if !ok {
+		return
+	}
+
+	heap.Remove(p.itemHeap, item.index)
+}
+
 // UpdatePriority changes the priority of a given item.
 // If the specified item is not present in the queue, no action is performed.
 func (p *PriorityQueue) UpdatePriority(x interface{}, newPriority int64) error {

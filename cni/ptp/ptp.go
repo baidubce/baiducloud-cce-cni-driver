@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"runtime"
@@ -188,7 +189,7 @@ func (p *ptpPlugin) setupContainerNetNSVeth(
 		}
 
 		if err := p.nlink.RouteDel(&route); err != nil && !netlinkwrapper.IsNotExistError(err) {
-			return fmt.Errorf("failed to delete route %v: %v", route, err)
+			log.Printf("failed to delete route %v: %v", route, err)
 		}
 
 		isIPv6 := false

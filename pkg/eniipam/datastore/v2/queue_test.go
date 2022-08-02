@@ -40,7 +40,8 @@ func TestPriorityQueue(t *testing.T) {
 	}
 
 	for _, e := range sortedElements {
-		item, err := pq.Pop()
+		item, err := pq.Top()
+		pq.Pop()
 		if err != nil {
 			t.Fatalf(err.Error())
 		}
@@ -48,5 +49,38 @@ func TestPriorityQueue(t *testing.T) {
 		if e != item {
 			t.Fatalf("expected %v, got %v", e, item)
 		}
+	}
+}
+
+func TestPriorityQueueRemove(t *testing.T) {
+	var (
+		pq = newPriorityQueue()
+
+		now = time.Now()
+
+		e1 = &AddressInfo{Address: "1.1.1.1", UnassignedTime: now}
+		e2 = &AddressInfo{Address: "2.2.2.2", UnassignedTime: now}
+		e3 = &AddressInfo{Address: "3.3.3.3", UnassignedTime: now.Add(time.Second)}
+		e4 = &AddressInfo{Address: "4.4.4.4", UnassignedTime: now.Add(time.Second * 5)}
+		e5 = &AddressInfo{Address: "5.5.5.5", UnassignedTime: now.Add(time.Second * 10)}
+	)
+
+	elements := []*AddressInfo{e5, e3, e1, e2, e4}
+	for _, e := range elements {
+		pq.Insert(e)
+	}
+
+	pq.Remove(e1)
+	pq.Remove(e5)
+	pq.Remove(nil)
+	item, err := pq.Top()
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	if item != e2 {
+		t.Fatalf("expected %v, got %v", e2, item)
+	}
+	if pq.Len() != 3 {
+		t.Fatalf("expected len %v, got %v", 3, pq.Len())
 	}
 }

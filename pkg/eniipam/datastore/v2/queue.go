@@ -45,6 +45,18 @@ func (p *priorityQueue) Pop() (*AddressInfo, error) {
 	return item.(*AddressInfo), nil
 }
 
+func (p *priorityQueue) Top() (*AddressInfo, error) {
+	item, err := p.pq.Top()
+	if err != nil {
+		return nil, err
+	}
+	return item.(*AddressInfo), nil
+}
+
+func (p *priorityQueue) Remove(addr *AddressInfo) {
+	p.pq.Remove(addr)
+}
+
 func (p *priorityQueue) UpdatePriority(addr *AddressInfo, newPriority int64) error {
 	return p.pq.UpdatePriority(addr, newPriority)
 }

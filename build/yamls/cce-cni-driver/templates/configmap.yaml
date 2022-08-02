@@ -20,7 +20,6 @@ data:
       secretAccessKey: {{ .Values.SecretAccessKey }}
       {{- end }}
       containerNetworkCIDRIPv4: {{ .Values.ContainerNetworkCIDRIPv4 }}
-      containerNetworkCIDRIPv6: {{ .Values.ContainerNetworkCIDRIPv6 }}
       routeController:
         enableVPCRoute: {{ .Values.EnableVPCRoute }}
         enableStaticRoute: {{ .Values.EnableStaticRoute }}
@@ -31,6 +30,10 @@ data:
         {{- end }}
         securityGroupList:
         {{- range .Values.SecurityGroupList }}
+          - {{ . }}
+        {{- end }}
+        enterpriseSecurityGroupList:
+        {{- range .Values.EnterpriseSecurityGroupList }}
           - {{ . }}
         {{- end }}
         routeTableOffset: 127

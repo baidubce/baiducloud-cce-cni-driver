@@ -71,6 +71,9 @@ func (ipam *IPAM) SyncIPPool(poolKey string, poolLister crdlisters.IPPoolLister)
 	pool, err := poolLister.IPPools(namespace).Get(name)
 	if err != nil {
 		log.Errorf(ctx, "failed to get ippool %v: %v", poolKey, err)
+		if kerrors.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
 

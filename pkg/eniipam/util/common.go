@@ -63,7 +63,7 @@ func GetNodeInstanceType(node *v1.Node) metadata.InstanceTypeEx {
 	}
 
 	instanceTypeStr := node.Labels[v1.LabelInstanceType]
-	if instanceTypeStr == "BCC" || instanceTypeStr == "GPU" {
+	if instanceTypeStr == "BCC" || instanceTypeStr == "GPU" || instanceTypeStr == "DCC" {
 		return metadata.InstanceTypeExBCC
 	}
 

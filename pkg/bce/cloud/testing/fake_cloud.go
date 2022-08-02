@@ -147,11 +147,11 @@ func (fake *FakeBceCloud) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelI
 	return nil
 }
 
-func (fake *FakeBceCloud) BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
+func (fake *FakeBceCloud) GetBBCInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
 	return &bbc.InstanceModel{}, nil
 }
 
-func (fake *FakeBceCloud) BBCGetInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
+func (fake *FakeBceCloud) GetBBCInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
 	return &bbc.GetInstanceEniResult{
 		Id: "eni-" + instanceID,
 	}, nil
@@ -173,11 +173,11 @@ func (fake *FakeBceCloud) DeletePrivateIP(ctx context.Context, privateIP string,
 	return nil
 }
 
-func (fake *FakeBceCloud) DeleteRoute(ctx context.Context, routeID string) error {
+func (fake *FakeBceCloud) DeleteRouteRule(ctx context.Context, routeID string) error {
 	return nil
 }
 
-func (fake *FakeBceCloud) DescribeInstance(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+func (fake *FakeBceCloud) GetBCCInstanceDetail(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
 	return &bccapi.InstanceModel{}, nil
 }
 
@@ -207,4 +207,13 @@ func (fake *FakeBceCloud) ListSecurityGroup(ctx context.Context, vpcID, instance
 
 func (fake *FakeBceCloud) StatENI(ctx context.Context, eniID string) (*eni.Eni, error) {
 	return &eni.Eni{}, nil
+}
+
+func (fake *FakeBceCloud) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string) ([]string, error) {
+	return nil, nil
+
+}
+
+func (fake *FakeBceCloud) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string) error {
+	return nil
 }

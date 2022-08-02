@@ -17,9 +17,9 @@ package network
 
 import (
 	"fmt"
-	"github.com/j-keck/arping"
 	"net"
 
+	"github.com/j-keck/arping"
 	"github.com/vishvananda/netlink"
 )
 

@@ -17,19 +17,121 @@ package app
 
 import (
 	"context"
+	"io/ioutil"
+	"os"
 	"reflect"
 	"testing"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	agentconfig "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	nodeagentconfig "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestOptions_complete(t *testing.T) {
+	var (
+		configFile = "/tmp/cce-cni-conf"
+	)
+
+	type fields struct {
+		configFile   string
+		config       *nodeagentconfig.NodeAgentConfiguration
+		hostName     string
+		instanceID   string
+		instanceType metadata.InstanceTypeEx
+		subnetID     string
+		node         *v1.Node
+		errCh        chan error
+		metaClient   metadata.Interface
+		kubeClient   kubernetes.Interface
+		bceClient    cloud.Interface
+	}
+	type args struct {
+		ctx  context.Context
+		args []string
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "parse config error",
+			fields: fields{
+				configFile: "xxxx",
+				errCh:      make(chan error),
+			},
+			args: args{
+				ctx:  context.TODO(),
+				args: []string{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "get patch config name error",
+			fields: func() fields {
+				ioutil.WriteFile(configFile, []byte("cniMode: vpc-secondary-ip-veth"), 0755)
+				return fields{
+					configFile: configFile,
+					errCh:      make(chan error),
+					kubeClient: nil,
+				}
+			}(),
+			args: args{
+				ctx:  context.TODO(),
+				args: []string{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "node specify no patch config",
+			fields: func() fields {
+				ioutil.WriteFile(configFile, []byte("cniMode: vpc-secondary-ip-veth"), 0755)
+				return fields{
+					configFile: configFile,
+					errCh:      make(chan error),
+					kubeClient: nil,
+					node:       &v1.Node{},
+				}
+			}(),
+			args: args{
+				ctx:  context.TODO(),
+				args: []string{},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		defer func() {
+			os.Remove(configFile)
+		}()
+		t.Run(tt.name, func(t *testing.T) {
+			o := &Options{
+				configFile:   tt.fields.configFile,
+				config:       tt.fields.config,
+				hostName:     tt.fields.hostName,
+				instanceID:   tt.fields.instanceID,
+				instanceType: tt.fields.instanceType,
+				subnetID:     tt.fields.subnetID,
+				node:         tt.fields.node,
+				errCh:        tt.fields.errCh,
+				metaClient:   tt.fields.metaClient,
+				kubeClient:   tt.fields.kubeClient,
+				bceClient:    tt.fields.bceClient,
+			}
+			if err := o.complete(tt.args.ctx, tt.args.args); (err != nil) != tt.wantErr {
+				t.Errorf("Options.complete() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
 
 func TestOptions_getPatchConfigName(t *testing.T) {
 	type fields struct {
@@ -260,6 +362,78 @@ func TestOptions_mergeConfigAndUnmarshal(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Options.mergeConfigAndUnmarshal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOptions_validateCCE(t *testing.T) {
+	type fields struct {
+		configFile   string
+		config       *nodeagentconfig.NodeAgentConfiguration
+		hostName     string
+		instanceID   string
+		instanceType metadata.InstanceTypeEx
+		subnetID     string
+		node         *v1.Node
+		errCh        chan error
+		metaClient   metadata.Interface
+		kubeClient   kubernetes.Interface
+		bceClient    cloud.Interface
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		wantErr bool
+	}{
+		{
+			name: "valid security groups",
+			fields: fields{
+				config: &nodeagentconfig.NodeAgentConfiguration{
+					CNIMode: types.CCEModeBBCSecondaryIPAutoDetect,
+					CCE: nodeagentconfig.CCEConfiguration{
+						ENIController: nodeagentconfig.ENIControllerConfiguration{
+							SecurityGroupList:           []string{"g-xxxx"},
+							EnterpriseSecurityGroupList: []string{"esg-xxx"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid security groups",
+			fields: fields{
+				config: &nodeagentconfig.NodeAgentConfiguration{
+					CNIMode: types.CCEModeBBCSecondaryIPAutoDetect,
+					CCE: nodeagentconfig.CCEConfiguration{
+						ENIController: nodeagentconfig.ENIControllerConfiguration{
+							SecurityGroupList:           []string{},
+							EnterpriseSecurityGroupList: []string{"eeesg-xxx"},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := &Options{
+				configFile:   tt.fields.configFile,
+				config:       tt.fields.config,
+				hostName:     tt.fields.hostName,
+				instanceID:   tt.fields.instanceID,
+				instanceType: tt.fields.instanceType,
+				subnetID:     tt.fields.subnetID,
+				node:         tt.fields.node,
+				errCh:        tt.fields.errCh,
+				metaClient:   tt.fields.metaClient,
+				kubeClient:   tt.fields.kubeClient,
+				bceClient:    tt.fields.bceClient,
+			}
+			if err := o.validateCCE(); (err != nil) != tt.wantErr {
+				t.Errorf("Options.validateCCE() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

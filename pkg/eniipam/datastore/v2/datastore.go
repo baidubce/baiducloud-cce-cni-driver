@@ -18,6 +18,8 @@ package v2
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,7 +29,11 @@ import (
 )
 
 const (
-	addressCoolingPeriod = 30 * time.Second
+	addressCoolingPeriodEnvKey = "DATASTORE_ADDRESS_COOLING_PERIOD"
+)
+
+var (
+	addressCoolingPeriod = 5 * time.Second
 )
 
 var (
@@ -69,6 +75,7 @@ type Instance struct {
 type SubnetBucket struct {
 	ID            string
 	IPv4Addresses map[string]*AddressInfo
+	idle          *priorityQueue
 }
 
 type AddressInfo struct {
@@ -79,6 +86,8 @@ type AddressInfo struct {
 }
 
 func NewDataStore() *DataStore {
+	setAddressCoolingPeriodByEnv()
+
 	return &DataStore{
 		store: map[string]*Instance{},
 		clock: clock.RealClock{},
@@ -114,19 +123,23 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, string, error) {
 	}
 
 	for _, sbucket := range instance.pool {
-		for _, addr := range sbucket.IPv4Addresses {
-			if addr.Assigned || addr.inCoolingPeriod() {
-				continue
-			}
-			// update status
-			addr.Assigned = true
-			instance.assigned++
-
-			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
-			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
-
-			return addr.Address, addr.SubnetID, nil
+		addr, err := sbucket.idle.Top()
+		if err != nil {
+			continue
 		}
+
+		if addr.Assigned || addr.inCoolingPeriod() {
+			continue
+		}
+		// update status
+		addr.Assigned = true
+		instance.assigned++
+		sbucket.idle.Pop()
+
+		metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
+		metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
+
+		return addr.Address, addr.SubnetID, nil
 	}
 
 	return "", "", NoAvailableIPAddressInDataStoreError
@@ -146,21 +159,19 @@ func (ds *DataStore) AllocatePodPrivateIPBySubnet(node, subnetID string) (string
 		return "", "", UnknownSubnetError
 	}
 
-	for _, addr := range sbucket.IPv4Addresses {
-		if addr.Assigned || addr.inCoolingPeriod() {
-			continue
-		}
-		// update status
-		addr.Assigned = true
-		instance.assigned++
-
-		metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
-		metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
-
-		return addr.Address, addr.SubnetID, nil
+	addr, err := sbucket.idle.Top()
+	if err != nil || addr.Assigned || addr.inCoolingPeriod() {
+		return "", "", NoAvailableIPAddressInSubnetBucketError
 	}
+	// update status
+	addr.Assigned = true
+	instance.assigned++
+	sbucket.idle.Pop()
 
-	return "", "", NoAvailableIPAddressInSubnetBucketError
+	metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
+	metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
+
+	return addr.Address, addr.SubnetID, nil
 }
 
 func (ds *DataStore) ReleasePodPrivateIP(node, subnetID, ip string) error {
@@ -181,6 +192,11 @@ func (ds *DataStore) ReleasePodPrivateIP(node, subnetID, ip string) error {
 	if ok {
 		if addr.Assigned {
 			instance.assigned--
+			addr.UnassignedTime = time.Now()
+			err := sbucket.idle.Insert(addr)
+			if err != nil {
+				return err
+			}
 
 			metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Dec()
 			metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, addr.SubnetID).Inc()
@@ -215,15 +231,22 @@ func (ds *DataStore) AddPrivateIPToStore(node, subnetID, ipAddress string, assig
 		instance.pool[subnetID] = &SubnetBucket{
 			ID:            subnetID,
 			IPv4Addresses: make(map[string]*AddressInfo),
+			idle:          newPriorityQueue(),
 		}
 	}
 
-	sbucket, _ := instance.pool[subnetID]
+	sbucket := instance.pool[subnetID]
 
 	// Already exists
 	_, ok = sbucket.IPv4Addresses[ipAddress]
 	if ok {
 		return fmt.Errorf("ip %v already in datastore", ipAddress)
+	}
+
+	addr := &AddressInfo{
+		Address:  ipAddress,
+		Assigned: assigned,
+		SubnetID: subnetID,
 	}
 
 	// increase counter
@@ -233,15 +256,12 @@ func (ds *DataStore) AddPrivateIPToStore(node, subnetID, ipAddress string, assig
 		instance.assigned++
 		metricAllocatedIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Inc()
 	} else {
+		sbucket.idle.Insert(addr)
 		metricAvailableIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, node, subnetID).Inc()
 	}
 
 	// update store
-	sbucket.IPv4Addresses[ipAddress] = &AddressInfo{
-		Address:  ipAddress,
-		Assigned: assigned,
-		SubnetID: subnetID,
-	}
+	sbucket.IPv4Addresses[ipAddress] = addr
 
 	return nil
 }
@@ -275,6 +295,9 @@ func (ds *DataStore) DeletePrivateIPFromStore(node, subnetID, ipAddress string) 
 	}
 
 	// update store
+	if addr != nil {
+		sbucket.idle.Remove(addr)
+	}
 	delete(sbucket.IPv4Addresses, ipAddress)
 
 	return nil
@@ -382,4 +405,13 @@ func (ds *DataStore) ListNodes() []string {
 		nodes = append(nodes, n)
 	}
 	return nodes
+}
+
+func setAddressCoolingPeriodByEnv() {
+	periodStr := os.Getenv(addressCoolingPeriodEnvKey)
+	period, err := strconv.Atoi(periodStr)
+	if err != nil {
+		return
+	}
+	addressCoolingPeriod = time.Duration(period) * time.Second
 }

@@ -89,13 +89,16 @@ type ENIControllerConfiguration struct {
 	// e.g. sbn-g53sb5a5ircf,sbn-30f9qg2ekcrm
 	ENISubnetList []string `json:"eniSubnetList"`
 	// SecurityGroupList are security groups that bound to ENIs
-	// e.g. g-twh19p9zcuqr,g-5yhyct307p98
+	// e.g. g-twh19p9zcuqr, g-5yhyct307p98
 	SecurityGroupList []string `json:"securityGroupList"`
+	// EnterpriseSecurityGroupList are enterprise security groups that bound to ENIs
+	// e.g. esg-twh19p9zcuqr, esg-5yhyct307p98
+	EnterpriseSecurityGroupList []string `json:"enterpriseSecurityGroupList"`
 	// ENISyncPeriod how often to reconcile eni status
 	ENISyncPeriod types.Duration `json:"eniSyncPeriod"`
 	// RouteTableOffset route policy offset, default 127
 	RouteTableOffset int `json:"routeTableOffset"`
-	// PreAttachedENINum num of pre attached eni on node,default 2
+	// PreAttachedENINum num of pre attached eni on node,default 1
 	PreAttachedENINum int `json:"preAttachedENINum"`
 }
 

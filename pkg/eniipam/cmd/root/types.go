@@ -41,7 +41,7 @@ type Options struct {
 	AllocateIPConcurrencyLimit int
 	ReleaseIPConcurrencyLimit  int
 	BatchAddIPNum              int
-	IdleIPMaxPoolSize          int
-	IdleIPMinPoolSize          int
+	IdleIPPoolMaxSize          int
+	IdleIPPoolMinSize          int
 	stopCh                     chan struct{}
 }

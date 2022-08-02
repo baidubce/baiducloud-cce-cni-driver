@@ -84,8 +84,8 @@ type IPAM struct {
 
 	bucket            *ratelimit.Bucket
 	batchAddIPNum     int
-	idleIPMinPoolSize int
-	idleIPMaxPoolSize int
+	idleIPPoolMinSize int
+	idleIPPoolMaxSize int
 
 	// nodeENIMap is a map whose key is node name and value is eni Id
 	nodeENIMap map[string]string

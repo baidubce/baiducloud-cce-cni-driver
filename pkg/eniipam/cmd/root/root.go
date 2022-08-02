@@ -68,8 +68,8 @@ func NewRootCommand() *cobra.Command {
 		IPMutatingRate:             10,
 		IPMutatingBurst:            5,
 		BatchAddIPNum:              4,
-		IdleIPMaxPoolSize:          0,
-		IdleIPMinPoolSize:          0,
+		IdleIPPoolMaxSize:          6,
+		IdleIPPoolMinSize:          0,
 		AllocateIPConcurrencyLimit: 20,
 		ReleaseIPConcurrencyLimit:  30,
 	}
@@ -79,6 +79,9 @@ func NewRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "cce-ipam",
 		Run: func(cmd *cobra.Command, args []string) {
+			if err := options.validate(); err != nil {
+				log.Fatalf(ctx, "failed to validate options: %v", err)
+			}
 			runCommand(ctx, cmd, args, options)
 		},
 	}
@@ -126,6 +129,9 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			bccipam.SubnetSelectionPolicy(opts.SubnetSelectionPolicy),
 			opts.IPMutatingRate,
 			opts.IPMutatingBurst,
+			opts.IdleIPPoolMinSize,
+			opts.IdleIPPoolMaxSize,
+			opts.BatchAddIPNum,
 			opts.ResyncPeriod,
 			opts.ENISyncPeriod,
 			opts.GCPeriod,
@@ -147,8 +153,8 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.BatchAddIPNum,
 			opts.IPMutatingRate,
 			opts.IPMutatingBurst,
-			opts.IdleIPMinPoolSize,
-			opts.IdleIPMaxPoolSize,
+			opts.IdleIPPoolMinSize,
+			opts.IdleIPPoolMaxSize,
 			opts.Debug,
 		)
 		if err != nil {
@@ -272,10 +278,38 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.AllocateIPConcurrencyLimit, "allocate-ip-concurrency-limit", o.AllocateIPConcurrencyLimit, "Allocate IP Concurrency Limit")
 	fs.IntVar(&o.ReleaseIPConcurrencyLimit, "release-ip-concurrency-limit", o.ReleaseIPConcurrencyLimit, "Release IP Concurrency Limit")
 	fs.IntVar(&o.BatchAddIPNum, "batch-add-ip-num", o.BatchAddIPNum, "Batch Add Private IP Num")
-	fs.IntVar(&o.IdleIPMaxPoolSize, "idle-ip-max-pool-size", o.IdleIPMaxPoolSize, "Idle IP Max Pool Size")
-	fs.IntVar(&o.IdleIPMinPoolSize, "idle-ip-min-pool-size", o.IdleIPMinPoolSize, "Idle IP Min Pool Size")
+	fs.IntVar(&o.IdleIPPoolMaxSize, "idle-ip-pool-max-size", o.IdleIPPoolMaxSize, "Idle IP Pool Max Size")
+	fs.IntVar(&o.IdleIPPoolMinSize, "idle-ip-pool-min-size", o.IdleIPPoolMinSize, "Idle IP Pool Min Size")
 	fs.BoolVar(&o.Debug, "debug", o.Debug, "Debug mode")
 	leaderelectionconfig.BindFlags(&o.LeaderElection, fs)
+}
+
+func (o *Options) validate() error {
+	if o.BatchAddIPNum <= 0 {
+		return fmt.Errorf("--batch-add-ip-num must exceed 0")
+	}
+
+	if o.ENISyncPeriod <= 0 {
+		return fmt.Errorf("--eni-sync-period must exceed 0")
+	}
+
+	if o.GCPeriod <= 0 {
+		return fmt.Errorf("--gc-period must exceed 0")
+	}
+
+	if o.IPMutatingBurst <= 0 {
+		return fmt.Errorf("--ip-mutating-burst must exceed 0")
+	}
+
+	if o.IPMutatingRate <= 0 {
+		return fmt.Errorf("--ip-mutating-rate must exceed 0")
+	}
+
+	if o.IdleIPPoolMinSize > o.IdleIPPoolMaxSize {
+		return fmt.Errorf("--idle-ip-pool-min-size cannot exceed --idle-ip-pool-max-size")
+	}
+
+	return nil
 }
 
 // printFlags logs the flags in the flagset

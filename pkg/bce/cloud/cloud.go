@@ -175,6 +175,33 @@ func (c *Client) DeletePrivateIP(ctx context.Context, privateIP string, eniID st
 	return err
 }
 
+func (c *Client) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string) ([]string, error) {
+	t := time.Now()
+
+	resp, err := c.eniClient.BatchAddPrivateIp(&eni.EniBatchPrivateIpArgs{
+		EniId:                 eniID,
+		PrivateIpAddresses:    privateIPs,
+		PrivateIpAddressCount: count,
+	})
+
+	exportMetricAndLog(ctx, "BatchAddPrivateIP", t, err)
+
+	return resp.PrivateIpAddresses, err
+}
+
+func (c *Client) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string) error {
+	t := time.Now()
+
+	err := c.eniClient.BatchDeletePrivateIp(&eni.EniBatchPrivateIpArgs{
+		EniId:              eniID,
+		PrivateIpAddresses: privateIPs,
+	})
+
+	exportMetricAndLog(ctx, "BatchDeletePrivateIP", t, err)
+
+	return err
+}
+
 func (c *Client) CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error) {
 	t := time.Now()
 	resp, err := c.eniClient.CreateEni(args)
@@ -235,10 +262,10 @@ func (c *Client) CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleA
 	return resp.RouteRuleId, nil
 }
 
-func (c *Client) DeleteRoute(ctx context.Context, routeID string) error {
+func (c *Client) DeleteRouteRule(ctx context.Context, routeID string) error {
 	t := time.Now()
 	err := c.vpcClient.DeleteRouteRule(routeID, "")
-	exportMetric("DeleteRoute", t, err)
+	exportMetric("DeleteRouteRule", t, err)
 	return err
 }
 
@@ -262,10 +289,10 @@ func (c *Client) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]v
 	return resp.Subnets, nil
 }
 
-func (c *Client) DescribeInstance(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+func (c *Client) GetBCCInstanceDetail(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
 	t := time.Now()
 	resp, err := c.bccClient.GetInstanceDetail(instanceID)
-	exportMetric("DescribeInstance", t, err)
+	exportMetric("GetBCCInstanceDetail", t, err)
 	if err != nil {
 		return nil, err
 	}
@@ -302,17 +329,17 @@ func (c *Client) ListSecurityGroup(ctx context.Context, vpcID, instanceID string
 	return securityGroups, nil
 }
 
-func (c *Client) BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
+func (c *Client) GetBBCInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
 	t := time.Now()
 	resp, err := c.bbcClient.GetInstanceDetail(instanceID)
-	exportMetric("BBCGetInstanceDetail", t, err)
+	exportMetric("GetBBCInstanceDetail", t, err)
 	return resp, err
 }
 
-func (c *Client) BBCGetInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
+func (c *Client) GetBBCInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
 	t := time.Now()
 	resp, err := c.bbcClient.GetInstanceEni(instanceID)
-	exportMetric("BBCGetInstanceENI", t, err)
+	exportMetric("GetBBCInstanceENI", t, err)
 	return resp, err
 }
 

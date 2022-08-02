@@ -16,6 +16,7 @@
 package netlink
 
 import (
+	"log"
 	"syscall"
 
 	"github.com/vishvananda/netlink"
@@ -25,7 +26,10 @@ import (
 func IsNotExistError(err error) bool {
 	if errno, ok := err.(syscall.Errno); ok {
 		return errno == syscall.ENOENT || errno == syscall.ESRCH
+	} else {
+		log.Printf("Error %v is not type of syscall.Errno", err)
 	}
+
 	return false
 }
 

@@ -16,11 +16,13 @@
 package bcc
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/juju/ratelimit"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -51,8 +53,16 @@ const (
 )
 
 type eniAndIPAddrKey struct {
-	eniID  string
-	ipAddr string
+	nodeName string
+	eniID    string
+	ipAddr   string
+}
+
+type event struct {
+	node    *v1.Node
+	enis    []*enisdk.Eni
+	passive bool
+	ctx     context.Context
 }
 
 type IPAM struct {
@@ -68,8 +78,11 @@ type IPAM struct {
 	// ipam will rebuild cache if restarts, should not handle request from cni if cacheHasSynced is false
 	cacheHasSynced bool
 	// key is ip, value is wep
-	allocated map[string]*v1alpha1.WorkloadEndpoint
-	datastore *datastorev1.DataStore
+	allocated         map[string]*v1alpha1.WorkloadEndpoint
+	datastore         *datastorev1.DataStore
+	idleIPPoolMinSize int
+	idleIPPoolMaxSize int
+	batchAddIPNum     int
 
 	eventBroadcaster record.EventBroadcaster
 	eventRecorder    record.EventRecorder
@@ -91,6 +104,10 @@ type IPAM struct {
 	eniSyncPeriod         time.Duration
 	informerResyncPeriod  time.Duration
 	gcPeriod              time.Duration
+
+	// event channel
+	buildDataStoreEventChan map[string]chan *event
+	increasePoolEventChan   map[string]chan *event
 }
 
 var _ ipam.Interface = &IPAM{}

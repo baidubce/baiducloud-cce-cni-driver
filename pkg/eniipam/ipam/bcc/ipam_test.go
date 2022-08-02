@@ -17,7 +17,6 @@ package bcc
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -42,12 +41,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/keymutex"
 )
 
 func setupEnv(ctrl *gomock.Controller) (
@@ -175,6 +176,7 @@ func TestIPAM_Allocate(t *testing.T) {
 		eniSyncPeriod         time.Duration
 		informerResyncPeriod  time.Duration
 		gcPeriod              time.Duration
+		datastore             *datastorev1.DataStore
 	}
 	type args struct {
 		ctx         context.Context
@@ -244,7 +246,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "create normal pod",
+			name: "create normal pod without allocate ip",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
@@ -268,9 +270,14 @@ func TestIPAM_Allocate(t *testing.T) {
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
-				gomock.InOrder(
-					cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return("10.1.1.1", nil),
-				)
+				// gomock.InOrder(
+				// 	cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return("10.1.1.1", nil),
+				// )
+
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("test-node", "i-xxx")
+				ds.AddENIToStore("test-node", "eni-test")
+				ds.AddPrivateIPToStore("test-node", "eni-test", "10.1.1.1", false)
 
 				return fields{
 					ctrl: ctrl,
@@ -283,6 +290,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					cacheHasSynced:    true,
 					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
+					datastore:         ds,
 					eventBroadcaster:  brdcaster,
 					eventRecorder:     recorder,
 					kubeInformer:      kubeInformer,
@@ -318,63 +326,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				},
 			},
 			wantErr: false,
-		},
-		{
-			name: "create normal pod failed",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
-
-				kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
-					TypeMeta: metav1.TypeMeta{},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "busybox",
-					},
-					Spec: v1.PodSpec{
-						NodeName: "test-node",
-					},
-				}, metav1.CreateOptions{})
-
-				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test-node",
-					},
-				}, metav1.CreateOptions{})
-
-				waitForCacheSync(kubeInformer, crdInformer)
-
-				gomock.InOrder(
-					cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return("", fmt.Errorf("unknown error")),
-				)
-
-				return fields{
-					ctrl: ctrl,
-					lock: sync.RWMutex{},
-					eniCache: map[string][]*enisdk.Eni{
-						"test-node": []*enisdk.Eni{{
-							EniId: "eni-test",
-						}},
-					},
-					cacheHasSynced:    true,
-					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
-					privateIPNumCache: map[string]int{},
-					eventBroadcaster:  brdcaster,
-					eventRecorder:     recorder,
-					kubeInformer:      kubeInformer,
-					kubeClient:        kubeClient,
-					crdInformer:       crdInformer,
-					crdClient:         crdClient,
-					cloud:             cloudClient,
-					clock:             clock.NewFakeClock(time.Unix(0, 0)),
-					bucket:            ratelimit.NewBucket(100, 100),
-				}
-			}(),
-			args: args{
-				ctx:       context.TODO(),
-				name:      "busybox",
-				namespace: "default",
-			},
-			wantErr: true,
 		},
 		{
 			name: "create fix-ip pod",
@@ -426,8 +377,13 @@ func TestIPAM_Allocate(t *testing.T) {
 
 				gomock.InOrder(
 					cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil),
-					cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return("10.1.1.1", nil),
+					cloudClient.EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]string{"10.1.1.1"}, nil),
 				)
+
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("test-node", "i-xxx")
+				ds.AddENIToStore("test-node", "eni-test")
+				ds.AddPrivateIPToStore("test-node", "eni-test", "10.1.1.1", false)
 
 				return fields{
 					ctrl: ctrl,
@@ -448,6 +404,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					cacheHasSynced:    true,
 					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
+					datastore:         ds,
 					eventBroadcaster:  brdcaster,
 					eventRecorder:     recorder,
 					kubeInformer:      kubeInformer,
@@ -514,6 +471,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				eniSyncPeriod:         tt.fields.eniSyncPeriod,
 				informerResyncPeriod:  tt.fields.informerResyncPeriod,
 				gcPeriod:              tt.fields.gcPeriod,
+				datastore:             tt.fields.datastore,
 			}
 			got, err := ipam.Allocate(tt.args.ctx, tt.args.name, tt.args.namespace, tt.args.containerID)
 			if (err != nil) != tt.wantErr {
@@ -535,6 +493,7 @@ func TestIPAM_Release(t *testing.T) {
 		privateIPNumCache     map[string]int
 		cacheHasSynced        bool
 		allocated             map[string]*v1alpha1.WorkloadEndpoint
+		datastore             *datastorev1.DataStore
 		eventBroadcaster      record.EventBroadcaster
 		eventRecorder         record.EventRecorder
 		kubeInformer          informers.SharedInformerFactory
@@ -581,6 +540,10 @@ func TestIPAM_Release(t *testing.T) {
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("test-node", "i-xxx")
+				ds.AddENIToStore("test-node", "eni-test")
+
 				gomock.InOrder(
 					cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil),
 				)
@@ -602,6 +565,7 @@ func TestIPAM_Release(t *testing.T) {
 					kubeClient:        kubeClient,
 					crdInformer:       crdInformer,
 					crdClient:         crdClient,
+					datastore:         ds,
 					cloud:             cloudClient,
 					clock:             clock.NewFakeClock(time.Unix(0, 0)),
 					bucket:            ratelimit.NewBucket(100, 100),
@@ -628,6 +592,10 @@ func TestIPAM_Release(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
 
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("test-node", "i-xxx")
+				ds.AddENIToStore("test-node", "eni-test")
+
 				return fields{
 					ctrl: ctrl,
 					lock: sync.RWMutex{},
@@ -638,6 +606,7 @@ func TestIPAM_Release(t *testing.T) {
 					},
 					cacheHasSynced:    true,
 					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
+					datastore:         ds,
 					privateIPNumCache: map[string]int{},
 					eventBroadcaster:  brdcaster,
 					eventRecorder:     recorder,
@@ -677,6 +646,10 @@ func TestIPAM_Release(t *testing.T) {
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("test-node", "i-xxx")
+				ds.AddENIToStore("test-node", "eni-test")
+
 				return fields{
 					ctrl: ctrl,
 					lock: sync.RWMutex{},
@@ -688,6 +661,7 @@ func TestIPAM_Release(t *testing.T) {
 					cacheHasSynced:    true,
 					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
+					datastore:         ds,
 					eventBroadcaster:  brdcaster,
 					eventRecorder:     recorder,
 					kubeInformer:      kubeInformer,
@@ -728,6 +702,7 @@ func TestIPAM_Release(t *testing.T) {
 				lock:                  tt.fields.lock,
 				eniCache:              tt.fields.eniCache,
 				privateIPNumCache:     tt.fields.privateIPNumCache,
+				datastore:             tt.fields.datastore,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
 				allocated:             tt.fields.allocated,
 				eventBroadcaster:      tt.fields.eventBroadcaster,
@@ -754,6 +729,228 @@ func TestIPAM_Release(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Release() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func startInformers(kubeInformer informers.SharedInformerFactory, crdInformer crdinformers.SharedInformerFactory) {
+	nodeInformer := kubeInformer.Core().V1().Nodes().Informer()
+	podInformer := kubeInformer.Core().V1().Pods().Informer()
+	stsInformer := kubeInformer.Apps().V1().StatefulSets().Informer()
+	wepInformer := crdInformer.Cce().V1alpha1().WorkloadEndpoints().Informer()
+	ippoolInformer := crdInformer.Cce().V1alpha1().IPPools().Informer()
+	subnetInformer := crdInformer.Cce().V1alpha1().Subnets().Informer()
+
+	kubeInformer.Start(wait.NeverStop)
+	crdInformer.Start(wait.NeverStop)
+
+	cache.WaitForNamedCacheSync(
+		"cce-ipam",
+		wait.NeverStop,
+		nodeInformer.HasSynced,
+		podInformer.HasSynced,
+		stsInformer.HasSynced,
+		wepInformer.HasSynced,
+		ippoolInformer.HasSynced,
+		subnetInformer.HasSynced,
+	)
+}
+
+func TestIPAM_gcLeakedIP(t *testing.T) {
+	type fields struct {
+		ctrl                  *gomock.Controller
+		lock                  sync.RWMutex
+		nodeLock              keymutex.KeyMutex
+		datastore             *datastorev1.DataStore
+		eniCache              map[string][]*enisdk.Eni
+		possibleLeakedIPCache map[eniAndIPAddrKey]time.Time
+		allocated             map[string]*v1alpha1.WorkloadEndpoint
+		cacheHasSynced        bool
+		eventBroadcaster      record.EventBroadcaster
+		eventRecorder         record.EventRecorder
+		kubeInformer          informers.SharedInformerFactory
+		kubeClient            kubernetes.Interface
+		crdInformer           crdinformers.SharedInformerFactory
+		crdClient             versioned.Interface
+		cloud                 cloud.Interface
+		clock                 clock.Clock
+		cniMode               types.ContainerNetworkMode
+		vpcID                 string
+		clusterID             string
+		bucket                *ratelimit.Bucket
+		batchAddIPNum         int
+		gcPeriod              time.Duration
+	}
+	type args struct {
+		ctx context.Context
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "normal",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, brdcaster, recorder := setupEnv(ctrl)
+				// add two pod for test environment
+				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
+					TypeMeta: metav1.TypeMeta{},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "busybox",
+					},
+					Spec: v1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: v1.PodStatus{
+						PodIP: "10.1.1.2",
+					},
+				}, metav1.CreateOptions{})
+				_, _ = kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
+					TypeMeta: metav1.TypeMeta{},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "busybox2",
+					},
+					Spec: v1.PodSpec{
+						NodeName: "test-node",
+					},
+				}, metav1.CreateOptions{})
+				// add two wep for test environment
+				_, _ = crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "busybox",
+						Namespace: "default",
+					},
+					Spec: v1alpha1.WorkloadEndpointSpec{
+						IP:       "10.1.1.2",
+						ENIID:    "test-node-id",
+						Node:     "test-node",
+						UpdateAt: metav1.Time{time.Unix(0, 0)},
+					},
+				}, metav1.CreateOptions{})
+				_, _ = crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "busybox2",
+						Namespace: "default",
+					},
+					Spec: v1alpha1.WorkloadEndpointSpec{
+						IP:       "10.1.1.3",
+						ENIID:    "test-node-id",
+						Node:     "test-node",
+						UpdateAt: metav1.Time{time.Unix(0, 0)},
+					},
+				}, metav1.CreateOptions{})
+				startInformers(kubeInformer, crdInformer)
+
+				gomock.InOrder(
+					cloudClient.EXPECT().DeletePrivateIP(nil, "10.1.1.4", "eni-test").Return(nil),
+				)
+
+				return fields{
+					ctrl: ctrl,
+					lock: sync.RWMutex{},
+					datastore: func() *datastorev1.DataStore {
+						dt := datastorev1.NewDataStore()
+						err := dt.AddNodeToStore("test-node", "test-node-id")
+						if err != nil {
+							return nil
+						}
+						err = dt.AddPrivateIPToStore("test-node", "test-node-id", "10.1.1.2", true)
+						if err != nil {
+							return nil
+						}
+						err = dt.AddPrivateIPToStore("test-node", "test-node-id", "10.1.1.3", true)
+						if err != nil {
+							return nil
+						}
+						err = dt.AddPrivateIPToStore("test-node", "test-node-id", "10.1.1.4", true)
+						if err != nil {
+							return nil
+						}
+						return dt
+					}(),
+					eniCache: map[string][]*enisdk.Eni{
+						"test-node": []*enisdk.Eni{{
+							EniId: "eni-test",
+							PrivateIpSet: []enisdk.PrivateIp{
+								{
+									PublicIpAddress:  "",
+									Primary:          false,
+									PrivateIpAddress: "10.1.1.2",
+								},
+								{
+									PublicIpAddress:  "",
+									Primary:          false,
+									PrivateIpAddress: "10.1.1.3",
+								},
+								{
+									PublicIpAddress:  "",
+									Primary:          false,
+									PrivateIpAddress: "10.1.1.4",
+								},
+							},
+						}},
+					},
+					possibleLeakedIPCache: map[eniAndIPAddrKey]time.Time{},
+					cacheHasSynced:        true,
+					eventBroadcaster:      brdcaster,
+					eventRecorder:         recorder,
+					kubeInformer:          kubeInformer,
+					kubeClient:            kubeClient,
+					crdInformer:           crdInformer,
+					crdClient:             crdClient,
+					cloud:                 cloudClient,
+					allocated:             map[string]*v1alpha1.WorkloadEndpoint{},
+					bucket:                ratelimit.NewBucket(100, 100),
+				}
+			}(),
+			args:    args{},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.fields.ctrl != nil {
+				defer tt.fields.ctrl.Finish()
+			}
+			ipam := &IPAM{
+				eventBroadcaster:      tt.fields.eventBroadcaster,
+				eventRecorder:         tt.fields.eventRecorder,
+				kubeInformer:          tt.fields.kubeInformer,
+				kubeClient:            tt.fields.kubeClient,
+				crdInformer:           tt.fields.crdInformer,
+				crdClient:             tt.fields.crdClient,
+				cloud:                 tt.fields.cloud,
+				lock:                  tt.fields.lock,
+				cniMode:               tt.fields.cniMode,
+				vpcID:                 tt.fields.vpcID,
+				clusterID:             tt.fields.clusterID,
+				datastore:             tt.fields.datastore,
+				eniCache:              tt.fields.eniCache,
+				possibleLeakedIPCache: tt.fields.possibleLeakedIPCache,
+				allocated:             tt.fields.allocated,
+				bucket:                tt.fields.bucket,
+				batchAddIPNum:         tt.fields.batchAddIPNum,
+				cacheHasSynced:        tt.fields.cacheHasSynced,
+				gcPeriod:              tt.fields.gcPeriod,
+				clock:                 clock.NewFakeClock(time.Unix(0, 0)),
+			}
+			// build leaked ip cache
+			err := ipam.gcLeakedIP(tt.args.ctx)
+			// mock timeout
+			gcPruneExpiredDuration := ipamgeneric.LeakedPrivateIPExpiredTimeout + (1 * time.Minute)
+			for key, recordTime := range ipam.possibleLeakedIPCache {
+				ipam.possibleLeakedIPCache[key] = recordTime.Add(-gcPruneExpiredDuration)
+			}
+			// prune leaked ip
+			err = ipam.gcLeakedIP(tt.args.ctx)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("gcLeakedIP() error = %v, wantErr %v", err, tt.wantErr)
+				return
 			}
 		})
 	}
@@ -864,7 +1061,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 	}
 }
 
-func TestIPAM_buildENICache(t *testing.T) {
+func TestIPAM_buildInuseENICache(t *testing.T) {
 	type fields struct {
 		lock                  sync.RWMutex
 		eniCache              map[string][]*enisdk.Eni
@@ -956,8 +1153,8 @@ func TestIPAM_buildENICache(t *testing.T) {
 				informerResyncPeriod:  tt.fields.informerResyncPeriod,
 				gcPeriod:              tt.fields.gcPeriod,
 			}
-			if err := ipam.buildENICache(tt.args.ctx, tt.args.nodes, tt.args.enis); (err != nil) != tt.wantErr {
-				t.Errorf("buildENICache() error = %v, wantErr %v", err, tt.wantErr)
+			if err := ipam.buildInuseENICache(tt.args.ctx, tt.args.nodes, tt.args.enis); (err != nil) != tt.wantErr {
+				t.Errorf("buildInuseENICache() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -1092,6 +1289,123 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 			}
 			if err := ipam.updateIPPoolStatus(tt.args.ctx, tt.args.node, tt.args.instanceID, tt.args.enis); (err != nil) != tt.wantErr {
 				t.Errorf("updateIPPoolStatus() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIPAM_canAllocateIP(t *testing.T) {
+	type fields struct {
+		lock                    sync.RWMutex
+		eniCache                map[string][]*enisdk.Eni
+		privateIPNumCache       map[string]int
+		possibleLeakedIPCache   map[eniAndIPAddrKey]time.Time
+		addIPBackoffCache       map[string]*wait.Backoff
+		cacheHasSynced          bool
+		allocated               map[string]*v1alpha1.WorkloadEndpoint
+		datastore               *datastorev1.DataStore
+		idleIPPoolMinSize       int
+		idleIPPoolMaxSize       int
+		batchAddIPNum           int
+		eventBroadcaster        record.EventBroadcaster
+		eventRecorder           record.EventRecorder
+		kubeInformer            informers.SharedInformerFactory
+		kubeClient              kubernetes.Interface
+		crdInformer             crdinformers.SharedInformerFactory
+		crdClient               versioned.Interface
+		cloud                   cloud.Interface
+		clock                   clock.Clock
+		cniMode                 types.ContainerNetworkMode
+		vpcID                   string
+		clusterID               string
+		subnetSelectionPolicy   SubnetSelectionPolicy
+		bucket                  *ratelimit.Bucket
+		eniSyncPeriod           time.Duration
+		informerResyncPeriod    time.Duration
+		gcPeriod                time.Duration
+		buildDataStoreEventChan map[string]chan *event
+		increasePoolEventChan   map[string]chan *event
+	}
+	type args struct {
+		ctx      context.Context
+		nodeName string
+		enis     []*enisdk.Eni
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "node with no eni",
+			fields: fields{
+				lock:      sync.RWMutex{},
+				datastore: &datastorev1.DataStore{},
+			},
+			args: args{
+				ctx:      context.TODO(),
+				nodeName: "xxx",
+				enis:     []*enisdk.Eni{},
+			},
+			want: false,
+		},
+		{
+			name: "node with enis",
+			fields: func() fields {
+				ds := datastorev1.NewDataStore()
+				ds.AddNodeToStore("xxx", "i-xxx")
+				ds.AddENIToStore("xxx", "eni-xxx")
+				ds.AddPrivateIPToStore("xxx", "eni-xxx", "1.1.1.1", false)
+
+				return fields{
+					lock:      sync.RWMutex{},
+					datastore: ds,
+				}
+			}(),
+			args: args{
+				ctx:      context.TODO(),
+				nodeName: "xxx",
+				enis:     []*enisdk.Eni{{EniId: "eni-xxx"}},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipam := &IPAM{
+				lock:                    tt.fields.lock,
+				eniCache:                tt.fields.eniCache,
+				privateIPNumCache:       tt.fields.privateIPNumCache,
+				possibleLeakedIPCache:   tt.fields.possibleLeakedIPCache,
+				addIPBackoffCache:       tt.fields.addIPBackoffCache,
+				cacheHasSynced:          tt.fields.cacheHasSynced,
+				allocated:               tt.fields.allocated,
+				datastore:               tt.fields.datastore,
+				idleIPPoolMinSize:       tt.fields.idleIPPoolMinSize,
+				idleIPPoolMaxSize:       tt.fields.idleIPPoolMaxSize,
+				batchAddIPNum:           tt.fields.batchAddIPNum,
+				eventBroadcaster:        tt.fields.eventBroadcaster,
+				eventRecorder:           tt.fields.eventRecorder,
+				kubeInformer:            tt.fields.kubeInformer,
+				kubeClient:              tt.fields.kubeClient,
+				crdInformer:             tt.fields.crdInformer,
+				crdClient:               tt.fields.crdClient,
+				cloud:                   tt.fields.cloud,
+				clock:                   tt.fields.clock,
+				cniMode:                 tt.fields.cniMode,
+				vpcID:                   tt.fields.vpcID,
+				clusterID:               tt.fields.clusterID,
+				subnetSelectionPolicy:   tt.fields.subnetSelectionPolicy,
+				bucket:                  tt.fields.bucket,
+				eniSyncPeriod:           tt.fields.eniSyncPeriod,
+				informerResyncPeriod:    tt.fields.informerResyncPeriod,
+				gcPeriod:                tt.fields.gcPeriod,
+				buildDataStoreEventChan: tt.fields.buildDataStoreEventChan,
+				increasePoolEventChan:   tt.fields.increasePoolEventChan,
+			}
+			if got := ipam.canAllocateIP(tt.args.ctx, tt.args.nodeName, tt.args.enis); got != tt.want {
+				t.Errorf("IPAM.canAllocateIP() = %v, want %v", got, tt.want)
 			}
 		})
 	}

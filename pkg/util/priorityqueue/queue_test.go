@@ -39,6 +39,27 @@ func TestPriorityQueue(t *testing.T) {
 	}
 }
 
+func TestPriorityQueueTop(t *testing.T) {
+	pq := New()
+	elements := []int{5, 3, 7, 8, 6, 2, 9, 33}
+	for _, e := range elements {
+		pq.Insert(e, int64(e))
+	}
+
+	sort.Ints(elements)
+	for _, e := range elements {
+		item, err := pq.Top()
+		pq.Pop()
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+
+		if e != item {
+			t.Fatalf("expected %v, got %v", e, item)
+		}
+	}
+}
+
 func TestPriorityQueueUpdate(t *testing.T) {
 	pq := New()
 	pq.Insert("foo", 3)
@@ -52,6 +73,52 @@ func TestPriorityQueueUpdate(t *testing.T) {
 
 	if item.(string) != "bar" {
 		t.Fatal("priority update failed")
+	}
+
+	item, _ = pq.Top()
+	if item.(string) != "foo" {
+		t.Fatal("priority update failed")
+	}
+}
+
+func TestPriorityQueueRemove(t *testing.T) {
+	pq := New()
+	pq.Insert("a", 3)
+	pq.Insert("b", 8)
+	pq.Insert("c", 2)
+	pq.Insert("d", 5)
+
+	item, err := pq.Top()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if item.(string) != "c" {
+		t.Fatalf("expected %v, got %v", "c", item)
+	}
+
+	pq.Remove("foo")
+	item, _ = pq.Top()
+	if item.(string) != "c" {
+		t.Fatalf("expected %v, got %v", "c", item)
+	}
+
+	pq.Remove("c")
+	item, _ = pq.Top()
+	if item.(string) != "a" {
+		t.Fatalf("expected %v, got %v", "a", item)
+	}
+
+	pq.Remove("a")
+	item, _ = pq.Top()
+	if item.(string) != "d" {
+		t.Fatalf("expected %v, got %v", "d", item)
+	}
+
+	pq.Remove("d")
+	item, _ = pq.Top()
+	if item.(string) != "b" {
+		t.Fatalf("expected %v, got %v", "b", item)
 	}
 }
 

@@ -133,10 +133,11 @@ type SubnetList struct {
 }
 
 type ENISpec struct {
-	VPCID            string   `json:"vpcID"`
-	AvailabilityZone string   `json:"availabilityZone"`
-	Subnets          []string `json:"subnets"`
-	SecurityGroups   []string `json:"securityGroups"`
+	VPCID                    string   `json:"vpcID"`
+	AvailabilityZone         string   `json:"availabilityZone"`
+	Subnets                  []string `json:"subnets"`
+	SecurityGroups           []string `json:"securityGroups"`
+	EnterpriseSecurityGroups []string `json:"enterpriseSecurityGroups"`
 }
 
 type ENIStatus struct {

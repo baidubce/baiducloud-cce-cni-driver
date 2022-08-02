@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 
+	bbcapi "github.com/baidubce/bce-sdk-go/services/bbc"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,12 +62,14 @@ type Controller struct {
 	instanceID    string
 	instanceType  metadata.InstanceTypeEx
 	nodeName      string
-	instance      *bccapi.InstanceModel
+	bccInstance   *bccapi.InstanceModel
+	bbcInstance   *bbcapi.GetInstanceEniResult
 	// ENI
-	cloudClient         cloud.Interface
-	eniSubnetCandidates []string // cluster-level candidate subnets for eni
-	eniSecurityGroups   []string
-	preAttachedENINum   int
+	cloudClient                 cloud.Interface
+	eniSubnetCandidates         []string // cluster-level candidate subnets for eni
+	eniSecurityGroups           []string
+	eniEnterpriseSecurityGroups []string
+	preAttachedENINum           int
 	// Primary ENI Secondary IP
 	podSubnetCandidates []string // cluster-level candidate subnets for pod
 	// misc
@@ -83,6 +86,7 @@ func New(
 	instanceType metadata.InstanceTypeEx,
 	eniSubnetList []string,
 	securityGroupList []string,
+	enterpriseSecurityGroupList []string,
 	preAttachedENINum int,
 	podSubnetList []string,
 ) *Controller {
@@ -102,12 +106,14 @@ func New(
 
 	c.eniSubnetCandidates = eniSubnetList
 	c.eniSecurityGroups = securityGroupList
+	c.eniEnterpriseSecurityGroups = enterpriseSecurityGroupList
 	c.podSubnetCandidates = podSubnetList
 	c.preAttachedENINum = preAttachedENINum
 
 	if !types.IsCCECNIModeBasedOnVPCRoute(cniMode) {
 		log.Infof(ctx, "cluster-level eni candidate subnets are: %v", c.eniSubnetCandidates)
 		log.Infof(ctx, "security groups bound to eni are: %v", c.eniSecurityGroups)
+		log.Infof(ctx, "enterprise security groups bound to eni are: %v", c.eniEnterpriseSecurityGroups)
 		log.Infof(ctx, "cluster-level pod candidate subnets are: %v", c.podSubnetCandidates)
 	}
 
@@ -169,14 +175,14 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	}
 
 	// cache instance
-	if c.instance == nil {
-		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
+	if c.bccInstance == nil {
+		instance, err := c.cloudClient.GetBCCInstanceDetail(ctx, c.instanceID)
 		if err != nil {
 			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
 			return err
 		}
 		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
-		c.instance = instance
+		c.bccInstance = instance
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -186,12 +192,20 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 			return err
 		}
 
-		result.Spec.ENI.AvailabilityZone = c.instance.ZoneName
-		result.Spec.ENI.VPCID = c.instance.VpcId
+		result.Spec.ENI.AvailabilityZone = c.bccInstance.ZoneName
+		result.Spec.ENI.VPCID = c.bccInstance.VpcId
 		result.Spec.ENI.Subnets = c.findSameZoneSubnets(ctx, c.eniSubnetCandidates)
 		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
-		if len(result.Spec.ENI.SecurityGroups) == 0 {
+		// update enterprise security groups
+		if len(result.Spec.ENI.EnterpriseSecurityGroups) == 0 {
+			if len(c.eniEnterpriseSecurityGroups) != 0 {
+				result.Spec.ENI.EnterpriseSecurityGroups = c.eniEnterpriseSecurityGroups
+			}
+		}
+
+		// update normal security groups
+		if len(result.Spec.ENI.EnterpriseSecurityGroups) == 0 && len(result.Spec.ENI.SecurityGroups) == 0 {
 			// respect user specified eni security group via configuration file,
 			if len(c.eniSecurityGroups) != 0 {
 				result.Spec.ENI.SecurityGroups = c.eniSecurityGroups
@@ -205,7 +219,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		}
 
 		if len(result.Spec.ENI.Subnets) == 0 {
-			msg := fmt.Sprintf("node %v in zone %v has no eni subnet in the same zone. subnet zone cache: %+v", nodeName, c.instance.ZoneName, c.subnetZoneCache)
+			msg := fmt.Sprintf("node %v in zone %v has no eni subnet in the same zone. subnet zone cache: %+v", nodeName, c.bccInstance.ZoneName, c.subnetZoneCache)
 			log.Error(ctx, msg)
 			c.eventRecorder.Event(&v1.ObjectReference{Kind: "ENISubnet", Name: "ENISubnetEmpty"}, v1.EventTypeWarning, "ENISubnetEmpty", msg)
 		}
@@ -217,8 +231,8 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 		}
 
 		var maxENINum, maxIPPerENI int
-		maxENINum = utileni.GetMaxENIPerNode(c.instance.CpuCount)
-		maxIPPerENI = utileni.GetMaxIPPerENI(c.instance.MemoryCapacityInGB)
+		maxENINum = utileni.GetMaxENIPerNode(c.bccInstance.CpuCount)
+		maxIPPerENI = utileni.GetMaxIPPerENI(c.bccInstance.MemoryCapacityInGB)
 
 		err = c.patchENICapacityInfoToNode(ctx, maxENINum, maxIPPerENI)
 		if err != nil {
@@ -248,14 +262,14 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 	}
 
 	// cache instance
-	if c.instance == nil {
-		instance, err := c.cloudClient.DescribeInstance(ctx, c.instanceID)
+	if c.bbcInstance == nil {
+		instance, err := c.cloudClient.GetBBCInstanceENI(ctx, c.instanceID)
 		if err != nil {
 			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
 			return err
 		}
 		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
-		c.instance = instance
+		c.bbcInstance = instance
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -268,8 +282,8 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 		result.Spec.PodSubnets = c.findSameZoneSubnets(ctx, c.podSubnetCandidates)
 		result.Spec.CreationSource = ipamgeneric.IPPoolCreationSourceCNI
 
-		if len(result.Spec.PodSubnets) == 0 && c.instance.SubnetId != "" {
-			result.Spec.PodSubnets = append(result.Spec.PodSubnets, c.instance.SubnetId)
+		if len(result.Spec.PodSubnets) == 0 && c.bbcInstance.SubnetId != "" {
+			result.Spec.PodSubnets = append(result.Spec.PodSubnets, c.bbcInstance.SubnetId)
 		}
 
 		_, updateErr := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, result, metav1.UpdateOptions{})
@@ -409,9 +423,19 @@ func (c *Controller) findSameZoneSubnets(ctx context.Context, subnets []string) 
 			c.subnetZoneCache[s] = szone
 		}
 
-		if szone == c.instance.ZoneName {
-			filteredSubnets = append(filteredSubnets, s)
-			log.V(6).Infof(ctx, "add subnet %v at zone %v as node-level candidate", s, szone)
+		if c.bccInstance != nil {
+			if szone == c.bccInstance.ZoneName {
+				filteredSubnets = append(filteredSubnets, s)
+				log.V(6).Infof(ctx, "add subnet %v at zone %v as node-level candidate", s, szone)
+			}
+		}
+
+		if c.bbcInstance != nil {
+			if szone == c.bbcInstance.ZoneName {
+				filteredSubnets = append(filteredSubnets, s)
+				log.V(6).Infof(ctx, "add subnet %v at zone %v as node-level candidate", s, szone)
+			}
+
 		}
 	}
 

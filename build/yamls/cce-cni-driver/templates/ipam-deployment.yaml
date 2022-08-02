@@ -44,7 +44,7 @@ spec:
           volumeMounts:
             - name: log-dir
               mountPath: /var/log/cce
-            {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+            {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
             - name: cce-plugin-token
               mountPath: /var/run/secrets/cce/cce-plugin-token
               readOnly: true
@@ -106,7 +106,7 @@ spec:
           hostPath:
             path: /var/log/cce
             type: "DirectoryOrCreate"
-        {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+        {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
         - name: cce-plugin-token
           secret:
             defaultMode: 0400

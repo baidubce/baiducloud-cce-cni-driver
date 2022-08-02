@@ -7,7 +7,8 @@ GO      := $(GO_1_16_BIN)/go
 GOROOT  := $(GO_1_16_HOME)
 GOPATH  := $(shell $(GO) env GOPATH)
 GOMOD   := $(GO) mod
-GOBUILD := CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build
+GOARCH  := $(shell $(GO) env GOARCH)
+GOBUILD := CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build
 GOTEST  := $(GO) test -gcflags="-N -l"
 GOPKGS  := $$($(GO) list ./...| grep -vE "vendor")
 GOGCFLAGS := -gcflags=all="-trimpath=$(GOPATH)" -asmflags=all="-trimpath=$(GOPATH)"
@@ -19,7 +20,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.3.3
+VERSION := v1.3.5
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -99,7 +100,13 @@ codegen-image:
 
 cni-image: package-bin
 	@echo "===> Building cce cni image <==="
+ifeq ($(GOARCH), amd64)
 	docker build -t registry.baidubce.com/cce-plugin-pro/cce-cni:$(VERSION) -f build/images/cce-cni/Dockerfile .
+endif
+ifeq ($(GOARCH), arm64)
+	docker build -t registry.baidubce.com/cce-plugin-pro/cce-cni-arm64:$(VERSION) -f build/images/cce-cni/Dockerfile .
+endif
+
 
 felix-image:
 	@echo "===> Building cce felix image <==="
@@ -107,7 +114,12 @@ felix-image:
 
 push-cni-image:cni-image
 	@echo "===> Pushing cce cni image <==="
+ifeq ($(GOARCH), amd64)
 	docker push registry.baidubce.com/cce-plugin-pro/cce-cni:$(VERSION)
+endif
+ifeq ($(GOARCH), arm64)
+	docker push registry.baidubce.com/cce-plugin-pro/cce-cni-arm64:$(VERSION)
+endif
 
 push-felix-image:felix-image
 	@echo "===> Pushing cce felix image <==="
@@ -115,9 +127,19 @@ push-felix-image:felix-image
 
 push-cni-test-image: build package-bin
 	@echo "===> Building cce cni test image <==="
+ifeq ($(GOARCH), amd64)
 	docker build -t registry.baidubce.com/cce-plugin-dev/cce-cni:$(TAG) -f build/images/cce-cni/Dockerfile .
+endif
+ifeq ($(GOARCH), arm64)
+	docker build -t registry.baidubce.com/cce-plugin-dev/cce-cni-arm64:$(TAG) -f build/images/cce-cni/Dockerfile .
+endif
 	@echo "===> Pushing cce cni test image <==="
+ifeq ($(GOARCH), amd64)
 	docker push registry.baidubce.com/cce-plugin-dev/cce-cni:$(TAG)
+endif
+ifeq ($(GOARCH), arm64)
+	docker push registry.baidubce.com/cce-plugin-dev/cce-cni-arm64:$(TAG)
+endif
 
 codegen:codegen-image
 	@echo "===> Updating generated code <==="

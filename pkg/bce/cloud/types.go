@@ -29,6 +29,8 @@ type Interface interface {
 	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string) (string, error)
 	DeletePrivateIP(ctx context.Context, privateIP string, eniID string) error
+	BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string) ([]string, error)
+	BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string) error
 	CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error)
 	DeleteENI(ctx context.Context, eniID string) error
 	AttachENI(ctx context.Context, args *eni.EniInstance) error
@@ -37,17 +39,17 @@ type Interface interface {
 
 	ListRouteTable(ctx context.Context, vpcID, routeTableID string) ([]vpc.RouteRule, error)
 	CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleArgs) (string, error)
-	DeleteRoute(ctx context.Context, routeID string) error
+	DeleteRouteRule(ctx context.Context, routeID string) error
 
 	DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error)
 	ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error)
 
 	ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error)
 
-	DescribeInstance(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error)
+	GetBCCInstanceDetail(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error)
 
-	BBCGetInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error)
-	BBCGetInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error)
+	GetBBCInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error)
+	GetBBCInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error)
 	BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error)
 	BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error
 	BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error)

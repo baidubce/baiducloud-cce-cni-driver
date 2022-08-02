@@ -19,7 +19,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -47,11 +49,11 @@ const (
 	NodeAnnotationPrefix = "node.alpha.kubernetes.io/"
 	// NodeAnnotationAdvertiseRoute indicates whether to advertise route to vpc route table
 	NodeAnnotationAdvertiseRoute = NodeAnnotationPrefix + "advertise-route"
+
+	ensureVPCRoutePossibilityEnvKey = "ENSURE_VPC_ROUTE_POSSIBILITY"
 )
 
 var (
-	eventObject = &v1.ObjectReference{Kind: "vpc", Name: "cce-cni-route-controller"}
-
 	// ErrNoPodCIDR it may happen when kube-controller-manager not update pod CIDR for a new node that in time.
 	ErrNoPodCIDR = errors.New("no pod CIDR found")
 	// ErrNoNodeAddress if a node does not have a address
@@ -63,25 +65,25 @@ var (
 // RouteController manages both vpc and static routes for local host
 type RouteController struct {
 	cache         *StaticRouteCache
-	KubeClient    kubernetes.Interface
-	CloudClient   cloud.Interface
-	CRDClient     clientset.Interface
-	MetaClient    metadata.Interface
-	EventRecorder record.EventRecorder
+	kubeClient    kubernetes.Interface
+	cloudClient   cloud.Interface
+	crdClient     clientset.Interface
+	metaClient    metadata.Interface
+	eventRecorder record.EventRecorder
 
-	// Properties from bce
-	VPCID             string
-	HostInstanceID    string
-	ClusterID         string
-	EnableStaticRoute bool
-	EnableVPCRoute    bool
+	// properties from bce
+	vpcID             string
+	hostInstanceID    string
+	clusterID         string
+	enableStaticRoute bool
+	enableVPCRoute    bool
 
-	ContainerNetworkCIDRIPv4 string
-	ContainerNetworkCIDRIPv6 string
+	containerNetworkCIDRIPv4 string
+	containerNetworkCIDRIPv6 string
 
-	// Properties from k8s
-	NodeName string
-	PodCIDRs []string
+	// properties from k8s
+	nodeName string
+	podCIDRs []string
 }
 
 var _ k8swatcher.NodeHandler = &RouteController{}
@@ -101,18 +103,18 @@ func NewRouteController(
 
 	rc := &RouteController{
 		cache:                    &StaticRouteCache{routeMap: make(map[string]*cachedStaticRoute)},
-		KubeClient:               kubeClient,
-		CloudClient:              cloudClient,
-		CRDClient:                crdClient,
-		MetaClient:               metadata.NewClient(),
-		EventRecorder:            eventRecorder,
-		NodeName:                 hostName,
-		ClusterID:                clusterID,
-		HostInstanceID:           instanceID,
-		EnableStaticRoute:        enableStaticRoute,
-		EnableVPCRoute:           enableVPCRoute,
-		ContainerNetworkCIDRIPv4: containerNetworkCIDRIPv4,
-		ContainerNetworkCIDRIPv6: containerNetworkCIDRIPv6,
+		kubeClient:               kubeClient,
+		cloudClient:              cloudClient,
+		crdClient:                crdClient,
+		metaClient:               metadata.NewClient(),
+		eventRecorder:            eventRecorder,
+		nodeName:                 hostName,
+		clusterID:                clusterID,
+		hostInstanceID:           instanceID,
+		enableStaticRoute:        enableStaticRoute,
+		enableVPCRoute:           enableVPCRoute,
+		containerNetworkCIDRIPv4: containerNetworkCIDRIPv4,
+		containerNetworkCIDRIPv6: containerNetworkCIDRIPv6,
 	}
 	if err := rc.init(); err != nil {
 		return nil, err
@@ -129,7 +131,7 @@ func (rc *RouteController) SyncNode(nodeKey string, nodeLister corelisters.NodeL
 func (rc *RouteController) init() error {
 	ctx := log.NewContext()
 
-	if rc.EnableVPCRoute {
+	if rc.enableVPCRoute {
 		vpcID, err := rc.getVPCID(ctx)
 		if err != nil {
 			log.Errorf(ctx, "init RouteController error: %v", err)
@@ -142,22 +144,22 @@ func (rc *RouteController) init() error {
 			log.Errorf(ctx, "init RouteController error: %v", err)
 			return err
 		}
-		log.Infof(ctx, "init: node %v has instanceID %s", rc.NodeName, instanceID)
+		log.Infof(ctx, "init: node %v has instanceID %s", rc.nodeName, instanceID)
 	}
 
 	return nil
 }
 
 func (rc *RouteController) getVPCID(ctx context.Context) (string, error) {
-	if rc.VPCID == "" {
-		vpcID, err := rc.MetaClient.GetVPCID()
+	if rc.vpcID == "" {
+		vpcID, err := rc.metaClient.GetVPCID()
 		if err != nil {
 			return "", fmt.Errorf("failed to get vpcID from metadata api: %v", err)
 		}
-		rc.VPCID = vpcID
+		rc.vpcID = vpcID
 	}
 
-	return rc.VPCID, nil
+	return rc.vpcID, nil
 }
 
 func (rc *RouteController) listVPCRouteTable(ctx context.Context) ([]vpc.RouteRule, error) {
@@ -165,7 +167,7 @@ func (rc *RouteController) listVPCRouteTable(ctx context.Context) ([]vpc.RouteRu
 	if err != nil {
 		return nil, err
 	}
-	rules, err := rc.CloudClient.ListRouteTable(ctx, vpcID, "")
+	rules, err := rc.cloudClient.ListRouteTable(ctx, vpcID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -177,24 +179,24 @@ func (rc *RouteController) listVPCRouteTable(ctx context.Context) ([]vpc.RouteRu
 }
 
 func (rc *RouteController) getHostInstanceID(ctx context.Context) (string, error) {
-	if rc.HostInstanceID == "" {
-		instanceID, err := rc.MetaClient.GetInstanceID()
+	if rc.hostInstanceID == "" {
+		instanceID, err := rc.metaClient.GetInstanceID()
 		if err != nil {
 			return "", fmt.Errorf("failed to get instanceID from metadata api: %v", err)
 		}
-		rc.HostInstanceID = instanceID
+		rc.hostInstanceID = instanceID
 	}
 
-	return rc.HostInstanceID, nil
+	return rc.hostInstanceID, nil
 }
 
 func (rc *RouteController) getPodCIDRs(ctx context.Context) ([]string, error) {
-	if rc.PodCIDRs != nil {
-		return rc.PodCIDRs, nil
+	if rc.podCIDRs != nil {
+		return rc.podCIDRs, nil
 	}
 
-	ippoolName := utilippool.GetNodeIPPoolName(rc.NodeName)
-	ippool, err := rc.CRDClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, ippoolName, metav1.GetOptions{})
+	ippoolName := utilippool.GetNodeIPPoolName(rc.nodeName)
+	ippool, err := rc.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, ippoolName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -207,22 +209,17 @@ func (rc *RouteController) getPodCIDRs(ctx context.Context) ([]string, error) {
 		podCIDRs = append(podCIDRs, iprange.CIDR)
 	}
 
-	if len(rc.PodCIDRs) == 0 {
+	if len(podCIDRs) == 0 {
 		return nil, fmt.Errorf("node.spec.podCIDRs is empty")
 	}
 
-	rc.PodCIDRs = podCIDRs
-	return rc.PodCIDRs, nil
+	rc.podCIDRs = podCIDRs
+	return rc.podCIDRs, nil
 }
 
 // ensureVPCRoute ensures <0.0.0.0/0	nodePodCIDR	-> HostInstanceID> vpc route
-func (rc *RouteController) ensureVPCRoute(ctx context.Context) error {
+func (rc *RouteController) ensureVPCRoute(ctx context.Context, thisNode *v1.Node) error {
 	routes, err := rc.listVPCRouteTable(ctx)
-	if err != nil {
-		return err
-	}
-
-	thisNode, err := rc.KubeClient.CoreV1().Nodes().Get(ctx, rc.NodeName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -231,7 +228,7 @@ func (rc *RouteController) ensureVPCRoute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.V(6).Infof(ctx, "advertiseRoute for node %s: %v", rc.NodeName, shouldAdvertiseRoute)
+	log.V(6).Infof(ctx, "advertiseRoute for node %s: %v", rc.nodeName, shouldAdvertiseRoute)
 
 	return rc.reconcileVPCRoute(ctx, routes, shouldAdvertiseRoute)
 }
@@ -247,16 +244,16 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 		}
 		if isResponsible {
 			// ignore pod cidr empty
-			if len(rc.PodCIDRs) == 0 {
+			if len(rc.podCIDRs) == 0 {
 				continue
 			}
 			// this is the target route
-			if slice.ContainsString(rc.PodCIDRs, route.DestinationAddress, nil) && shouldAdvertiseRoute {
+			if slice.ContainsString(rc.podCIDRs, route.DestinationAddress, nil) && shouldAdvertiseRoute {
 				isRouteExist[route.DestinationAddress] = true
 				continue
 			}
 			// this is the old route
-			if err := rc.CloudClient.DeleteRoute(ctx, route.RouteRuleId); err != nil && !isNotFoundError(err) {
+			if err := rc.cloudClient.DeleteRouteRule(ctx, route.RouteRuleId); err != nil && !isNotFoundError(err) {
 				log.Errorf(ctx, "failed to remove old route %+v: %v", route, err)
 				return err
 			}
@@ -267,7 +264,7 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 	}
 
 	if shouldAdvertiseRoute {
-		for _, cidr := range rc.PodCIDRs {
+		for _, cidr := range rc.podCIDRs {
 			if _, ok := isRouteExist[cidr]; ok {
 				log.V(6).Infof(ctx, "skip adding target route for pod cidr: %s", cidr)
 				continue
@@ -276,9 +273,9 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 				RouteTableId:       routes[0].RouteTableId, // len(routes) >= 1
 				SourceAddress:      "0.0.0.0/0",
 				DestinationAddress: cidr,
-				NexthopId:          rc.HostInstanceID,
+				NexthopId:          rc.hostInstanceID,
 				NexthopType:        "custom",
-				Description:        fmt.Sprintf("auto generated by cce:%s", rc.ClusterID),
+				Description:        fmt.Sprintf("auto generated by cce:%s", rc.clusterID),
 			}
 			if k8snet.IsIPv4CIDRString(cidr) {
 				createRouteArg.SourceAddress = "0.0.0.0/0"
@@ -292,7 +289,7 @@ func (rc *RouteController) reconcileVPCRoute(ctx context.Context, routes []vpc.R
 				return err
 			}
 			// create target route
-			if _, err := rc.CloudClient.CreateRouteRule(ctx, createRouteArg); err != nil {
+			if _, err := rc.cloudClient.CreateRouteRule(ctx, createRouteArg); err != nil {
 				if !cloud.IsErrorRouteRuleRepeated(err) {
 					log.Errorf(ctx, "failed to create target route <%s %s -> %s>: %v", createRouteArg.SourceAddress, createRouteArg.DestinationAddress, createRouteArg.NexthopId, err)
 					return err
@@ -328,8 +325,11 @@ func (rc *RouteController) advertiseRoute(node *v1.Node) (bool, error) {
 
 // syncRoute syncs vpc route and static routes
 func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error {
-	startTime := time.Now()
-	var patchErr error
+	var (
+		startTime = time.Now()
+		patchErr  error
+	)
+
 	log.V(6).Infof(ctx, "sync route for node %v starts", nodeName)
 
 	defer func() {
@@ -340,26 +340,37 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 	}()
 
 	// only create vpc route for our own node
-	if rc.EnableVPCRoute && nodeName == rc.NodeName {
-		rc.EventRecorder.Eventf(eventObject, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v", rc.NodeName)
+	if rc.enableVPCRoute && nodeName == rc.nodeName {
+		thisNode, err := rc.kubeClient.CoreV1().Nodes().Get(ctx, rc.nodeName, metav1.GetOptions{})
+		if err != nil {
+			log.Errorf(ctx, "failed to get k8s node %v: %v", rc.nodeName, err)
+			return err
+		}
+
+		rc.eventRecorder.Eventf(thisNode, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v", rc.nodeName)
 
 		podCIDRs, err := rc.getPodCIDRs(ctx)
 		if err != nil {
-			log.Errorf(ctx, "failed to get pod cidrs for node %s: %v", rc.NodeName, err)
+			log.Errorf(ctx, "failed to get pod cidrs for node %s: %v", rc.nodeName, err)
 			return err
 		}
-		log.Infof(ctx, "node %v has podCIDRs %s", rc.NodeName, podCIDRs)
+		log.Infof(ctx, "node %v has podCIDRs %s", rc.nodeName, podCIDRs)
 
-		err = rc.ensureVPCRoute(ctx)
+		if !rc.shouldEnsuringRoute(ctx) {
+			log.Infof(ctx, "node %v skipped ensuring vpc route", rc.nodeName)
+			return nil
+		}
+
+		err = rc.ensureVPCRoute(ctx, thisNode)
 		// we only taint node if:
 		// 1. create route failed due to quota
 		// 2. NetworkUnavailable not exists or true.
 		if err != nil && cloud.IsErrorQuotaLimitExceeded(err) &&
-			k8sutil.GetNetworkingCondition(ctx, rc.KubeClient, rc.NodeName) != v1.ConditionFalse {
+			k8sutil.GetNetworkingCondition(ctx, rc.kubeClient, rc.nodeName) != v1.ConditionFalse {
 			patchErr = k8sutil.UpdateNetworkingCondition(
 				ctx,
-				rc.KubeClient,
-				rc.NodeName,
+				rc.kubeClient,
+				rc.nodeName,
 				false,
 				"RouteCreated",
 				"NoRouteCreated",
@@ -371,8 +382,8 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 		if err == nil {
 			patchErr = k8sutil.UpdateNetworkingCondition(
 				ctx,
-				rc.KubeClient,
-				rc.NodeName,
+				rc.kubeClient,
+				rc.nodeName,
 				true,
 				"RouteCreated",
 				"NoRouteCreated",
@@ -383,13 +394,38 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 
 		if err != nil {
 			log.Errorf(ctx, "sync route for node %v error: %v", nodeName, err)
-			rc.EventRecorder.Eventf(eventObject, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.NodeName, err)
+			rc.eventRecorder.Eventf(thisNode, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.nodeName, err)
 			return err
 		}
 
-		rc.EventRecorder.Eventf(eventObject, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v succeed", rc.NodeName)
+		rc.eventRecorder.Eventf(thisNode, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v succeed", rc.nodeName)
 	}
 	return nil
+}
+
+func (rc *RouteController) shouldEnsuringRoute(ctx context.Context) bool {
+	if k8sutil.GetNetworkingCondition(ctx, rc.kubeClient, rc.nodeName) == v1.ConditionFalse {
+		p, err := strconv.ParseFloat(os.Getenv(ensureVPCRoutePossibilityEnvKey), 64)
+		if err != nil {
+			p = 0.05
+		}
+		if !diceWithPossibility(p) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func diceWithPossibility(p float64) bool {
+	if p < 0 || p > 1 {
+		p = 1
+	}
+
+	const (
+		n = 1000
+	)
+	return rand.Intn(n) < (int)(n*p)
 }
 
 func isNotFoundError(err error) bool {
@@ -409,8 +445,8 @@ func (rc *RouteController) isResponsibleForRoute(route vpc.RouteRule) (bool, err
 	}
 	isIPv4ResponsibleFor := false
 	isIPv6ResponsibleFor := false
-	if rc.ContainerNetworkCIDRIPv4 != "" {
-		_, ipv4CIDR, err := net.ParseCIDR(rc.ContainerNetworkCIDRIPv4)
+	if rc.containerNetworkCIDRIPv4 != "" {
+		_, ipv4CIDR, err := net.ParseCIDR(rc.containerNetworkCIDRIPv4)
 		if err != nil {
 			return false, err
 		}
@@ -418,8 +454,8 @@ func (rc *RouteController) isResponsibleForRoute(route vpc.RouteRule) (bool, err
 			isIPv4ResponsibleFor = true
 		}
 	}
-	if rc.ContainerNetworkCIDRIPv6 != "" {
-		_, ipv6CIDR, err := net.ParseCIDR(rc.ContainerNetworkCIDRIPv6)
+	if rc.containerNetworkCIDRIPv6 != "" {
+		_, ipv6CIDR, err := net.ParseCIDR(rc.containerNetworkCIDRIPv6)
 		if err != nil {
 			return false, err
 		}
@@ -431,11 +467,11 @@ func (rc *RouteController) isResponsibleForRoute(route vpc.RouteRule) (bool, err
 		return false, nil
 	}
 
-	if isIPv4ResponsibleFor && (route.NexthopType == "custom" && route.SourceAddress == "0.0.0.0/0" && route.NexthopId == rc.HostInstanceID) {
+	if isIPv4ResponsibleFor && (route.NexthopType == "custom" && route.SourceAddress == "0.0.0.0/0" && route.NexthopId == rc.hostInstanceID) {
 		return true, nil
 	}
 
-	if isIPv6ResponsibleFor && (route.NexthopType == "custom" && route.SourceAddress == "::/0" && route.NexthopId == rc.HostInstanceID) {
+	if isIPv6ResponsibleFor && (route.NexthopType == "custom" && route.SourceAddress == "::/0" && route.NexthopId == rc.hostInstanceID) {
 		return true, nil
 	}
 

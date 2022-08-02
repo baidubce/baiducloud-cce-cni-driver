@@ -107,6 +107,15 @@ func unstableSortENIByPrivateIPNum(enis []*enisdk.Eni) {
 	})
 }
 
+func (ipam *IPAM) unstableSortENI(enis []*enisdk.Eni) {
+	rand.Shuffle(len(enis), func(i, j int) {
+		enis[i], enis[j] = enis[j], enis[i]
+	})
+	sort.Slice(enis, func(i, j int) bool {
+		return len(enis[i].PrivateIpSet) < len(enis[j].PrivateIpSet)
+	})
+}
+
 func listENIsBySubnet(enis []*enisdk.Eni, subnetID string) []*enisdk.Eni {
 	result := make([]*enisdk.Eni, 0)
 
@@ -119,6 +128,27 @@ func listENIsBySubnet(enis []*enisdk.Eni, subnetID string) []*enisdk.Eni {
 	return result
 }
 
+func buildENICache(ctx context.Context, enis []enisdk.Eni) map[string][]*enisdk.Eni {
+	var (
+		// eniCache key is node name
+		eniCache = make(map[string][]*enisdk.Eni)
+	)
+
+	for idx, eni := range enis {
+		nodeName, err := utileni.GetNodeNameFromENIName(eni.Name)
+		if err != nil {
+			continue
+		}
+		if _, ok := eniCache[nodeName]; !ok {
+			eniCache[nodeName] = make([]*enisdk.Eni, 0)
+		}
+		eniCache[nodeName] = append(eniCache[nodeName], &enis[idx])
+	}
+
+	return eniCache
+}
+
+// TODO: split to multi request and listen node add event
 func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) error {
 	listArgs := enisdk.ListEniArgs{
 		VpcId: ipam.vpcID,
@@ -129,6 +159,8 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 		log.Errorf(ctx, "failed to list enis when trying to increase eni: %v", err)
 		return err
 	}
+
+	eniCache := buildENICache(ctx, enis)
 
 	var needNewENINodeCount = 0
 
@@ -154,13 +186,13 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 
 		// after creating eni, wait 5s to attach, the status will be available or attaching
 		// check node has available/attaching eni, prevent duplicate creation
-		if ipam.nodeHasNewlyCreatedENI(ctx, node, enis) {
+		if ipam.nodeHasNewlyCreatedENI(ctx, node, eniCache) {
 			log.Infof(ctx, "node %v may have newly created eni, assume added in previous check, skip check this time", node.Name)
 			continue
 		}
 
 		// list attached enis of node
-		attachedENIs, err := listAttachedENIs(ctx, ipam.clusterID, node, enis)
+		attachedENIs, err := listAttachedENIs(ctx, ipam.clusterID, node, eniCache)
 		if err != nil {
 			return err
 		}
@@ -182,7 +214,9 @@ func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) e
 			go func(n *v1.Node) {
 				err := ipam.createOneENI(ctx, n)
 				if err != nil {
-					log.Errorf(ctx, "failed to create one eni for node %v: %v", n.Name, err)
+					msg := fmt.Sprintf("failed to create one eni for node %v: %v", n.Name, err)
+					log.Error(ctx, msg)
+					ipam.eventRecorder.Event(node, v1.EventTypeWarning, "CreateNewENIFailed", msg)
 				}
 			}(node)
 		}
@@ -218,13 +252,16 @@ func (ipam *IPAM) gcLeakedENI(ctx context.Context, node *v1.Node, enis []enisdk.
 	}
 }
 
-func (ipam *IPAM) nodeHasNewlyCreatedENI(ctx context.Context, node *v1.Node, enis []enisdk.Eni) bool {
-	hasNewENI := false
-	instanceID, _ := util.GetInstanceIDFromNode(node)
+func (ipam *IPAM) nodeHasNewlyCreatedENI(ctx context.Context, node *v1.Node, eniCache map[string][]*enisdk.Eni) bool {
+	var (
+		hasNewENI     = false
+		instanceID, _ = util.GetInstanceIDFromNode(node)
+		enis          = eniCache[node.Name]
+	)
 
 	for _, eni := range enis {
 		// if eni not owned by node, just ignore
-		if !utileni.ENIOwnedByNode(&eni, ipam.clusterID, instanceID) {
+		if !utileni.ENIOwnedByNode(eni, ipam.clusterID, instanceID) {
 			continue
 		}
 
@@ -239,18 +276,22 @@ func (ipam *IPAM) nodeHasNewlyCreatedENI(ctx context.Context, node *v1.Node, eni
 	return hasNewENI
 }
 
-func listAttachedENIs(ctx context.Context, clusterID string, node *v1.Node, enis []enisdk.Eni) ([]*enisdk.Eni, error) {
-	var attachedENIs []*enisdk.Eni
+func listAttachedENIs(ctx context.Context, clusterID string, node *v1.Node, eniCache map[string][]*enisdk.Eni) ([]*enisdk.Eni, error) {
+	var (
+		attachedENIs []*enisdk.Eni
+	)
 
 	instanceID, err := util.GetInstanceIDFromNode(node)
 	if err != nil {
 		return nil, err
 	}
 
+	enis := eniCache[node.Name]
+
 	// find out attached enis
 	for idx, eni := range enis {
 		// judge whether eni belongs to the node by eni.Name
-		if !utileni.ENIOwnedByNode(&eni, clusterID, instanceID) {
+		if !utileni.ENIOwnedByNode(eni, clusterID, instanceID) {
 			log.V(6).Infof(ctx, "eni(%v) does not owned by %s/%s/%s", eni.Name, clusterID, instanceID, node.Name)
 			continue
 		}
@@ -262,7 +303,7 @@ func listAttachedENIs(ctx context.Context, clusterID string, node *v1.Node, enis
 		}
 
 		if eni.Status == utileni.ENIStatusInuse && eni.InstanceId == instanceID {
-			attachedENIs = append(attachedENIs, &enis[idx])
+			attachedENIs = append(attachedENIs, enis[idx])
 		}
 	}
 	return attachedENIs, nil
@@ -294,7 +335,7 @@ func (ipam *IPAM) needToCreateNewENI(ctx context.Context, node *v1.Node, attache
 		return false, nil
 	}
 
-	ipNum, eniNum := ipam.getAvailableIPAndENINum(ctx, maxIPPerENI, attachedENIs)
+	ipNum, eniNum := ipam.getAvailableIPAndENINum(ctx, node.Name, maxIPPerENI, attachedENIs)
 
 	warmIPTarget, err := utileni.GetWarmIPTargetFromNodeAnnotations(node)
 	if err != nil {
@@ -312,7 +353,7 @@ func (ipam *IPAM) needToCreateNewENI(ctx context.Context, node *v1.Node, attache
 }
 
 // getAvailableIPAndENINum gets num of available ips from given enis
-func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, maxIPPerENI int, enis []*enisdk.Eni) (int, int) {
+func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, node string, maxIPPerENI int, enis []*enisdk.Eni) (int, int) {
 	var ipNum, eniNum int
 
 	for _, eni := range enis {
@@ -322,14 +363,26 @@ func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, maxIPPerENI int, 
 			continue
 		}
 
-		// if subnet has no more ip, the existed eni in it will not be taken into account
+		total, assigned, err := ipam.datastore.GetENIStats(node, eni.EniId)
+		if err != nil {
+			log.Errorf(ctx, "failed to get eni %v stats in datastore: %v", eni.EniId, err)
+			continue
+		}
+
+		idle := total - assigned
+
 		if isSubnetHasNoMoreIP(subnet) {
-			log.Infof(ctx, "skip subnet %v due to no more ip", subnet.Spec.ID)
+			if idle > 0 {
+				ipNum += idle
+				eniNum++
+			} else {
+				log.Infof(ctx, "skip %v due to subnet %v has no more ip", eni.EniId, eni.SubnetId)
+			}
 			continue
 		}
 
 		eniNum++
-		ipNum += maxIPPerENI - len(eni.PrivateIpSet)
+		ipNum += maxIPPerENI - assigned
 	}
 
 	return ipNum, eniNum
@@ -441,20 +494,25 @@ func (ipam *IPAM) createOneENI(ctx context.Context, node *v1.Node) error {
 
 	log.Infof(ctx, "subnet %v is chosen to create a new eni for node %v", subnet, node.Name)
 
-	secGroups, err := ipam.getSecurityGroupsFromDefaultIPPool(ctx, node)
+	secGroups, eSecGroups, err := ipam.getSecurityGroupsFromDefaultIPPool(ctx, node)
 	if err != nil {
+		log.Errorf(ctx, "failed to get proper security groups to create eni: %v", err)
 		return err
 	}
-	if len(secGroups) == 0 {
-		return errors.New("security groups bound to eni cannot be empty")
-	}
 
-	eniID, err := ipam.allocateENI(ctx, node, subnet, secGroups)
+	eniID, err := ipam.allocateENI(ctx, node, subnet, secGroups, eSecGroups)
 	if err != nil {
 		log.Errorf(ctx, "failed to allocate(create and attach) new eni: %v", err)
 		return err
 	}
 	log.Infof(ctx, "allocate(create and attach) eni %v successfully", eniID)
+
+	err = ipam.datastore.AddENIToStore(node.Name, eniID)
+	if err != nil {
+		log.Errorf(ctx, "add eni %v to datastore error: %v", eniID, err)
+	} else {
+		log.Infof(ctx, "add eni %v to datastore successfully", eniID)
+	}
 
 	return nil
 }
@@ -540,7 +598,13 @@ func (ipam *IPAM) findSubnetWithMostAvailableIP(ctx context.Context, subnets []*
 	return candidate.Spec.ID, nil
 }
 
-func (ipam *IPAM) allocateENI(ctx context.Context, node *v1.Node, subnetID string, SecurityGroupIDs []string) (string, error) {
+func (ipam *IPAM) allocateENI(
+	ctx context.Context,
+	node *v1.Node,
+	subnetID string,
+	securityGroupIDs []string,
+	eSecurityGroupIDs []string,
+) (string, error) {
 	start := time.Now()
 	log.Infof(ctx, "allocate eni for node %v begins...", node.Name)
 	defer log.Infof(ctx, "allocate eni for node %v ends...", node.Name)
@@ -552,9 +616,10 @@ func (ipam *IPAM) allocateENI(ctx context.Context, node *v1.Node, subnetID strin
 
 	eniName := utileni.CreateNameForENI(ipam.clusterID, instanceID, node.Name)
 	createENIArgs := &enisdk.CreateEniArgs{
-		Name:             eniName,
-		SubnetId:         subnetID,
-		SecurityGroupIds: SecurityGroupIDs,
+		Name:                       eniName,
+		SubnetId:                   subnetID,
+		SecurityGroupIds:           securityGroupIDs,
+		EnterpriseSecurityGroupIds: eSecurityGroupIDs,
 		PrivateIpSet: []enisdk.PrivateIp{{
 			Primary:          true,
 			PrivateIpAddress: "",
@@ -651,16 +716,29 @@ func (ipam *IPAM) rollbackFailedENI(ctx context.Context, eniID string) error {
 	return nil
 }
 
-func (ipam *IPAM) getSecurityGroupsFromDefaultIPPool(ctx context.Context, node *v1.Node) ([]string, error) {
+func (ipam *IPAM) getSecurityGroupsFromDefaultIPPool(ctx context.Context, node *v1.Node) ([]string, []string, error) {
 	ippoolName := utilippool.GetNodeIPPoolName(node.Name)
 
 	ippool, err := ipam.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, ippoolName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorf(ctx, "failed to get ippool %v: %v", ippoolName, err)
-		return nil, err
+		return nil, nil, err
 	}
 
-	return ippool.Spec.ENI.SecurityGroups, nil
+	var (
+		secGroups  = ippool.Spec.ENI.SecurityGroups
+		eSecGroups = ippool.Spec.ENI.EnterpriseSecurityGroups
+	)
+
+	if len(secGroups) == 0 && len(eSecGroups) == 0 {
+		return nil, nil, errors.New("eni must bind at least one security group or enterprise security group")
+	}
+
+	if len(secGroups) != 0 && len(eSecGroups) != 0 {
+		return nil, nil, errors.New("eni cannot bind both enterprise security group and normal security group")
+	}
+
+	return secGroups, eSecGroups, nil
 }
 
 func isSubnetQualifiedToCreateENI(subnet *v1alpha1.Subnet) bool {

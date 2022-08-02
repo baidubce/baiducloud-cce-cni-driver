@@ -16,8 +16,6 @@ spec:
       annotations:
         scheduler.alpha.kubernetes.io/critical-pod: ""
     spec:
-      nodeSelector:
-        beta.kubernetes.io/arch: amd64
       tolerations:
         - operator: "Exists"
       serviceAccountName: cce-cni
@@ -56,7 +54,7 @@ spec:
               mountPath: /etc/kubernetes
             - name: cce-cni-config-template
               mountPath: /etc/kubernetes/cni
-            {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+            {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
             - name: cce-plugin-token
               mountPath: /var/run/secrets/cce/cce-plugin-token
               readOnly: true
@@ -80,6 +78,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /uninstall-cni.sh
           resources:
             limits:
               memory: 200Mi
@@ -97,7 +100,7 @@ spec:
           hostPath:
             path: /var/log/cce
             type: "DirectoryOrCreate"
-        {{- if not (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+        {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
         - name: cce-plugin-token
           secret:
             defaultMode: 0400

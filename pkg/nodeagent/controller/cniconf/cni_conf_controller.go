@@ -240,7 +240,7 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	if types.IsCCEHostLocalSecondaryIPMode(c.cniMode) {
+	if types.IsCCECNIModeBasedOnHostLocalSecondaryIP(c.cniMode) {
 		subnetCIDR, addrs, err := c.getPrimaryENISecondaryIPs(ctx)
 		if err != nil {
 			log.Errorf(ctx, "failed to get secondary ips of primary eni: %v", err)

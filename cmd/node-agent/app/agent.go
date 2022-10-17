@@ -106,7 +106,7 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 		return nil, err
 	}
 
-	if !types.IsCCEHostLocalSecondaryIPMode(o.config.CNIMode) {
+	if !types.IsCCECNIModeBasedOnHostLocalSecondaryIP(o.config.CNIMode) {
 		cloudClient, err = cloud.New(
 			o.config.CCE.Region,
 			o.config.CCE.ClusterID,
@@ -189,7 +189,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		go cniConfigCtrl.ReconcileCNIConfig()
 	}
 
-	if !types.IsCCEHostLocalSecondaryIPMode(cniMode) {
+	if !types.IsCCECNIModeBasedOnHostLocalSecondaryIP(cniMode) {
 		// all modes needs ippool controller except host-local
 		ippoolCtrl := ippoolctrl.New(
 			s.kubeClient,
@@ -226,6 +226,13 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		time.Duration(s.options.config.CCE.ENIController.ENISyncPeriod),
 	)
 
+	eriCtrl := eni.NewERI(
+		s.metaClient,
+		s.options.hostName,
+		s.options.instanceID,
+		time.Duration(s.options.config.CCE.ENIController.ENISyncPeriod),
+	)
+
 	switch {
 	case types.IsKubenetMode(cniMode), types.IsCCECNIModeBasedOnVPCRoute(cniMode):
 		s.runCCEModeBasedOnVPCRoute(ctx, nodeWatcher)
@@ -233,6 +240,8 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.runCCEModeBasedOnBCCSecondaryIP(ctx, nodeWatcher, eniCtrl)
 	case types.IsCCECNIModeBasedOnBBCSecondaryIP(cniMode):
 		s.runCCEModeBasedOnBBCSecondaryIP(ctx, nodeWatcher, eniCtrl)
+	case types.IsCCECNIModeBasedOnHostLocalSecondaryIP(cniMode):
+		s.runCCEModeBasedOnHostLocalSecondaryIP(eriCtrl)
 	}
 
 	// This has to start after the calls to NewXXXWatcher  because those
@@ -280,6 +289,12 @@ func (s *nodeAgent) runCCEModeBasedOnBCCSecondaryIP(
 	eniController *eni.Controller,
 ) {
 	go eniController.ReconcileENIs()
+}
+
+func (s *nodeAgent) runCCEModeBasedOnHostLocalSecondaryIP(
+	eriController *eni.ERIController,
+) {
+	go eriController.ReconcileERIs()
 }
 
 func (s *nodeAgent) runCCEModeBasedOnBBCSecondaryIP(

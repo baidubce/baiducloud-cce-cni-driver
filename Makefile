@@ -62,6 +62,7 @@ build:
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ptp $(HOMEDIR)/cni/ptp
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/sysctl $(HOMEDIR)/cni/sysctl
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/unnumbered-ptp $(HOMEDIR)/cni/unnumbered-ptp
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/eri $(HOMEDIR)/cni/eri
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cce-ipam $(HOMEDIR)/cmd/eni-ipam
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cni-node-agent $(HOMEDIR)/cmd/node-agent
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/ip-masq-agent $(HOMEDIR)/cmd/ip-masq-agent
@@ -82,6 +83,7 @@ package-bin:
 	mv $(HOMEDIR)/macvlan $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/bandwidth $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/ptp $(OUTDIR)/cni-bin/
+	mv $(HOMEDIR)/eri $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/sysctl $(OUTDIR)/cni-bin/
 	mv $(HOMEDIR)/unnumbered-ptp $(OUTDIR)/cni-bin/
 	# package components

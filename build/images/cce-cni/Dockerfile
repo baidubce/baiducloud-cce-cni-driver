@@ -16,6 +16,7 @@ COPY output/cni-bin/bandwidth /bandwidth
 COPY output/cni-bin/ptp /ptp
 COPY output/cni-bin/eni-ipam /eni-ipam
 COPY output/cni-bin/sysctl /sysctl
+COPY output/cni-bin/eri /eri
 
 # install cce ipam binary
 COPY output/cce-ipam /bin/cce-ipam

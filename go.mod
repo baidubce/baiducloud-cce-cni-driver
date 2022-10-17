@@ -3,6 +3,7 @@ module github.com/baidubce/baiducloud-cce-cni-driver
 go 1.16
 
 require (
+	github.com/alexflint/go-filemutex v1.2.0 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a
 	github.com/baidubce/bce-sdk-go v0.9.93
 	github.com/containernetworking/cni v0.8.0
@@ -20,7 +21,7 @@ require (
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/pflag v1.0.5
 	github.com/vishvananda/netlink v1.1.0
-	golang.org/x/sys v0.0.0-20191022100944-742c48ecaeb7
+	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22
 	golang.org/x/text v0.3.3 // indirect
 	google.golang.org/grpc v1.30.0
 	gopkg.in/yaml.v2 v2.3.0 // indirect

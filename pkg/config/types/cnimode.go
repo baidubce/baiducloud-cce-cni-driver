@@ -96,7 +96,7 @@ func IsCCECNIModeBasedOnSecondaryIP(mode ContainerNetworkMode) bool {
 		IsCCECNIModeBasedOnBBCSecondaryIP(mode)
 }
 
-func IsCCEHostLocalSecondaryIPMode(mode ContainerNetworkMode) bool {
+func IsCCECNIModeBasedOnHostLocalSecondaryIP(mode ContainerNetworkMode) bool {
 	if mode == CCEModeHostLocalSecondaryIPVeth ||
 		mode == CCEModeHostLocalSecondaryIPIPVlan ||
 		mode == CCEModeHostLocalSecondaryIPAutoDetect {
@@ -109,7 +109,7 @@ func IsCCECNIMode(mode ContainerNetworkMode) bool {
 	return IsCCECNIModeBasedOnVPCRoute(mode) ||
 		IsCCECNIModeBasedOnBCCSecondaryIP(mode) ||
 		IsCCECNIModeBasedOnBBCSecondaryIP(mode) ||
-		IsCCEHostLocalSecondaryIPMode(mode)
+		IsCCECNIModeBasedOnHostLocalSecondaryIP(mode)
 }
 
 func IsKubenetMode(mode ContainerNetworkMode) bool {

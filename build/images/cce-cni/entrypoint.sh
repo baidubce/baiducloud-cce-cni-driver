@@ -2,7 +2,7 @@
 set -u -e
 
 CNI_BINARY_DIR=/opt/cni/bin/
-CNI_PLUGIN_LIST="unnumbered-ptp ipvlan macvlan bandwidth loopback host-local ptp eni-ipam sysctl portmap"
+CNI_PLUGIN_LIST="unnumbered-ptp ipvlan macvlan bandwidth loopback host-local ptp eni-ipam sysctl portmap eri"
 
 # mv cni binary to dest
 for PLUGIN in $CNI_PLUGIN_LIST

@@ -269,6 +269,9 @@ data:
                 "type": "portmap",
                 "capabilities": {"portMappings": true},
                 "externalSetMarkChain": "KUBE-MARK-MASQ"
+            },
+            {
+                "type": "eri"
             }
         ]
     }
@@ -315,6 +318,9 @@ data:
                 "type": "portmap",
                 "capabilities": {"portMappings": true},
                 "externalSetMarkChain": "KUBE-MARK-MASQ"
+            },
+            {
+                "type": "eri"
             }
         ]
     }

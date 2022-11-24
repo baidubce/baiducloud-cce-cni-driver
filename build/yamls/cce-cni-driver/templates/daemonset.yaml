@@ -133,3 +133,7 @@ spec:
                 path: cce-cni-bbc-secondary-ip-ipvlan.tmpl
               - key: cce-cni-bbc-secondary-ip-veth
                 path: cce-cni-bbc-secondary-ip-veth.tmpl
+              - key: cce-cross-vpc-eni
+                path: cce-cross-vpc-eni.tmpl
+              - key: cce-exclusive-cross-vpc-eni
+                path: cce-exclusive-cross-vpc-eni.tmpl

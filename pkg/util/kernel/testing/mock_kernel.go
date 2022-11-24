@@ -6,34 +6,35 @@ package testing
 
 import (
 	context "context"
-	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// DetectKernelVersion mocks base method
+// DetectKernelVersion mocks base method.
 func (m *MockInterface) DetectKernelVersion(arg0 context.Context) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DetectKernelVersion", arg0)
@@ -42,13 +43,13 @@ func (m *MockInterface) DetectKernelVersion(arg0 context.Context) (string, error
 	return ret0, ret1
 }
 
-// DetectKernelVersion indicates an expected call of DetectKernelVersion
+// DetectKernelVersion indicates an expected call of DetectKernelVersion.
 func (mr *MockInterfaceMockRecorder) DetectKernelVersion(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetectKernelVersion", reflect.TypeOf((*MockInterface)(nil).DetectKernelVersion), arg0)
 }
 
-// GetModules mocks base method
+// GetModules mocks base method.
 func (m *MockInterface) GetModules(arg0 context.Context, arg1 []string) ([]string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetModules", arg0, arg1)
@@ -57,7 +58,7 @@ func (m *MockInterface) GetModules(arg0 context.Context, arg1 []string) ([]strin
 	return ret0, ret1
 }
 
-// GetModules indicates an expected call of GetModules
+// GetModules indicates an expected call of GetModules.
 func (mr *MockInterfaceMockRecorder) GetModules(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetModules", reflect.TypeOf((*MockInterface)(nil).GetModules), arg0, arg1)

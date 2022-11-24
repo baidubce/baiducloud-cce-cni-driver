@@ -12,8 +12,24 @@ type FakeCceV1alpha1 struct {
 	*testing.Fake
 }
 
+func (c *FakeCceV1alpha1) CrossVPCEnis() v1alpha1.CrossVPCEniInterface {
+	return &FakeCrossVPCEnis{c}
+}
+
 func (c *FakeCceV1alpha1) IPPools(namespace string) v1alpha1.IPPoolInterface {
 	return &FakeIPPools{c, namespace}
+}
+
+func (c *FakeCceV1alpha1) MultiIPWorkloadEndpoints(namespace string) v1alpha1.MultiIPWorkloadEndpointInterface {
+	return &FakeMultiIPWorkloadEndpoints{c, namespace}
+}
+
+func (c *FakeCceV1alpha1) PodSubnetTopologySpreads(namespace string) v1alpha1.PodSubnetTopologySpreadInterface {
+	return &FakePodSubnetTopologySpreads{c, namespace}
+}
+
+func (c *FakeCceV1alpha1) PodSubnetTopologySpreadTables(namespace string) v1alpha1.PodSubnetTopologySpreadTableInterface {
+	return &FakePodSubnetTopologySpreadTables{c, namespace}
 }
 
 func (c *FakeCceV1alpha1) Subnets(namespace string) v1alpha1.SubnetInterface {

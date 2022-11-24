@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -39,17 +40,21 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
+	eniipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
+	roceipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/roce"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
+	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/webhook"
 )
 
 func NewRootCommand() *cobra.Command {
 	options := &Options{
 		stopCh:                make(chan struct{}),
-		ResyncPeriod:          15 * time.Second,
+		ResyncPeriod:          10 * time.Hour,
 		ENISyncPeriod:         15 * time.Second,
 		GCPeriod:              180 * time.Second,
 		Port:                  9997,
@@ -57,9 +62,9 @@ func NewRootCommand() *cobra.Command {
 		SubnetSelectionPolicy: string(bccipam.SubnetSelectionPolicyMostFreeIP),
 		LeaderElection: componentbaseconfig.LeaderElectionConfiguration{
 			LeaderElect:       true,
-			LeaseDuration:     v1.Duration{time.Second * 15},
-			RenewDeadline:     v1.Duration{time.Second * 10},
-			RetryPeriod:       v1.Duration{time.Second * 2},
+			LeaseDuration:     v1.Duration{Duration: time.Second * 15},
+			RenewDeadline:     v1.Duration{Duration: time.Second * 10},
+			RetryPeriod:       v1.Duration{Duration: time.Second * 2},
 			ResourceLock:      "leases",
 			ResourceName:      "cce-ipam",
 			ResourceNamespace: "kube-system",
@@ -87,6 +92,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	options.addFlags(cmd.Flags())
+	webhook.RegisterWebhookFlags(cmd.Flags())
 
 	cmd.AddCommand(version.NewVersionCommand())
 
@@ -114,14 +120,19 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 	if err != nil {
 		log.Fatalf(ctx, "failed to create cloud client: %v", err)
 	}
+	kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, opts.ResyncPeriod)
+	crdInformerFactory := crdinformers.NewSharedInformerFactory(crdClient, opts.ResyncPeriod)
 
 	run := func(ctx context.Context) {
 		var ipamds [2]ipam.Interface
+		var eniipamd ipam.ExclusiveEniInterface
 		var err error
 
 		bccipamd, err := bccipam.NewIPAM(
 			kubeClient,
 			crdClient,
+			kubeInformerFactory,
+			crdInformerFactory,
 			bceClient,
 			opts.CNIMode,
 			opts.VPCID,
@@ -132,7 +143,6 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.IdleIPPoolMinSize,
 			opts.IdleIPPoolMaxSize,
 			opts.BatchAddIPNum,
-			opts.ResyncPeriod,
 			opts.ENISyncPeriod,
 			opts.GCPeriod,
 			opts.Debug,
@@ -144,11 +154,12 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 		bbcipamd, err := bbcipam.NewIPAM(
 			kubeClient,
 			crdClient,
+			kubeInformerFactory,
+			crdInformerFactory,
 			bceClient,
 			opts.CNIMode,
 			opts.VPCID,
 			opts.ClusterID,
-			opts.ResyncPeriod,
 			opts.GCPeriod,
 			opts.BatchAddIPNum,
 			opts.IPMutatingRate,
@@ -161,6 +172,33 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			log.Fatalf(ctx, "failed to create bbc ipamd: %v", err)
 		}
 
+		eniipamd, err = eniipam.NewIPAM(
+			kubeClient,
+			crdClient,
+			opts.CNIMode,
+			opts.VPCID,
+			opts.ClusterID,
+			opts.ResyncPeriod,
+			opts.GCPeriod,
+			opts.Debug,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create cross vpc eni ipamd: %v", err)
+		}
+
+		roceipamd, err := roceipam.NewIPAM(
+			kubeClient,
+			crdClient,
+			bceClient,
+			opts.ResyncPeriod,
+			opts.ENISyncPeriod,
+			opts.GCPeriod,
+			opts.Debug,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create roce ipamd: %v", err)
+		}
+
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
 
 		switch {
@@ -168,6 +206,14 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			ipamds = [2]ipam.Interface{bccipamd, nil}
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(opts.CNIMode):
 			ipamds = [2]ipam.Interface{bccipamd, bbcipamd}
+		case types.IsCrossVPCEniMode(opts.CNIMode):
+			go func() {
+				if err := eniipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "eni ipamd failed to run: %v", err)
+				}
+			}()
+		case types.IsCCECNIModeBasedOnVPCRoute(opts.CNIMode):
+			ipamds = [2]ipam.Interface{}
 		default:
 			log.Fatalf(ctx, "unsupported cni mode: %v", opts.CNIMode)
 		}
@@ -183,9 +229,20 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			}
 		}
 
+		if roceipamd != nil {
+			go func(roceipamd ipam.RoceInterface) {
+				ctx := log.NewContext()
+				if err := roceipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "roce ipamd failed to run: %v", err)
+				}
+			}(roceipamd)
+		}
+
 		ipamGrpcBackend := grpc.New(
 			ipamds[0],
 			ipamds[1],
+			eniipamd,
+			roceipamd,
 			opts.Port,
 			opts.AllocateIPConcurrencyLimit,
 			opts.ReleaseIPConcurrencyLimit,
@@ -194,6 +251,15 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 		// run metric server
 		go func() {
 			runMetricServer(ctx, opts)
+		}()
+
+		go func() {
+			// Only VPC-CNI needs
+			if types.IsCCECNIModeBasedOnSecondaryIP(opts.CNIMode) {
+				if err := webhook.RunWebhookServer(config, kubeClient, crdClient, kubeInformerFactory, crdInformerFactory, bceClient, opts.stopCh, opts.CNIMode); err != nil {
+					log.Fatalf(ctx, "webhook to run: %v", err)
+				}
+			}
 		}()
 
 		// run grpc server

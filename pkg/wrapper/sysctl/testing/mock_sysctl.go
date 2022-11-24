@@ -5,34 +5,35 @@
 package testing
 
 import (
-	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// Sysctl mocks base method
+// Sysctl mocks base method.
 func (m *MockInterface) Sysctl(arg0 string, arg1 ...string) (string, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0}
@@ -45,7 +46,7 @@ func (m *MockInterface) Sysctl(arg0 string, arg1 ...string) (string, error) {
 	return ret0, ret1
 }
 
-// Sysctl indicates an expected call of Sysctl
+// Sysctl indicates an expected call of Sysctl.
 func (mr *MockInterfaceMockRecorder) Sysctl(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0}, arg1...)

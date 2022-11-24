@@ -18,7 +18,6 @@ package bbc
 import (
 	"context"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,7 +31,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/keymutex"
+
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/golang/mock/gomock"
 	"github.com/im7mortal/kmutex"
@@ -105,7 +104,6 @@ func startInformers(kubeInformer informers.SharedInformerFactory, crdInformer cr
 func TestIPAM_Allocate(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
-		lock             sync.RWMutex
 		nodeLock         *kmutex.Kmutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
@@ -160,7 +158,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -200,7 +197,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					nodeLock:         kmutex.New(),
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
@@ -284,7 +280,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					nodeLock:         kmutex.New(),
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
@@ -321,7 +316,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					InstanceID: "test-node-id",
 					Node:       "test-node",
 					SubnetID:   "sbn-a",
-					UpdateAt:   metav1.Time{time.Unix(0, 0)},
+					UpdateAt:   metav1.Time{Time: time.Unix(0, 0)},
 				},
 			},
 			wantErr: false,
@@ -340,7 +335,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				crdInformer:      tt.fields.crdInformer,
 				crdClient:        tt.fields.crdClient,
 				cloud:            tt.fields.cloud,
-				lock:             tt.fields.lock,
 				nodeLock:         tt.fields.nodeLock,
 				cniMode:          tt.fields.cniMode,
 				vpcID:            tt.fields.vpcID,
@@ -369,8 +363,6 @@ func TestIPAM_Allocate(t *testing.T) {
 func TestIPAM_Release(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
-		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
@@ -432,7 +424,6 @@ func TestIPAM_Release(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -469,7 +460,7 @@ func TestIPAM_Release(t *testing.T) {
 						IP:       "10.1.1.2",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
@@ -488,7 +479,6 @@ func TestIPAM_Release(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -518,7 +508,7 @@ func TestIPAM_Release(t *testing.T) {
 					IP:       "10.1.1.2",
 					ENIID:    "test-node-id",
 					Node:     "test-node",
-					UpdateAt: metav1.Time{time.Unix(0, 0)},
+					UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 				},
 			},
 			wantErr: false,
@@ -537,17 +527,17 @@ func TestIPAM_Release(t *testing.T) {
 				crdInformer:      tt.fields.crdInformer,
 				crdClient:        tt.fields.crdClient,
 				cloud:            tt.fields.cloud,
-				lock:             tt.fields.lock,
-				cniMode:          tt.fields.cniMode,
-				vpcID:            tt.fields.vpcID,
-				clusterID:        tt.fields.clusterID,
-				datastore:        tt.fields.datastore,
-				allocated:        tt.fields.allocated,
-				bucket:           tt.fields.bucket,
-				batchAddIPNum:    tt.fields.batchAddIPNum,
-				cacheHasSynced:   tt.fields.cacheHasSynced,
-				gcPeriod:         tt.fields.gcPeriod,
-				clock:            clock.NewFakeClock(time.Unix(0, 0)),
+
+				cniMode:        tt.fields.cniMode,
+				vpcID:          tt.fields.vpcID,
+				clusterID:      tt.fields.clusterID,
+				datastore:      tt.fields.datastore,
+				allocated:      tt.fields.allocated,
+				bucket:         tt.fields.bucket,
+				batchAddIPNum:  tt.fields.batchAddIPNum,
+				cacheHasSynced: tt.fields.cacheHasSynced,
+				gcPeriod:       tt.fields.gcPeriod,
+				clock:          clock.NewFakeClock(time.Unix(0, 0)),
 			}
 			got, err := ipam.Release(tt.args.ctx, tt.args.name, tt.args.namespace, tt.args.containerID)
 			if (err != nil) != tt.wantErr {
@@ -564,8 +554,6 @@ func TestIPAM_Release(t *testing.T) {
 func TestIPAM_gcLeakedPod(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
-		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
@@ -620,7 +608,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 						IP:       "10.1.1.2",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
@@ -632,7 +620,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 						IP:       "10.1.1.3",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				startInformers(kubeInformer, crdInformer)
@@ -643,7 +631,6 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 
 				return fields{
 					ctrl: ctrl,
-					lock: sync.RWMutex{},
 					datastore: func() *datastorev2.DataStore {
 						dt := datastorev2.NewDataStore()
 						err := dt.AddNodeToStore("test-node", "test-node-id")
@@ -683,7 +670,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 							IP:       "10.1.1.2",
 							ENIID:    "test-node-id",
 							Node:     "test-node",
-							UpdateAt: metav1.Time{time.Unix(0, 0)},
+							UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 						},
 					},
 					{
@@ -695,7 +682,7 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 							IP:       "10.1.1.3",
 							ENIID:    "test-node-id",
 							Node:     "test-node",
-							UpdateAt: metav1.Time{time.Unix(0, 0)},
+							UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 						},
 					},
 				},
@@ -716,17 +703,17 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 				crdInformer:      tt.fields.crdInformer,
 				crdClient:        tt.fields.crdClient,
 				cloud:            tt.fields.cloud,
-				lock:             tt.fields.lock,
-				cniMode:          tt.fields.cniMode,
-				vpcID:            tt.fields.vpcID,
-				clusterID:        tt.fields.clusterID,
-				datastore:        tt.fields.datastore,
-				allocated:        tt.fields.allocated,
-				bucket:           tt.fields.bucket,
-				batchAddIPNum:    tt.fields.batchAddIPNum,
-				cacheHasSynced:   tt.fields.cacheHasSynced,
-				gcPeriod:         tt.fields.gcPeriod,
-				clock:            clock.NewFakeClock(time.Unix(0, 0)),
+
+				cniMode:        tt.fields.cniMode,
+				vpcID:          tt.fields.vpcID,
+				clusterID:      tt.fields.clusterID,
+				datastore:      tt.fields.datastore,
+				allocated:      tt.fields.allocated,
+				bucket:         tt.fields.bucket,
+				batchAddIPNum:  tt.fields.batchAddIPNum,
+				cacheHasSynced: tt.fields.cacheHasSynced,
+				gcPeriod:       tt.fields.gcPeriod,
+				clock:          clock.NewFakeClock(time.Unix(0, 0)),
 			}
 			err := ipam.gcLeakedPod(tt.args.ctx, tt.args.wepList)
 			if (err != nil) != tt.wantErr {
@@ -740,8 +727,6 @@ func TestIPAM_gcLeakedPod(t *testing.T) {
 func TestIPAM_gcLeakedIP(t *testing.T) {
 	type fields struct {
 		ctrl                  *gomock.Controller
-		lock                  sync.RWMutex
-		nodeLock              keymutex.KeyMutex
 		datastore             *datastorev2.DataStore
 		possibleLeakedIPCache map[privateIPAddrKey]time.Time
 		allocated             map[string]*v1alpha1.WorkloadEndpoint
@@ -808,7 +793,7 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 						IP:       "10.1.1.2",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				_, _ = crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
@@ -820,7 +805,7 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 						IP:       "10.1.1.3",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				// add one node for test environment
@@ -862,7 +847,6 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 
 				return fields{
 					ctrl: ctrl,
-					lock: sync.RWMutex{},
 					datastore: func() *datastorev2.DataStore {
 						dt := datastorev2.NewDataStore()
 						err := dt.AddNodeToStore("test-node", "test-node-id")
@@ -906,14 +890,14 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 				defer tt.fields.ctrl.Finish()
 			}
 			ipam := &IPAM{
-				eventBroadcaster:      tt.fields.eventBroadcaster,
-				eventRecorder:         tt.fields.eventRecorder,
-				kubeInformer:          tt.fields.kubeInformer,
-				kubeClient:            tt.fields.kubeClient,
-				crdInformer:           tt.fields.crdInformer,
-				crdClient:             tt.fields.crdClient,
-				cloud:                 tt.fields.cloud,
-				lock:                  tt.fields.lock,
+				eventBroadcaster: tt.fields.eventBroadcaster,
+				eventRecorder:    tt.fields.eventRecorder,
+				kubeInformer:     tt.fields.kubeInformer,
+				kubeClient:       tt.fields.kubeClient,
+				crdInformer:      tt.fields.crdInformer,
+				crdClient:        tt.fields.crdClient,
+				cloud:            tt.fields.cloud,
+
 				cniMode:               tt.fields.cniMode,
 				vpcID:                 tt.fields.vpcID,
 				clusterID:             tt.fields.clusterID,
@@ -946,8 +930,6 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 func TestIPAM_gcDeletedNode(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
-		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
@@ -992,7 +974,6 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl: ctrl,
-					lock: sync.RWMutex{},
 					datastore: func() *datastorev2.DataStore {
 						dt := datastorev2.NewDataStore()
 						err := dt.AddNodeToStore("test-node", "test-node-id")
@@ -1034,17 +1015,17 @@ func TestIPAM_gcDeletedNode(t *testing.T) {
 				crdInformer:      tt.fields.crdInformer,
 				crdClient:        tt.fields.crdClient,
 				cloud:            tt.fields.cloud,
-				lock:             tt.fields.lock,
-				cniMode:          tt.fields.cniMode,
-				vpcID:            tt.fields.vpcID,
-				clusterID:        tt.fields.clusterID,
-				datastore:        tt.fields.datastore,
-				allocated:        tt.fields.allocated,
-				bucket:           tt.fields.bucket,
-				batchAddIPNum:    tt.fields.batchAddIPNum,
-				cacheHasSynced:   tt.fields.cacheHasSynced,
-				gcPeriod:         tt.fields.gcPeriod,
-				clock:            clock.NewFakeClock(time.Unix(0, 0)),
+
+				cniMode:        tt.fields.cniMode,
+				vpcID:          tt.fields.vpcID,
+				clusterID:      tt.fields.clusterID,
+				datastore:      tt.fields.datastore,
+				allocated:      tt.fields.allocated,
+				bucket:         tt.fields.bucket,
+				batchAddIPNum:  tt.fields.batchAddIPNum,
+				cacheHasSynced: tt.fields.cacheHasSynced,
+				gcPeriod:       tt.fields.gcPeriod,
+				clock:          clock.NewFakeClock(time.Unix(0, 0)),
 			}
 			err := ipam.gcDeletedNode(tt.args.ctx)
 			if (err != nil) != tt.wantErr {
@@ -1119,8 +1100,6 @@ func TestIPAM_poolCorrupted(t *testing.T) {
 func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 	type fields struct {
 		ctrl             *gomock.Controller
-		lock             sync.RWMutex
-		nodeLock         keymutex.KeyMutex
 		datastore        *datastorev2.DataStore
 		allocated        map[string]*v1alpha1.WorkloadEndpoint
 		cacheHasSynced   bool
@@ -1168,7 +1147,6 @@ func TestIPAM_rebuildNodeDataStoreCache(t *testing.T) {
 				startInformers(kubeInformer, crdInformer)
 				return fields{
 					ctrl:             ctrl,
-					lock:             sync.RWMutex{},
 					datastore:        datastorev2.NewDataStore(),
 					cacheHasSynced:   true,
 					eventBroadcaster: brdcaster,
@@ -1250,7 +1228,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 						IP:       "10.1.1.2",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 				crdClient.CceV1alpha1().WorkloadEndpoints("default").Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
@@ -1262,7 +1240,7 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 						IP:       "10.1.1.3",
 						ENIID:    "test-node-id",
 						Node:     "test-node",
-						UpdateAt: metav1.Time{time.Unix(0, 0)},
+						UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
 					},
 				}, metav1.CreateOptions{})
 
@@ -1314,7 +1292,6 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 
 func TestIPAM_checkIdleIPPool(t *testing.T) {
 	type fields struct {
-		lock                  sync.RWMutex
 		debug                 bool
 		nodeLock              *kmutex.Kmutex
 		datastore             *datastorev2.DataStore
@@ -1378,16 +1355,13 @@ func TestIPAM_checkIdleIPPool(t *testing.T) {
 				datastore := v2.NewDataStore()
 				datastore.AddNodeToStore("test-node", "test-node-id")
 
-				gomock.InOrder(
-					cloudClient.EXPECT().BBCBatchAddIPCrossSubnet(gomock.Any(), gomock.Any()).Return(&bbc.BatchAddIpResponse{
-						PrivateIps: []string{"1.1.1.1"},
-					}, nil),
-				)
+				cloudClient.EXPECT().BBCBatchAddIPCrossSubnet(gomock.Any(), gomock.Any()).Return(&bbc.BatchAddIpResponse{
+					PrivateIps: []string{"1.1.1.1"},
+				}, nil).AnyTimes()
 
 				startInformers(kubeInformer, crdInformer)
 
 				return fields{
-					lock:              sync.RWMutex{},
 					debug:             false,
 					nodeLock:          kmutex.New(),
 					datastore:         datastore,
@@ -1413,7 +1387,7 @@ func TestIPAM_checkIdleIPPool(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ipam := &IPAM{
-				lock:                  tt.fields.lock,
+
 				debug:                 tt.fields.debug,
 				nodeLock:              tt.fields.nodeLock,
 				datastore:             tt.fields.datastore,

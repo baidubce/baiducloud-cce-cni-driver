@@ -17,17 +17,15 @@ package ippool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 
+	"github.com/baidubce/bce-sdk-go/services/bbc"
 	bbcapi "github.com/baidubce/bce-sdk-go/services/bbc"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ktypes "k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -36,7 +34,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	k8sutilnet "k8s.io/utils/net"
-	"modernc.org/mathutil"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
@@ -45,7 +42,6 @@ import (
 	ccetypes "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
@@ -74,6 +70,8 @@ type Controller struct {
 	podSubnetCandidates []string // cluster-level candidate subnets for pod
 	// misc
 	subnetZoneCache map[string]string // cached subnet and zone map
+	// Manage IP address resources
+	ipResourceManager IPResourceManager
 }
 
 func New(
@@ -127,13 +125,17 @@ func New(
 }
 
 func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister) error {
-	ctx := log.NewContext()
+	var (
+		err  error
+		node *v1.Node
+		ctx  = log.NewContext()
+	)
 
 	isLocalNode := nodeKey == c.nodeName
 
 	if isLocalNode {
-		node, err := nodeLister.Get(nodeKey)
-		if err != nil && !kerrors.IsNotFound(err) {
+		node, err = nodeLister.Get(nodeKey)
+		if err != nil {
 			return err
 		}
 
@@ -143,19 +145,39 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		}
 
 		// node exists, then ensure pool exists
-		if err := c.createOrUpdateIPPool(ctx); err != nil {
+		if err = c.createOrUpdateIPPool(ctx); err != nil {
 			log.Errorf(ctx, "failed to create ippool %v: %v", c.ippoolName, err)
 			return err
+		}
+		nodeCopy := node.DeepCopy()
+
+		//  current we only support BCC
+		if c.instanceType == metadata.InstanceTypeExBCC {
+			// cache instance
+			if c.bccInstance == nil {
+				c.bccInstance, err = c.cloudClient.GetBCCInstanceDetail(ctx, c.instanceID)
+				if err != nil {
+					log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
+					return err
+				}
+				log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(c.bccInstance))
+			}
 		}
 
 		switch {
 		case types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || types.IsKubenetMode(c.cniMode):
-			return c.syncRangeSpec(ctx, nodeKey, nodeLister)
+			c.ipResourceManager = NewRangeIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
+			return c.syncRangeSpec(ctx, nodeCopy)
+		case types.IsCrossVPCEniMode(c.cniMode):
+			c.ipResourceManager = NewCrossVPCEniResourceManager(c.kubeClient, node, c.bccInstance)
+			return c.syncRangeSpec(ctx, nodeCopy)
 		case types.IsCCECNIModeBasedOnBCCSecondaryIP(c.cniMode):
-			return c.syncENISpec(ctx, nodeKey, nodeLister)
+			c.ipResourceManager = NewBCCIPResourceManager(c.kubeClient, c.preAttachedENINum, node, c.bccInstance)
+			return c.syncENISpec(ctx, nodeCopy)
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(c.cniMode):
-			e1 := c.syncENISpec(ctx, nodeKey, nodeLister)
-			e2 := c.syncPodSubnetSpec(ctx, nodeKey, nodeLister)
+			c.ipResourceManager = NewBBCIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
+			e1 := c.syncENISpec(ctx, nodeCopy)
+			e2 := c.syncPodSubnetSpec(ctx, nodeCopy)
 			return utilerrors.NewAggregate([]error{e1, e2})
 		default:
 			return fmt.Errorf("unknown cni mode: %v", c.cniMode)
@@ -165,24 +187,14 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 	return nil
 }
 
-func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
+func (c *Controller) syncENISpec(ctx context.Context, node *v1.Node) error {
+	nodeName := node.GetName()
 	log.V(6).Infof(ctx, "syncing eni spec of node %v begins...", nodeName)
 	defer log.V(6).Infof(ctx, "syncing eni spec of node %v ends...", nodeName)
 
 	//  current we only support BCC
 	if c.instanceType != metadata.InstanceTypeExBCC {
 		return nil
-	}
-
-	// cache instance
-	if c.bccInstance == nil {
-		instance, err := c.cloudClient.GetBCCInstanceDetail(ctx, c.instanceID)
-		if err != nil {
-			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
-			return err
-		}
-		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
-		c.bccInstance = instance
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -230,17 +242,7 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 			return updateErr
 		}
 
-		var maxENINum, maxIPPerENI int
-		maxENINum = utileni.GetMaxENIPerNode(c.bccInstance.CpuCount)
-		maxIPPerENI = utileni.GetMaxIPPerENI(c.bccInstance.MemoryCapacityInGB)
-
-		err = c.patchENICapacityInfoToNode(ctx, maxENINum, maxIPPerENI)
-		if err != nil {
-			log.Errorf(ctx, "error patching cni capacity info: %v", err)
-			return err
-		}
-
-		return nil
+		return c.ipResourceManager.SyncCapacity(ctx)
 	})
 
 	if retryErr != nil {
@@ -252,7 +254,8 @@ func (c *Controller) syncENISpec(ctx context.Context, nodeName string, nodeListe
 	return nil
 }
 
-func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
+func (c *Controller) syncPodSubnetSpec(ctx context.Context, node *v1.Node) error {
+	nodeName := node.GetName()
 	log.V(6).Infof(ctx, "syncing pod subnet spec of node %v begins...", nodeName)
 	defer log.V(6).Infof(ctx, "syncing pod subnet spec of node %v ends...", nodeName)
 
@@ -266,7 +269,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 		instance, err := c.cloudClient.GetBBCInstanceENI(ctx, c.instanceID)
 		if err != nil {
 			log.Errorf(ctx, "failed to describe instance %v: %v", c.instanceID, err)
-			return err
+			instance = &bbc.GetInstanceEniResult{}
 		}
 		log.Infof(ctx, "instance %v detail: %v", c.instanceID, log.ToJson(instance))
 		c.bbcInstance = instance
@@ -292,15 +295,7 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 			return updateErr
 		}
 
-		const bbcMaxPrivateIPNum = 40
-		const bbcMaxENINum = 1
-		err = c.patchENICapacityInfoToNode(ctx, bbcMaxENINum, bbcMaxPrivateIPNum)
-		if err != nil {
-			log.Errorf(ctx, "error patching cni capacity info: %v", err)
-			return err
-		}
-
-		return nil
+		return c.ipResourceManager.SyncCapacity(ctx)
 	})
 
 	if retryErr != nil {
@@ -312,24 +307,17 @@ func (c *Controller) syncPodSubnetSpec(ctx context.Context, nodeName string, nod
 	return nil
 }
 
-func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLister corelisters.NodeLister) error {
+func (c *Controller) syncRangeSpec(ctx context.Context, node *v1.Node) error {
+	nodeName := node.GetName()
 	log.V(6).Infof(ctx, "syncing ip range of node %v begins...", nodeName)
 	defer log.V(6).Infof(ctx, "syncing ip range of node %v ends...", nodeName)
-
-	node, err := nodeLister.Get(nodeName)
-	if err != nil {
-		log.Errorf(ctx, "failed to get node %v: %v", nodeName, err)
-		return err
-	}
 
 	// according to node specification, if spec.PodCIDRs is not empty, the first element must equal to spec.PodCIDR
 	podCIDRs := make([]string, 0)
 	if len(node.Spec.PodCIDRs) == 0 {
 		podCIDRs = append(podCIDRs, node.Spec.PodCIDR)
 	} else {
-		for _, podCIDR := range node.Spec.PodCIDRs {
-			podCIDRs = append(podCIDRs, podCIDR)
-		}
+		podCIDRs = append(podCIDRs, node.Spec.PodCIDRs...)
 	}
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -369,7 +357,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 			return updateErr
 		}
 
-		return nil
+		return c.ipResourceManager.SyncCapacity(ctx)
 	})
 
 	if retryErr != nil {
@@ -378,6 +366,7 @@ func (c *Controller) syncRangeSpec(ctx context.Context, nodeName string, nodeLis
 	}
 
 	log.V(6).Infof(ctx, "update ippool %v spec ip range successfully", c.ippoolName)
+
 	return nil
 }
 
@@ -457,60 +446,4 @@ func (c *Controller) getInstanceSecurityGroupID(ctx context.Context) ([]string, 
 	}
 
 	return ids, nil
-}
-
-// patchENICapacityInfoToNode patches eni capacity info to node if not exists.
-// so user can reset these values.
-func (c *Controller) patchENICapacityInfoToNode(ctx context.Context, maxENINum, maxIPPerENI int) error {
-	node, err := c.kubeClient.CoreV1().Nodes().Get(ctx, c.nodeName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-
-	// in accordance with 1c1g bcc
-	preAttachedENINum := mathutil.Min(c.preAttachedENINum, maxENINum)
-
-	if node.Annotations == nil {
-		node.Annotations = make(map[string]string)
-	}
-
-	isCreated := true
-
-	if _, ok := node.Annotations[utileni.NodeAnnotationMaxENINum]; !ok {
-		isCreated = false
-		node.Annotations[utileni.NodeAnnotationMaxENINum] = strconv.Itoa(maxENINum)
-	}
-
-	if _, ok := node.Annotations[utileni.NodeAnnotationMaxIPPerENI]; !ok {
-		isCreated = false
-		node.Annotations[utileni.NodeAnnotationMaxIPPerENI] = strconv.Itoa(maxIPPerENI)
-	}
-
-	if _, ok := node.Annotations[utileni.NodeAnnotationWarmIPTarget]; !ok {
-		isCreated = false
-		// set default warm-ip-target
-		node.Annotations[utileni.NodeAnnotationWarmIPTarget] = strconv.Itoa(maxIPPerENI / 2)
-	}
-
-	if _, ok := node.Annotations[utileni.NodeAnnotationPreAttachedENINum]; !ok {
-		isCreated = false
-		// set default pre-attached-eni-num
-		node.Annotations[utileni.NodeAnnotationPreAttachedENINum] = strconv.Itoa(preAttachedENINum)
-	}
-
-	// patch annotations
-	if !isCreated {
-		json, err := json.Marshal(node.Annotations)
-		if err != nil {
-			return err
-		}
-
-		patchData := []byte(fmt.Sprintf(`{"metadata":{"annotations":%s}}`, json))
-		_, err = c.kubeClient.CoreV1().Nodes().Patch(ctx, c.nodeName, ktypes.StrategicMergePatchType, patchData, metav1.PatchOptions{})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }

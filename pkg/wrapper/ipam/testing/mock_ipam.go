@@ -5,36 +5,37 @@
 package testing
 
 import (
+	reflect "reflect"
+
 	types "github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/current"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// ConfigureIface mocks base method
+// ConfigureIface mocks base method.
 func (m *MockInterface) ConfigureIface(arg0 string, arg1 *current.Result) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ConfigureIface", arg0, arg1)
@@ -42,13 +43,13 @@ func (m *MockInterface) ConfigureIface(arg0 string, arg1 *current.Result) error 
 	return ret0
 }
 
-// ConfigureIface indicates an expected call of ConfigureIface
+// ConfigureIface indicates an expected call of ConfigureIface.
 func (mr *MockInterfaceMockRecorder) ConfigureIface(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureIface", reflect.TypeOf((*MockInterface)(nil).ConfigureIface), arg0, arg1)
 }
 
-// ExecAdd mocks base method
+// ExecAdd mocks base method.
 func (m *MockInterface) ExecAdd(arg0 string, arg1 []byte) (types.Result, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ExecAdd", arg0, arg1)
@@ -57,13 +58,13 @@ func (m *MockInterface) ExecAdd(arg0 string, arg1 []byte) (types.Result, error) 
 	return ret0, ret1
 }
 
-// ExecAdd indicates an expected call of ExecAdd
+// ExecAdd indicates an expected call of ExecAdd.
 func (mr *MockInterfaceMockRecorder) ExecAdd(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecAdd", reflect.TypeOf((*MockInterface)(nil).ExecAdd), arg0, arg1)
 }
 
-// ExecDel mocks base method
+// ExecDel mocks base method.
 func (m *MockInterface) ExecDel(arg0 string, arg1 []byte) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ExecDel", arg0, arg1)
@@ -71,7 +72,7 @@ func (m *MockInterface) ExecDel(arg0 string, arg1 []byte) error {
 	return ret0
 }
 
-// ExecDel indicates an expected call of ExecDel
+// ExecDel indicates an expected call of ExecDel.
 func (mr *MockInterfaceMockRecorder) ExecDel(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecDel", reflect.TypeOf((*MockInterface)(nil).ExecDel), arg0, arg1)

@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elastic-deploy
+spec:
+  replicas: 30
+  selector:
+    matchLabels:
+      workloadType: sts
+      app: override
+  template:
+    metadata:
+      labels:
+        workloadType: sts
+        app: override
+    spec:
+      containers:
+        -  name: myapp
+           image: registry.baidubce.com/cce-plugin-dev/system-config-override:0.0.4
+           command:
+           - /bin/bash
+           - -c
+           - sleep 3600
+           ports:
+           - containerPort: 8068
+             name: web

@@ -27,11 +27,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
@@ -44,6 +46,110 @@ const (
 	ENIReadyTimeToAttach        = 5 * time.Second
 	CreateENIMaxConcurrency     = 15
 )
+
+func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
+	eniSyncInterval := wait.Jitter(ipam.eniSyncPeriod, 0.2)
+
+	err := wait.PollImmediateUntil(eniSyncInterval, func() (bool, error) {
+		return ipam.resyncENI()
+	}, stopCh)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// list vpc enis
+// list nodes whose instance type is BCC
+// build eni cache of bcc nodes
+// update ippool status and metrics of bcc nodes
+// check each node, determine whether to add new eni
+func (ipam *IPAM) resyncENI() (bool, error) {
+	ctx := log.NewContext()
+
+	listArgs := enisdk.ListEniArgs{
+		VpcId: ipam.vpcID,
+		Name:  fmt.Sprintf("%s/", ipam.clusterID),
+	}
+	enis, err := ipam.cloud.ListENIs(ctx, listArgs)
+	if err != nil {
+		log.Errorf(ctx, "failed to list enis when syncing eni info: %v", err)
+		return false, nil
+	}
+
+	bccSelector, err := bccNodeListerSelector()
+	if err != nil {
+		log.Errorf(ctx, "error parsing requirement: %v", err)
+		return false, nil
+	}
+
+	nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(bccSelector)
+	if err != nil {
+		log.Errorf(ctx, "failed to list nodes when syncing eni info: %v", err)
+		return false, nil
+	}
+
+	ipam.buildInuseENICache(ctx, nodes, enis)
+
+	metric.MultiEniMultiIPEniCount.Reset()
+	metric.MultiEniMultiIPEniIPCount.Reset()
+	ipam.updateENIMetrics(enis)
+
+	for _, node := range nodes {
+		instanceID, err := util.GetInstanceIDFromNode(node)
+		if err != nil {
+			log.Errorf(ctx, "failed to get instance id of node %v, skip updating ippool", node.Name)
+			continue
+		}
+
+		if !ipam.datastore.NodeExistsInStore(node.Name) {
+			ipam.datastore.AddNodeToStore(node.Name, instanceID)
+		}
+
+		err = ipam.updateIPPoolStatus(ctx, node, instanceID, enis)
+		if err != nil {
+			log.Errorf(ctx, "failed to update ippool status for node %v: %v", node.Name, err)
+		}
+	}
+
+	err = ipam.increaseENIIfRequired(ctx, nodes, enis)
+	if err != nil {
+		log.Errorf(ctx, "failed to increase eni: %v", err)
+	}
+
+	return false, nil
+}
+
+func (ipam *IPAM) buildInuseENICache(ctx context.Context, nodes []*v1.Node, enis []enisdk.Eni) error {
+	ipam.lock.Lock()
+	defer ipam.lock.Unlock()
+
+	// build eni cache
+	ipam.eniCache = make(map[string][]*enisdk.Eni)
+	ipam.privateIPNumCache = make(map[string]int)
+
+	instanceIdToNodeNameMap := buildInstanceIdToNodeNameMap(ctx, nodes)
+	// init eni cache
+	for _, n := range nodes {
+		ipam.eniCache[n.Name] = make([]*enisdk.Eni, 0)
+	}
+
+	for idx, eni := range enis {
+		if eni.Status != utileni.ENIStatusInuse {
+			continue
+		}
+
+		if nodeName, ok := instanceIdToNodeNameMap[eni.InstanceId]; ok {
+			ipam.eniCache[nodeName] = append(ipam.eniCache[nodeName], &enis[idx])
+		}
+
+		// update private ip num of enis
+		ipam.privateIPNumCache[eni.EniId] = len(eni.PrivateIpSet)
+	}
+
+	return nil
+}
 
 // findSuitableENIs find suitable enis for pod
 func (ipam *IPAM) findSuitableENIs(ctx context.Context, pod *v1.Pod) ([]*enisdk.Eni, error) {
@@ -107,15 +213,6 @@ func unstableSortENIByPrivateIPNum(enis []*enisdk.Eni) {
 	})
 }
 
-func (ipam *IPAM) unstableSortENI(enis []*enisdk.Eni) {
-	rand.Shuffle(len(enis), func(i, j int) {
-		enis[i], enis[j] = enis[j], enis[i]
-	})
-	sort.Slice(enis, func(i, j int) bool {
-		return len(enis[i].PrivateIpSet) < len(enis[j].PrivateIpSet)
-	})
-}
-
 func listENIsBySubnet(enis []*enisdk.Eni, subnetID string) []*enisdk.Eni {
 	result := make([]*enisdk.Eni, 0)
 
@@ -149,17 +246,7 @@ func buildENICache(ctx context.Context, enis []enisdk.Eni) map[string][]*enisdk.
 }
 
 // TODO: split to multi request and listen node add event
-func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node) error {
-	listArgs := enisdk.ListEniArgs{
-		VpcId: ipam.vpcID,
-		Name:  fmt.Sprintf("%s/", ipam.clusterID),
-	}
-	enis, err := ipam.cloud.ListENIs(ctx, listArgs)
-	if err != nil {
-		log.Errorf(ctx, "failed to list enis when trying to increase eni: %v", err)
-		return err
-	}
-
+func (ipam *IPAM) increaseENIIfRequired(ctx context.Context, nodes []*v1.Node, enis []enisdk.Eni) error {
 	eniCache := buildENICache(ctx, enis)
 
 	var needNewENINodeCount = 0
@@ -356,6 +443,8 @@ func (ipam *IPAM) needToCreateNewENI(ctx context.Context, node *v1.Node, attache
 func (ipam *IPAM) getAvailableIPAndENINum(ctx context.Context, node string, maxIPPerENI int, enis []*enisdk.Eni) (int, int) {
 	var ipNum, eniNum int
 
+	// The primary IP of Eni shall not affect the capacity expansion
+	maxIPPerENI = maxIPPerENI - 1
 	for _, eni := range enis {
 		subnet, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(eni.SubnetId)
 		if err != nil {
@@ -424,6 +513,12 @@ func (ipam *IPAM) findAllCandidateSubnetsOfNode(ctx context.Context, node *v1.No
 			subnet, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(s)
 			if err != nil {
 				log.Errorf(ctx, "failed to get subnet %v crd: %v", s, err)
+				return nil, err
+			}
+
+			// don't use exclusive subnet
+			if subnet.Spec.Exclusive {
+				log.Errorf(ctx, "failed to add a exclusive subnet to node")
 				return nil, err
 			}
 			result = append(result, subnet)
@@ -631,7 +726,7 @@ func (ipam *IPAM) allocateENI(
 	if err != nil {
 		log.Errorf(ctx, "failed to create eni for node %v: %v", node.Name, err)
 		if cloud.IsErrorSubnetHasNoMoreIP(err) {
-			if e := ipam.declareSubnetHasNoMoreIP(ctx, subnetID, true); e != nil {
+			if e := ipam.sbnCtl.DeclareSubnetHasNoMoreIP(ctx, subnetID, true); e != nil {
 				log.Errorf(ctx, "failed to patch subnet %v that has no more ip: %v", subnetID, e)
 			}
 		}
@@ -747,4 +842,25 @@ func isSubnetQualifiedToCreateENI(subnet *v1alpha1.Subnet) bool {
 
 func isSubnetHasNoMoreIP(subnet *v1alpha1.Subnet) bool {
 	return subnet.Status.HasNoMoreIP
+}
+
+func (ipam *IPAM) updateENIMetrics(enis []enisdk.Eni) {
+	for _, eni := range enis {
+		if utileni.ENIOwnedByCluster(&eni, metric.MetaInfo.ClusterID) {
+			metric.MultiEniMultiIPEniCount.WithLabelValues(
+				metric.MetaInfo.ClusterID,
+				metric.MetaInfo.VPCID,
+				eni.SubnetId,
+				eni.Status,
+			).Inc()
+		}
+
+		if eni.Status == utileni.ENIStatusInuse && utileni.ENIOwnedByCluster(&eni, metric.MetaInfo.ClusterID) {
+			metric.MultiEniMultiIPEniIPCount.WithLabelValues(
+				metric.MetaInfo.ClusterID,
+				eni.VpcId,
+				eni.SubnetId,
+			).Add((float64(len(eni.PrivateIpSet) - 1)))
+		}
+	}
 }

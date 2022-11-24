@@ -1,0 +1,15 @@
+apiVersion: cce.io/v1alpha1
+kind: PodSubnetTopologySpread
+metadata:
+    name: example-subnet-topology
+    namespace: default
+spec:
+    priority: 0
+    subnets:
+        # elastic-f 192.168.100.0/24
+        sbn-xcee24pjj0p1: {}
+         # elastic-c 192.168.101.0/24
+        sbn-e8rk4zxn2ys6: {}
+    maxSkew: 10
+    whenUnsatisfiable: ScheduleAnyway
+    enablePodTopologySpread: true

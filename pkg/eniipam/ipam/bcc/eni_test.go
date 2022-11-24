@@ -17,30 +17,32 @@ package bcc
 
 import (
 	"context"
+	"fmt"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
+	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
+	eniutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
+	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/golang/mock/gomock"
 	"github.com/juju/ratelimit"
-	v1 "k8s.io/api/core/v1"
+	"github.com/stretchr/testify/suite"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
-
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
-	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
-	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 func Test_buildENICache(t *testing.T) {
@@ -93,7 +95,7 @@ func Test_listAttachedENIs(t *testing.T) {
 	type args struct {
 		ctx       context.Context
 		clusterID string
-		node      *v1.Node
+		node      *corev1.Node
 		eniCache  map[string][]*enisdk.Eni
 	}
 	tests := []struct {
@@ -107,11 +109,11 @@ func Test_listAttachedENIs(t *testing.T) {
 			args: args{
 				ctx:       nil,
 				clusterID: "cce-xxx",
-				node: &v1.Node{
+				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "nodeA",
 					},
-					Spec: v1.NodeSpec{
+					Spec: corev1.NodeSpec{
 						ProviderID: "cce://i-aaa",
 					},
 				},
@@ -141,7 +143,6 @@ func Test_listAttachedENIs(t *testing.T) {
 func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 	type fields struct {
 		ctrl                    *gomock.Controller
-		lock                    sync.RWMutex
 		eniCache                map[string][]*enisdk.Eni
 		privateIPNumCache       map[string]int
 		possibleLeakedIPCache   map[eniAndIPAddrKey]time.Time
@@ -173,7 +174,7 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 	}
 	type args struct {
 		ctx  context.Context
-		node *v1.Node
+		node *corev1.Node
 	}
 	tests := []struct {
 		name    string
@@ -190,14 +191,14 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				_, _, crdClient, _, _, _, _ := setupEnv(ctrl)
 
 				return fields{
-					ctrl:      ctrl,
-					lock:      sync.RWMutex{},
+					ctrl: ctrl,
+
 					crdClient: crdClient,
 				}
 			}(),
 			args: args{
 				ctx: log.NewContext(),
-				node: &v1.Node{
+				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "node",
 					},
@@ -214,10 +215,10 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				_, _, crdClient, _, _, _, _ := setupEnv(ctrl)
 
 				ctx := log.NewContext()
-				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
+				crdClient.CceV1alpha1().IPPools(corev1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "ippool-node",
-						Namespace: v1.NamespaceDefault,
+						Namespace: corev1.NamespaceDefault,
 					},
 					Spec: v1alpha1.IPPoolSpec{
 						ENI: v1alpha1.ENISpec{
@@ -231,14 +232,14 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				}, metav1.CreateOptions{})
 
 				return fields{
-					ctrl:      ctrl,
-					lock:      sync.RWMutex{},
+					ctrl: ctrl,
+
 					crdClient: crdClient,
 				}
 			}(),
 			args: args{
 				ctx: log.NewContext(),
-				node: &v1.Node{
+				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "node",
 					},
@@ -255,10 +256,10 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				_, _, crdClient, _, _, _, _ := setupEnv(ctrl)
 
 				ctx := log.NewContext()
-				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
+				crdClient.CceV1alpha1().IPPools(corev1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "ippool-node",
-						Namespace: v1.NamespaceDefault,
+						Namespace: corev1.NamespaceDefault,
 					},
 					Spec: v1alpha1.IPPoolSpec{
 						ENI: v1alpha1.ENISpec{
@@ -269,14 +270,14 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				}, metav1.CreateOptions{})
 
 				return fields{
-					ctrl:      ctrl,
-					lock:      sync.RWMutex{},
+					ctrl: ctrl,
+
 					crdClient: crdClient,
 				}
 			}(),
 			args: args{
 				ctx: log.NewContext(),
-				node: &v1.Node{
+				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "node",
 					},
@@ -293,10 +294,10 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				_, _, crdClient, _, _, _, _ := setupEnv(ctrl)
 
 				ctx := log.NewContext()
-				crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
+				crdClient.CceV1alpha1().IPPools(corev1.NamespaceDefault).Create(ctx, &v1alpha1.IPPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "ippool-node",
-						Namespace: v1.NamespaceDefault,
+						Namespace: corev1.NamespaceDefault,
 					},
 					Spec: v1alpha1.IPPoolSpec{
 						ENI: v1alpha1.ENISpec{
@@ -307,14 +308,14 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 				}, metav1.CreateOptions{})
 
 				return fields{
-					ctrl:      ctrl,
-					lock:      sync.RWMutex{},
+					ctrl: ctrl,
+
 					crdClient: crdClient,
 				}
 			}(),
 			args: args{
 				ctx: log.NewContext(),
-				node: &v1.Node{
+				node: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "node",
 					},
@@ -331,7 +332,6 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 		}
 		t.Run(tt.name, func(t *testing.T) {
 			ipam := &IPAM{
-				lock:                    tt.fields.lock,
 				eniCache:                tt.fields.eniCache,
 				privateIPNumCache:       tt.fields.privateIPNumCache,
 				possibleLeakedIPCache:   tt.fields.possibleLeakedIPCache,
@@ -374,4 +374,106 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 			}
 		})
 	}
+}
+
+type IPAMENI struct {
+	suite.Suite
+	ipam      *IPAM
+	wantErr   bool
+	ctx       context.Context
+	name      string
+	namespace string
+	stopChan  chan struct{}
+}
+
+// 每次测试前设置上下文
+func (suite *IPAMENI) SetupTest() {
+	suite.stopChan = make(chan struct{})
+	suite.ipam = mockIPAM(suite.T(), suite.stopChan)
+	suite.ctx = context.TODO()
+}
+
+// 每次测试后执行清理
+func (suite *IPAMENI) TearDownTest() {
+	suite.ipam = nil
+	suite.ctx = nil
+	suite.wantErr = false
+	close(suite.stopChan)
+}
+
+func (suite *IPAMENI) TestSyncEni() {
+	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
+	mockInterface.ListENIs(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("error")).AnyTimes()
+	go suite.ipam.syncENI(suite.stopChan)
+	time.Sleep(time.Second)
+}
+
+func (suite *IPAMENI) TestResyncEni() {
+	eni4 := mockEni("eni-4", "i-3", "10.0.0.3")
+	eni4.Status = utileni.ENIStatusAttaching
+	enis := []enisdk.Eni{
+		mockEni("eni-1", "i-1", "10.0.0.1"),
+		mockEni("eni-2", "i-1", "10.0.0.1"),
+		mockEni("eni-3", "i-1", "10.0.0.1"),
+		eni4,
+	}
+	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
+	mockInterface.ListENIs(gomock.Any(), gomock.Any()).Return(enis, nil).AnyTimes()
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "10.0.0.1",
+			Annotations: map[string]string{
+				eniutil.NodeAnnotationPreAttachedENINum: "1",
+				eniutil.NodeAnnotationMaxENINum:         "8",
+				eniutil.NodeAnnotationMaxIPPerENI:       "8",
+				eniutil.NodeAnnotationWarmIPTarget:      "8",
+			},
+			Labels: map[string]string{
+				"beta.kubernetes.io/instance-type": "BCC",
+			},
+		},
+		Spec: corev1.NodeSpec{
+			ProviderID: "cce://i-1",
+		},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+	node2 := node.DeepCopy()
+	node2.Name = "10.0.0.2"
+	node2.Spec.ProviderID = "cce://i-2//i3"
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node2, metav1.CreateOptions{})
+	node3 := node.DeepCopy()
+	node3.Name = "10.0.0.3"
+	node2.Spec.ProviderID = "cce://i-3"
+	node3.Status.Conditions = make([]corev1.NodeCondition, 0)
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node3, metav1.CreateOptions{})
+
+	__waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer, suite.stopChan)
+	suite.ipam.resyncENI()
+}
+
+func mockEni(id, instanceId, node string) enisdk.Eni {
+	return enisdk.Eni{
+
+		EniId:      id,
+		Name:       fmt.Sprintf("clusterID/%s/%s/%s", instanceId, node, id),
+		Status:     utileni.ENIStatusInuse,
+		ZoneName:   "zoneF",
+		SubnetId:   "sbn-test",
+		VpcId:      "vpcID",
+		MacAddress: "sa:sd:04:05:06",
+		InstanceId: instanceId,
+	}
+}
+func TestIPAMENI(t *testing.T) {
+	suite.Run(t, new(IPAMENI))
 }

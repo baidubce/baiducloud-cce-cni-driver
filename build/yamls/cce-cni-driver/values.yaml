@@ -28,3 +28,4 @@ EnableStaticRoute: false # worker 节点创建静态路由(仅 VPC 网络模式�
 
 # Prometheus Monitor
 IPAMScheduledToMaster: false # CCE 监控使用
+IPAMReplicas: 3

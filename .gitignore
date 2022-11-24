@@ -12,7 +12,8 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
+.history/
 
 # Others
 output/
@@ -24,3 +25,6 @@ cover.html
 .vscode
 .DS_Store
 c.out
+__debug_bin
+build.local
+output

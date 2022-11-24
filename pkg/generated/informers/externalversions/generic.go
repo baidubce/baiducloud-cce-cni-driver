@@ -37,8 +37,16 @@ func (f *genericInformer) Lister() cache.GenericLister {
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
 	// Group=cce.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithResource("crossvpcenis"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().CrossVPCEnis().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("ippools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().IPPools().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("multiipworkloadendpoints"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().MultiIPWorkloadEndpoints().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("podsubnettopologyspreads"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("podsubnettopologyspreadtables"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().PodSubnetTopologySpreadTables().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("subnets"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().Subnets().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("workloadendpoints"):

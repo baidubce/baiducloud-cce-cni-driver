@@ -29,10 +29,11 @@ import (
 
 func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 	type fields struct {
-		ctrl   *gomock.Controller
-		ipamd  ipam.Interface
-		port   int
-		ipType rpc.IPType
+		ctrl     *gomock.Controller
+		ipamd    ipam.Interface
+		eniipamd ipam.ExclusiveEniInterface
+		port     int
+		ipType   rpc.IPType
 	}
 	type args struct {
 		ctx context.Context
@@ -70,6 +71,12 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 					K8SPodName:             "busybox",
 					K8SPodNamespace:        "default",
 					K8SPodInfraContainerID: "xxxxx",
+					IPType:                 rpc.IPType_BCCMultiENIMultiIPType,
+					NetworkInfo: &rpc.AllocateIPRequest_ENIMultiIP{
+						ENIMultiIP: &rpc.ENIMultiIPRequest{
+							Mac: "fsfsgsg",
+						},
+					},
 				},
 			},
 			want: &rpc.AllocateIPReply{
@@ -83,6 +90,92 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "跨 VPC 弹性网卡正常流程",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockExclusiveEniInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.CrossVPCEni{
+						Status: v1alpha1.CrossVPCEniStatus{
+							PrimaryIPAddress: "192.168.100.100",
+							MacAddress:       "a2:37:b9:e8:ee:8f",
+						},
+					}, nil),
+				)
+				return fields{
+					ctrl:     ctrl,
+					eniipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.AllocateIPRequest{
+					IPType:                 rpc.IPType_CrossVPCENIIPType,
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+				},
+			},
+			want: &rpc.AllocateIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_CrossVPCENIIPType,
+				NetworkInfo: &rpc.AllocateIPReply_CrossVPCENI{
+					CrossVPCENI: &rpc.CrossVPCENIReply{
+						IP:  "192.168.100.100",
+						Mac: "a2:37:b9:e8:ee:8f",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "跨 VPC 弹性网卡正常流程，支持自定义路由",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockExclusiveEniInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.CrossVPCEni{
+						Spec: v1alpha1.CrossVPCEniSpec{
+							DefaultRouteInterfaceDelegation: "eni",
+							DefaultRouteExcludedCidrs:       []string{"7.0.0.0/8"},
+						},
+						Status: v1alpha1.CrossVPCEniStatus{
+							PrimaryIPAddress: "192.168.100.100",
+							MacAddress:       "a2:37:b9:e8:ee:8f",
+						},
+					}, nil),
+				)
+				return fields{
+					ctrl:     ctrl,
+					eniipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.AllocateIPRequest{
+					IPType:                 rpc.IPType_CrossVPCENIIPType,
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+				},
+			},
+			want: &rpc.AllocateIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_CrossVPCENIIPType,
+				NetworkInfo: &rpc.AllocateIPReply_CrossVPCENI{
+					CrossVPCENI: &rpc.CrossVPCENIReply{
+						IP:                              "192.168.100.100",
+						Mac:                             "a2:37:b9:e8:ee:8f",
+						DefaultRouteInterfaceDelegation: "eni",
+						DefaultRouteExcludedCidrs:       []string{"7.0.0.0/8"},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -91,6 +184,7 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 			}
 			cb := &ENIIPAMGrpcServer{
 				bccipamd: tt.fields.ipamd,
+				eniipamd: tt.fields.eniipamd,
 				port:     tt.fields.port,
 			}
 			got, err := cb.AllocateIP(tt.args.ctx, tt.args.req)
@@ -107,10 +201,11 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 
 func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 	type fields struct {
-		ctrl   *gomock.Controller
-		ipamd  ipam.Interface
-		port   int
-		ipType rpc.IPType
+		ctrl     *gomock.Controller
+		ipamd    ipam.Interface
+		eniipamd ipam.ExclusiveEniInterface
+		port     int
+		ipType   rpc.IPType
 	}
 	type args struct {
 		ctx context.Context
@@ -160,6 +255,90 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "跨 VPC 弹性网卡正常流程",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockExclusiveEniInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Release(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.CrossVPCEni{
+						Status: v1alpha1.CrossVPCEniStatus{
+							PrimaryIPAddress: "192.168.100.100",
+						},
+					}, nil),
+				)
+
+				return fields{
+					ctrl:     ctrl,
+					eniipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.ReleaseIPRequest{
+					IPType:                 rpc.IPType_CrossVPCENIIPType,
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+				},
+			},
+			want: &rpc.ReleaseIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_CrossVPCENIIPType,
+				NetworkInfo: &rpc.ReleaseIPReply_CrossVPCENI{
+					CrossVPCENI: &rpc.CrossVPCENIReply{
+						IP: "192.168.100.100",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "跨 VPC 弹性网卡正常流程，支持自定义路由",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockExclusiveEniInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Release(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.CrossVPCEni{
+						Spec: v1alpha1.CrossVPCEniSpec{
+							DefaultRouteInterfaceDelegation: "eni",
+							DefaultRouteExcludedCidrs:       []string{"7.0.0.0/8"},
+						},
+						Status: v1alpha1.CrossVPCEniStatus{
+							PrimaryIPAddress: "192.168.100.100",
+						},
+					}, nil),
+				)
+
+				return fields{
+					ctrl:     ctrl,
+					eniipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.ReleaseIPRequest{
+					IPType:                 rpc.IPType_CrossVPCENIIPType,
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+				},
+			},
+			want: &rpc.ReleaseIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_CrossVPCENIIPType,
+				NetworkInfo: &rpc.ReleaseIPReply_CrossVPCENI{
+					CrossVPCENI: &rpc.CrossVPCENIReply{
+						IP:                              "192.168.100.100",
+						DefaultRouteInterfaceDelegation: "eni",
+						DefaultRouteExcludedCidrs:       []string{"7.0.0.0/8"},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		if tt.fields.ctrl != nil {
@@ -168,6 +347,7 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cb := &ENIIPAMGrpcServer{
 				bccipamd: tt.fields.ipamd,
+				eniipamd: tt.fields.eniipamd,
 				port:     tt.fields.port,
 			}
 			got, err := cb.ReleaseIP(tt.args.ctx, tt.args.req)
@@ -219,5 +399,21 @@ func Test_isRateLimitErrorMessage(t *testing.T) {
 				t.Errorf("isRateLimitErrorMessage() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunRPCServer(t *testing.T) {
+	srv := New(
+		nil,
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		false,
+	)
+	if srv != nil {
+		go srv.RunRPCHandler(context.TODO())
 	}
 }

@@ -5,35 +5,36 @@
 package testing
 
 import (
+	reflect "reflect"
+
 	ns "github.com/containernetworking/plugins/pkg/ns"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// GetCurrentNS mocks base method
+// GetCurrentNS mocks base method.
 func (m *MockInterface) GetCurrentNS() (ns.NetNS, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetCurrentNS")
@@ -42,13 +43,13 @@ func (m *MockInterface) GetCurrentNS() (ns.NetNS, error) {
 	return ret0, ret1
 }
 
-// GetCurrentNS indicates an expected call of GetCurrentNS
+// GetCurrentNS indicates an expected call of GetCurrentNS.
 func (mr *MockInterfaceMockRecorder) GetCurrentNS() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentNS", reflect.TypeOf((*MockInterface)(nil).GetCurrentNS))
 }
 
-// GetNS mocks base method
+// GetNS mocks base method.
 func (m *MockInterface) GetNS(arg0 string) (ns.NetNS, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNS", arg0)
@@ -57,13 +58,13 @@ func (m *MockInterface) GetNS(arg0 string) (ns.NetNS, error) {
 	return ret0, ret1
 }
 
-// GetNS indicates an expected call of GetNS
+// GetNS indicates an expected call of GetNS.
 func (mr *MockInterfaceMockRecorder) GetNS(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNS", reflect.TypeOf((*MockInterface)(nil).GetNS), arg0)
 }
 
-// WithNetNSPath mocks base method
+// WithNetNSPath mocks base method.
 func (m *MockInterface) WithNetNSPath(arg0 string, arg1 func(ns.NetNS) error) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "WithNetNSPath", arg0, arg1)
@@ -71,7 +72,7 @@ func (m *MockInterface) WithNetNSPath(arg0 string, arg1 func(ns.NetNS) error) er
 	return ret0
 }
 
-// WithNetNSPath indicates an expected call of WithNetNSPath
+// WithNetNSPath indicates an expected call of WithNetNSPath.
 func (mr *MockInterfaceMockRecorder) WithNetNSPath(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithNetNSPath", reflect.TypeOf((*MockInterface)(nil).WithNetNSPath), arg0, arg1)

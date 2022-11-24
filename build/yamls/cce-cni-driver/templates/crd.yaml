@@ -61,3 +61,149 @@ spec:
     shortNames:
       - sbn
   scope: Namespaced
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.7.0
+  creationTimestamp: null
+  name: crossvpcenis.cce.io
+spec:
+  group: cce.io
+  names:
+    kind: CrossVPCEni
+    listKind: CrossVPCEniList
+    plural: crossvpcenis
+    shortNames:
+    - cveni
+    singular: crossvpceni
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.userID
+      name: USER_ID
+      type: string
+    - jsonPath: .status.eniID
+      name: ENI_ID
+      type: string
+    - jsonPath: .status.eniStatus
+      name: ENI_STATUS
+      type: string
+    - jsonPath: .spec.boundInstanceID
+      name: Instance
+      type: string
+    - jsonPath: .status.vpcID
+      name: VPC
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: CREATETIME
+      type: string
+    - jsonPath: .metadata.deletionTimestamp
+      name: DELETETIME
+      type: string
+    - jsonPath: .metadata.labels
+      name: LABEL
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CrossVPCEni is the Schema for the crossvpcenis API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CrossVPCEniSpec defines the desired state of CrossVPCEni
+            properties:
+              boundInstanceID:
+                description: BoundInstanceID is instance id of the node where this
+                  eni will be attached
+                type: string
+              defaultRouteExcludedCidrs:
+                description: DefaultRouteExcludedCidrs is the cidrs excluded from
+                  default route
+                items:
+                  type: string
+                type: array
+              defaultRouteInterfaceDelegation:
+                description: DefaultRouteInterfaceDelegation specifies the default
+                  route interface type
+                enum:
+                - eni
+                type: string
+              privateIPAddress:
+                description: PrivateIPAddress is the private ip address to create
+                  an eni
+                type: string
+              securityGroupIDs:
+                description: SecurityGroupIDs is the list of security groups that
+                  are bound to eni
+                items:
+                  type: string
+                type: array
+              subnetID:
+                description: SubnetID is id of the subnet where this eni is created
+                type: string
+              userID:
+                description: UserID is the id of the user which this eni belongs to
+                type: string
+              vpcCidr:
+                description: VPCCIDR is cidr of the vpc where this eni is created
+                type: string
+            type: object
+          status:
+            description: CrossVPCEniStatus defines the observed state of CrossVPCEni
+            properties:
+              conditions:
+                description: Conditions is the conditions of this eni
+                items:
+                  properties:
+                    eniStatus:
+                      type: string
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                  type: object
+                maxItems: 10
+                type: array
+              eniID:
+                description: EniID is id of this eni
+                type: string
+              eniStatus:
+                description: EniStatus is the status of this eni
+                type: string
+              involvedContainerID:
+                description: ' InvolvedContainerID is the infra container id of this
+                  eni'
+                type: string
+              macAddress:
+                description: MacAddress is the hardware address of this eni
+                type: string
+              primaryIPAddress:
+                description: PrimaryIPAddress is the primary ip address of this eni
+                type: string
+              vpcID:
+                description: VPCID is the vpc id of this eni
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

@@ -49,6 +49,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	sbncontroller "github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/subnet"
 	datastorev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
@@ -72,11 +73,12 @@ const (
 func NewIPAM(
 	kubeClient kubernetes.Interface,
 	crdClient versioned.Interface,
+	kubeInformer informers.SharedInformerFactory,
+	crdInformer crdinformers.SharedInformerFactory,
 	bceClient cloud.Interface,
 	cniMode types.ContainerNetworkMode,
 	vpcID string,
 	clusterID string,
-	resyncPeriod time.Duration,
 	gcPeriod time.Duration,
 	batchAddIPNum int,
 	ipMutatingRate float64,
@@ -90,9 +92,6 @@ func NewIPAM(
 		Interface: kubeClient.CoreV1().Events(""),
 	})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cce-ipam"})
-
-	kubeInformer := informers.NewSharedInformerFactory(kubeClient, resyncPeriod)
-	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, resyncPeriod)
 
 	ipam := &IPAM{
 		eventBroadcaster:      eventBroadcaster,
@@ -262,7 +261,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			SubnetID:    ipSubnet,
 			Node:        pod.Spec.NodeName,
 			InstanceID:  instanceID,
-			UpdateAt:    metav1.Time{ipam.clock.Now()},
+			UpdateAt:    metav1.Time{Time: time.Unix(0, 0)},
 		},
 	}
 
@@ -955,9 +954,8 @@ func (ipam *IPAM) increasePool(
 	// build subnet cache
 	for _, sbn := range candidateSubnets {
 		sbnCr, err := ipam.crdInformer.Cce().V1alpha1().Subnets().Lister().Subnets(v1.NamespaceDefault).Get(sbn)
-		if err != nil {
+		if err != nil || !sbnCr.Status.Enable {
 			log.Warningf(ctx, "failed to get subnet cr %v: %v", sbn, err)
-			subnets = append(subnets, subnet{subnetID: sbn, availableCnt: 0})
 		} else {
 			subnets = append(subnets, subnet{subnetID: sbn, availableCnt: sbnCr.Status.AvailableIPNum})
 		}
@@ -1121,7 +1119,7 @@ func (ipam *IPAM) tryBatchAddIP(
 				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 			}
 			if batchAddNum == 1 && cloud.IsErrorSubnetHasNoMoreIP(err) {
-				ipamgeneric.DeclareSubnetHasNoMoreIP(ctx, ipam.crdClient, ipam.crdInformer, subnetID, true)
+				sbncontroller.DeclareSubnetHasNoMoreIP(ctx, ipam.crdClient, ipam.crdInformer, subnetID, true)
 			}
 			if isErrorNeedExponentialBackoff(err) {
 				if batchAddNum == 1 {
@@ -1300,7 +1298,7 @@ func (ipam *IPAM) createSubnetCRs(ctx context.Context, candidateSubnets []string
 			log.Warningf(ctx, "subnet cr for %v is not found, will create...", sbn)
 
 			ipam.bucket.Wait(1)
-			if err := ipamgeneric.CreateSubnetCR(ctx, ipam.cloud, ipam.crdClient, sbn); err != nil {
+			if err := sbncontroller.CreateSubnetCR(ctx, ipam.cloud, ipam.crdClient, sbn); err != nil {
 				log.Errorf(ctx, "failed to create subnet cr for %v: %v", sbn, err)
 				errs = append(errs, err)
 				continue

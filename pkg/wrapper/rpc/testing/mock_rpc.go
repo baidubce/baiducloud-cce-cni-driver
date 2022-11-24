@@ -5,36 +5,37 @@
 package testing
 
 import (
+	reflect "reflect"
+
 	rpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	gomock "github.com/golang/mock/gomock"
 	grpc "google.golang.org/grpc"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// NewCNIBackendClient mocks base method
+// NewCNIBackendClient mocks base method.
 func (m *MockInterface) NewCNIBackendClient(arg0 *grpc.ClientConn) rpc.CNIBackendClient {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewCNIBackendClient", arg0)
@@ -42,7 +43,7 @@ func (m *MockInterface) NewCNIBackendClient(arg0 *grpc.ClientConn) rpc.CNIBacken
 	return ret0
 }
 
-// NewCNIBackendClient indicates an expected call of NewCNIBackendClient
+// NewCNIBackendClient indicates an expected call of NewCNIBackendClient.
 func (mr *MockInterfaceMockRecorder) NewCNIBackendClient(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewCNIBackendClient", reflect.TypeOf((*MockInterface)(nil).NewCNIBackendClient), arg0)

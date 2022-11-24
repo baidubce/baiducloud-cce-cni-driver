@@ -3,14 +3,17 @@ HOMEDIR := $(shell pwd)
 OUTDIR  := $(HOMEDIR)/output
 
 # init command params
-GO      := $(GO_1_16_BIN)/go
-GOROOT  := $(GO_1_16_HOME)
+GO      := $(GO_1_18_BIN)/go
+ifeq ($(GO), /go)
+	GO = go
+endif	
+GOROOT  := $(GO_1_18_HOME)
 GOPATH  := $(shell $(GO) env GOPATH)
 GOMOD   := $(GO) mod
 GOARCH  := $(shell $(GO) env GOARCH)
-GOBUILD := CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build
-GOTEST  := $(GO) test -gcflags="-N -l"
-GOPKGS  := $$($(GO) list ./...| grep -vE "vendor")
+GOBUILD = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build
+GOTEST  := $(GO) test
+GOPKGS  := $$($(GO) list ./...| grep -vE "vendor" | grep -vE "cmd" |grep -vE "test" |grep -v 'apis/networking'| grep -v 'generated')
 GOGCFLAGS := -gcflags=all="-trimpath=$(GOPATH)" -asmflags=all="-trimpath=$(GOPATH)"
 GOLDFLAGS := -ldflags '-s -w'
 GO_PACKAGE := github.com/baidubce/baiducloud-cce-cni-driver
@@ -20,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.3.5
+VERSION := v1.5.2
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -35,8 +38,19 @@ EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.GitSummary=$(GIT_SUMMARY)
 EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.BuildDate=$(BUILD_DATE)
 EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.Version=$(VERSION)
 
+# pro or dev
+PROFILES := dev
+IMAGE_TAG := registry.baidubce.com/cce-plugin-$(PROFILES)/cce-cni
+PUSH_CNI_IMAGE_FLAGS = --load --push
+
 # make, make all
-all: prepare compile package
+all: prepare compile
+
+fmt:  ## Run go fmt against code.
+	$(GO) fmt $(shell $(GO) list ./... | grep -v /vendor/)
+
+vet: ## Run go vet against code.
+	$(GO) vet $(shell $(GO) list ./... | grep -v /vendor/)
 
 # set proxy env
 set-env:
@@ -51,44 +65,30 @@ prepare: gomod
 gomod: set-env
 	$(GOMOD) download
 
-#make compile
-compile: build
+outdir: 
+	mkdir -p $(OUTDIR)/cni-bin
+# Compile all cni plug-ins
+cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni rdma
+$(cni_target): fmt outdir
+	@echo "===> Building cni $@ <==="
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/$@ $(HOMEDIR)/cni/$@
+	mv $(HOMEDIR)/$@ $(OUTDIR)/cni-bin/
 
-build:
-	@echo "===> Building cni components <==="
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/eni-ipam $(HOMEDIR)/cni/eni-ipam
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ipvlan $(HOMEDIR)/cni/ipvlan
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/macvlan $(HOMEDIR)/cni/macvlan
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/bandwidth $(HOMEDIR)/cni/bandwidth
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/ptp $(HOMEDIR)/cni/ptp
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/sysctl $(HOMEDIR)/cni/sysctl
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/unnumbered-ptp $(HOMEDIR)/cni/unnumbered-ptp
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cce-ipam $(HOMEDIR)/cmd/eni-ipam
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/cni-node-agent $(HOMEDIR)/cmd/node-agent
-	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/ip-masq-agent $(HOMEDIR)/cmd/ip-masq-agent
+# Compile all container network programs
+exec_target := cce-ipam cni-node-agent ip-masq-agent	
+$(exec_target):	fmt outdir
+	@echo "===> Building cni $@ <==="
+	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/$@ $(HOMEDIR)/cmd/$@
+	mv $(HOMEDIR)/$@ $(OUTDIR)
+
+#make compile
+compile: $(cni_target) $(exec_target)
+build: compile
 
 # make test, test your code
 test: prepare test-case
 test-case:
 	$(GOTEST) -v -cover $(GOPKGS)
-
-# make package
-package: package-bin
-package-bin:
-	@echo "===> Packing cni components <==="
-	mkdir -p $(OUTDIR)/cni-bin
-	# package cni binaries
-	mv $(HOMEDIR)/eni-ipam $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/ipvlan $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/macvlan $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/bandwidth $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/ptp $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/sysctl $(OUTDIR)/cni-bin/
-	mv $(HOMEDIR)/unnumbered-ptp $(OUTDIR)/cni-bin/
-	# package components
-	mv $(HOMEDIR)/cce-ipam $(OUTDIR)
-	mv $(HOMEDIR)/cni-node-agent $(OUTDIR)
-	mv $(HOMEDIR)/ip-masq-agent $(OUTDIR)
 
 debian-iptables-image:
 	@echo "===> Building debian iptables base image <==="
@@ -98,50 +98,26 @@ codegen-image:
 	@echo "===> Building codegen image <==="
 	docker build -t cce-cni-codegen:kubernetes-$(K8S_VERSION) -f build/images/codegen/Dockerfile build/images/codegen
 
-cni-image: package-bin
-	@echo "===> Building cce cni image <==="
-ifeq ($(GOARCH), amd64)
-	docker build -t registry.baidubce.com/cce-plugin-pro/cce-cni:$(VERSION) -f build/images/cce-cni/Dockerfile .
-endif
-ifeq ($(GOARCH), arm64)
-	docker build -t registry.baidubce.com/cce-plugin-pro/cce-cni-arm64:$(VERSION) -f build/images/cce-cni/Dockerfile .
-endif
+cni-amd64-image: GOARCH = amd64
+cni-amd64-image: compile
+	docker buildx build --platform linux/amd64  -t $(IMAGE_TAG):$(VERSION) -f build/images/cce-cni/Dockerfile . $(PUSH_CNI_IMAGE_FLAGS)
 
+cni-arm64-image: GOARCH = arm64
+cni-arm64-image: compile
+	# docker buildx create --name arm
+	docker buildx use arm && docker buildx build --platform linux/arm64  -t $(IMAGE_TAG)-arm64:$(VERSION) -f build/images/cce-cni/arm64.Dockerfile . $(PUSH_CNI_IMAGE_FLAGS)
+
+image: cni-amd64-image
 
 felix-image:
 	@echo "===> Building cce felix image <==="
 	docker build -t registry.baidubce.com/cce-plugin-pro/cce-calico-felix:$(FELIX_VERSION) -f build/images/cce-felix/Dockerfile pkg/policy
 
-push-cni-image:cni-image
-	@echo "===> Pushing cce cni image <==="
-ifeq ($(GOARCH), amd64)
-	docker push registry.baidubce.com/cce-plugin-pro/cce-cni:$(VERSION)
-endif
-ifeq ($(GOARCH), arm64)
-	docker push registry.baidubce.com/cce-plugin-pro/cce-cni-arm64:$(VERSION)
-endif
-
 push-felix-image:felix-image
 	@echo "===> Pushing cce felix image <==="
 	docker push registry.baidubce.com/cce-plugin-pro/cce-calico-felix:$(FELIX_VERSION)
 
-push-cni-test-image: build package-bin
-	@echo "===> Building cce cni test image <==="
-ifeq ($(GOARCH), amd64)
-	docker build -t registry.baidubce.com/cce-plugin-dev/cce-cni:$(TAG) -f build/images/cce-cni/Dockerfile .
-endif
-ifeq ($(GOARCH), arm64)
-	docker build -t registry.baidubce.com/cce-plugin-dev/cce-cni-arm64:$(TAG) -f build/images/cce-cni/Dockerfile .
-endif
-	@echo "===> Pushing cce cni test image <==="
-ifeq ($(GOARCH), amd64)
-	docker push registry.baidubce.com/cce-plugin-dev/cce-cni:$(TAG)
-endif
-ifeq ($(GOARCH), arm64)
-	docker push registry.baidubce.com/cce-plugin-dev/cce-cni-arm64:$(TAG)
-endif
-
-codegen:codegen-image
+codegen:codegen-image 
 	@echo "===> Updating generated code <==="
 	$(HOMEDIR)/hack/update-codegen.sh
 

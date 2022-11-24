@@ -16,11 +16,14 @@
 package grpc
 
 import (
+	"context"
+
 	"google.golang.org/grpc"
 )
 
 type Interface interface {
 	Dial(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
+	DialContext(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 }
 
 type cniGRPC struct{}
@@ -31,4 +34,8 @@ func New() Interface {
 
 func (*cniGRPC) Dial(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
 	return grpc.Dial(target, opts...)
+}
+
+func (*cniGRPC) DialContext(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	return grpc.DialContext(ctx, target, opts...)
 }

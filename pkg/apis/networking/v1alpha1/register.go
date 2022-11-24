@@ -45,11 +45,19 @@ var (
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&WorkloadEndpoint{},
+		&MultiIPWorkloadEndpoint{},
 		&WorkloadEndpointList{},
+		&MultiIPWorkloadEndpointList{},
 		&IPPool{},
 		&IPPoolList{},
 		&Subnet{},
 		&SubnetList{},
+		&CrossVPCEni{},
+		&CrossVPCEniList{},
+		&PodSubnetTopologySpread{},
+		&PodSubnetTopologySpreadList{},
+		&PodSubnetTopologySpreadTable{},
+		&PodSubnetTopologySpreadTableList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

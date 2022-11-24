@@ -39,6 +39,10 @@ const (
 	CCEModeBBCSecondaryIPIPVlan ContainerNetworkMode = "bbc-vpc-secondary-ip-ipvlan"
 	// CCEModeBBCSecondaryIPAutoDetect using vpc secondary ip and auto detects veth or ipvlan due to kernel version (BBC only)
 	CCEModeBBCSecondaryIPAutoDetect ContainerNetworkMode = "bbc-vpc-secondary-ip-auto-detect"
+	// CCEModeCrossVPCEni using vpc-route-veth and eni as a secondary interface
+	CCEModeCrossVPCEni ContainerNetworkMode = "cross-vpc-eni"
+	// CCEModeExclusiveCrossVPCEni using eni as the only main interface
+	CCEModeExclusiveCrossVPCEni ContainerNetworkMode = "exclusive-cross-vpc-eni"
 )
 
 func IsCCECNIModeBasedOnVPCRoute(mode ContainerNetworkMode) bool {
@@ -92,12 +96,23 @@ func IsCCECNIModeBasedOnSecondaryIP(mode ContainerNetworkMode) bool {
 func IsCCECNIMode(mode ContainerNetworkMode) bool {
 	return IsCCECNIModeBasedOnVPCRoute(mode) ||
 		IsCCECNIModeBasedOnBCCSecondaryIP(mode) ||
-		IsCCECNIModeBasedOnBBCSecondaryIP(mode)
+		IsCCECNIModeBasedOnBBCSecondaryIP(mode) ||
+		mode == CCEModeCrossVPCEni ||
+		mode == CCEModeExclusiveCrossVPCEni
 }
 
 func IsKubenetMode(mode ContainerNetworkMode) bool {
 	if mode == K8sNetworkModeKubenet {
 		return true
 	}
+	return false
+}
+
+func IsCrossVPCEniMode(mode ContainerNetworkMode) bool {
+	if mode == CCEModeExclusiveCrossVPCEni ||
+		mode == CCEModeCrossVPCEni {
+		return true
+	}
+
 	return false
 }

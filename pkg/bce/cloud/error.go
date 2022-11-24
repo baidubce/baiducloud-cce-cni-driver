@@ -36,6 +36,7 @@ const (
 	ErrorReasonBBCENIPrivateIPExceedLimit          ErrorReason = "BBCENIPrivateIPExceedLimit"
 	ErrorReasonRouteRuleRepeated                   ErrorReason = "RouteRuleRepeated"
 	ErrorReasonQuotaLimitExceeded                  ErrorReason = "QuotaLimitExceeded"
+	ErrorReasonNoSuchObject                        ErrorReason = "NoSuchObject"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -64,6 +65,8 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonRouteRuleRepeated
 		case caseInsensitiveContains(errMsg, "QuotaLimitExceeded"):
 			return ErrorReasonQuotaLimitExceeded
+		case caseInsensitiveContains(errMsg, "ErrorReasonNoSuchObject"):
+			return ErrorReasonNoSuchObject
 		}
 	}
 	return ErrorReasonUnknown
@@ -84,6 +87,10 @@ func IsErrorSubnetHasNoMoreIP(err error) bool {
 
 func IsErrorRateLimit(err error) bool {
 	return ReasonForError(err) == ErrorReasonRateLimit
+}
+
+func IsErrorReasonNoSuchObject(err error) bool {
+	return ReasonForError(err) == ErrorReasonNoSuchObject
 }
 
 func IsErrorPrivateIPInUse(err error) bool {

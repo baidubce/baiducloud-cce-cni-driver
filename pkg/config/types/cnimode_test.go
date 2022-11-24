@@ -529,6 +529,20 @@ func TestIsCCECNIMode(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "CCEModeCrossVPCEni",
+			fields: fields{
+				mode: CCEModeCrossVPCEni,
+			},
+			want: true,
+		},
+		{
+			name: "CCEModeExclusiveCrossVPCEni",
+			fields: fields{
+				mode: CCEModeExclusiveCrossVPCEni,
+			},
+			want: true,
+		},
+		{
 			name: "Invalid Input",
 			fields: fields{
 				mode: InvalidNetworkMode,
@@ -541,6 +555,79 @@ func TestIsCCECNIMode(t *testing.T) {
 			got := IsCCECNIMode(tt.fields.mode)
 			if got != tt.want {
 				t.Errorf("IsCCECNIMode = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsCrossVPCEniMode(t *testing.T) {
+	type args struct {
+		mode ContainerNetworkMode
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "CCEModeCrossVPCEni",
+			args: args{
+				mode: CCEModeCrossVPCEni,
+			},
+			want: true,
+		},
+		{
+			name: "CCEModeExclusiveCrossVPCEni",
+			args: args{
+				mode: CCEModeExclusiveCrossVPCEni,
+			},
+			want: true,
+		},
+		{
+			name: "CCEModeRouteVeth",
+			args: args{
+				mode: CCEModeRouteVeth,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsCrossVPCEniMode(tt.args.mode); got != tt.want {
+				t.Errorf("IsCrossVPCEniMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsKubenetMode(t *testing.T) {
+	type args struct {
+		mode ContainerNetworkMode
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "CCEModeCrossVPCEni",
+			args: args{
+				mode: CCEModeCrossVPCEni,
+			},
+			want: false,
+		},
+		{
+			name: "K8sNetworkModeKubenet",
+			args: args{
+				mode: K8sNetworkModeKubenet,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsKubenetMode(tt.args.mode); got != tt.want {
+				t.Errorf("IsKubenetMode() = %v, want %v", got, tt.want)
 			}
 		})
 	}

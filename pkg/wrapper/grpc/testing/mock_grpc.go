@@ -5,35 +5,37 @@
 package testing
 
 import (
+	context "context"
+	reflect "reflect"
+
 	gomock "github.com/golang/mock/gomock"
 	grpc "google.golang.org/grpc"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// Dial mocks base method
+// Dial mocks base method.
 func (m *MockInterface) Dial(arg0 string, arg1 ...grpc.DialOption) (*grpc.ClientConn, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0}
@@ -46,9 +48,29 @@ func (m *MockInterface) Dial(arg0 string, arg1 ...grpc.DialOption) (*grpc.Client
 	return ret0, ret1
 }
 
-// Dial indicates an expected call of Dial
+// Dial indicates an expected call of Dial.
 func (mr *MockInterfaceMockRecorder) Dial(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0}, arg1...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Dial", reflect.TypeOf((*MockInterface)(nil).Dial), varargs...)
+}
+
+// DialContext mocks base method.
+func (m *MockInterface) DialContext(arg0 context.Context, arg1 string, arg2 ...grpc.DialOption) (*grpc.ClientConn, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "DialContext", varargs...)
+	ret0, _ := ret[0].(*grpc.ClientConn)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DialContext indicates an expected call of DialContext.
+func (mr *MockInterfaceMockRecorder) DialContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DialContext", reflect.TypeOf((*MockInterface)(nil).DialContext), varargs...)
 }

@@ -45,7 +45,7 @@ $GOPATH/bin/informer-gen \
 MOCKGEN_TARGETS=(
   "pkg/bce/cloud Interface"
   "pkg/bce/metadata Interface"
-  "pkg/eniipam/ipam Interface"
+  "pkg/eniipam/ipam Interface,ExclusiveEniInterface"
   "pkg/util/network Interface"
   "pkg/util/fs FileSystem"
   "pkg/util/kernel Interface"
@@ -58,6 +58,7 @@ MOCKGEN_TARGETS=(
   "pkg/wrapper/ns Interface"
   "pkg/wrapper/rpc Interface"
   "pkg/wrapper/sysctl Interface"
+  "pkg/rpc CNIBackendClient"
 )
 
 # Command mockgen does not automatically replace variable YEAR with current year

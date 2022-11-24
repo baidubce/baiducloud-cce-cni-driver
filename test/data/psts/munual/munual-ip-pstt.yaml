@@ -1,0 +1,23 @@
+apiVersion: cce.io/v1alpha1
+kind: PodSubnetTopologySpread
+metadata:
+  name: pstt-munual
+spec:
+  name: fixed-ip-psts-test
+  subnets:
+    sbn-mxxvp4gfdjyv:
+      type: Manual
+      releaseStrategy: TTL
+      ipv4Range:
+      - 192.168.78.228/32
+      - 192.168.78.229/32
+    sbn-s985prieeicc:
+      type: Manual
+      releaseStrategy: TTL
+      ipv4Range:
+      - 192.168.79.228/31
+
+  priority: 10    
+  selector:
+    matchLabels:
+      munualIP: "true"

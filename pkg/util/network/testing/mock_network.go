@@ -5,36 +5,37 @@
 package testing
 
 import (
-	gomock "github.com/golang/mock/gomock"
-	netlink "github.com/vishvananda/netlink"
 	net "net"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
+	netlink "github.com/vishvananda/netlink"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// DetectDefaultRouteInterfaceName mocks base method
+// DetectDefaultRouteInterfaceName mocks base method.
 func (m *MockInterface) DetectDefaultRouteInterfaceName() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DetectDefaultRouteInterfaceName")
@@ -43,13 +44,13 @@ func (m *MockInterface) DetectDefaultRouteInterfaceName() (string, error) {
 	return ret0, ret1
 }
 
-// DetectDefaultRouteInterfaceName indicates an expected call of DetectDefaultRouteInterfaceName
+// DetectDefaultRouteInterfaceName indicates an expected call of DetectDefaultRouteInterfaceName.
 func (mr *MockInterfaceMockRecorder) DetectDefaultRouteInterfaceName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetectDefaultRouteInterfaceName", reflect.TypeOf((*MockInterface)(nil).DetectDefaultRouteInterfaceName))
 }
 
-// DetectInterfaceMTU mocks base method
+// DetectInterfaceMTU mocks base method.
 func (m *MockInterface) DetectInterfaceMTU(arg0 string) (int, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DetectInterfaceMTU", arg0)
@@ -58,13 +59,13 @@ func (m *MockInterface) DetectInterfaceMTU(arg0 string) (int, error) {
 	return ret0, ret1
 }
 
-// DetectInterfaceMTU indicates an expected call of DetectInterfaceMTU
+// DetectInterfaceMTU indicates an expected call of DetectInterfaceMTU.
 func (mr *MockInterfaceMockRecorder) DetectInterfaceMTU(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetectInterfaceMTU", reflect.TypeOf((*MockInterface)(nil).DetectInterfaceMTU), arg0)
 }
 
-// GetIPFromPodNetNS mocks base method
+// GetIPFromPodNetNS mocks base method.
 func (m *MockInterface) GetIPFromPodNetNS(arg0, arg1 string, arg2 int) (net.IP, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetIPFromPodNetNS", arg0, arg1, arg2)
@@ -73,13 +74,13 @@ func (m *MockInterface) GetIPFromPodNetNS(arg0, arg1 string, arg2 int) (net.IP, 
 	return ret0, ret1
 }
 
-// GetIPFromPodNetNS indicates an expected call of GetIPFromPodNetNS
+// GetIPFromPodNetNS indicates an expected call of GetIPFromPodNetNS.
 func (mr *MockInterfaceMockRecorder) GetIPFromPodNetNS(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetIPFromPodNetNS", reflect.TypeOf((*MockInterface)(nil).GetIPFromPodNetNS), arg0, arg1, arg2)
 }
 
-// GetLinkByMacAddress mocks base method
+// GetLinkByMacAddress mocks base method.
 func (m *MockInterface) GetLinkByMacAddress(arg0 string) (netlink.Link, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetLinkByMacAddress", arg0)
@@ -88,13 +89,13 @@ func (m *MockInterface) GetLinkByMacAddress(arg0 string) (netlink.Link, error) {
 	return ret0, ret1
 }
 
-// GetLinkByMacAddress indicates an expected call of GetLinkByMacAddress
+// GetLinkByMacAddress indicates an expected call of GetLinkByMacAddress.
 func (mr *MockInterfaceMockRecorder) GetLinkByMacAddress(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLinkByMacAddress", reflect.TypeOf((*MockInterface)(nil).GetLinkByMacAddress), arg0)
 }
 
-// GratuitousArpOverIface mocks base method
+// GratuitousArpOverIface mocks base method.
 func (m *MockInterface) GratuitousArpOverIface(arg0 net.IP, arg1 net.Interface) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GratuitousArpOverIface", arg0, arg1)
@@ -102,13 +103,13 @@ func (m *MockInterface) GratuitousArpOverIface(arg0 net.IP, arg1 net.Interface) 
 	return ret0
 }
 
-// GratuitousArpOverIface indicates an expected call of GratuitousArpOverIface
+// GratuitousArpOverIface indicates an expected call of GratuitousArpOverIface.
 func (mr *MockInterfaceMockRecorder) GratuitousArpOverIface(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GratuitousArpOverIface", reflect.TypeOf((*MockInterface)(nil).GratuitousArpOverIface), arg0, arg1)
 }
 
-// InterfaceByName mocks base method
+// InterfaceByName mocks base method.
 func (m *MockInterface) InterfaceByName(arg0 string) (*net.Interface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InterfaceByName", arg0)
@@ -117,7 +118,7 @@ func (m *MockInterface) InterfaceByName(arg0 string) (*net.Interface, error) {
 	return ret0, ret1
 }
 
-// InterfaceByName indicates an expected call of InterfaceByName
+// InterfaceByName indicates an expected call of InterfaceByName.
 func (mr *MockInterfaceMockRecorder) InterfaceByName(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InterfaceByName", reflect.TypeOf((*MockInterface)(nil).InterfaceByName), arg0)

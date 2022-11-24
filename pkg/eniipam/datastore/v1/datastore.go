@@ -16,16 +16,21 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 const (
 	addressCoolingPeriodEnvKey = "DATASTORE_ADDRESS_COOLING_PERIOD"
+	// prefix for data store
+	crossSubnetKeyPrefix = "cce.baidubce.com/crossSubnet"
 )
 
 var (
@@ -50,7 +55,9 @@ var (
 
 type DataStore struct {
 	store map[string]*Instance
-	lock  sync.RWMutex
+	// key is node name
+	crossSubnetStore map[string]*Instance
+	lock             sync.RWMutex
 }
 
 type Instance struct {
@@ -70,6 +77,7 @@ type AddressInfo struct {
 	Address        string
 	Assigned       bool
 	UnassignedTime time.Time
+	CrossSubnet    bool
 }
 
 type PodKey struct {
@@ -88,7 +96,8 @@ func NewDataStore() *DataStore {
 	setAddressCoolingPeriodByEnv()
 
 	return &DataStore{
-		store: make(map[string]*Instance),
+		store:            make(map[string]*Instance),
+		crossSubnetStore: make(map[string]*Instance),
 	}
 }
 
@@ -109,6 +118,13 @@ func (e *ENI) TotalIPv4Addresses() int {
 // inCoolingPeriod checks whether an addr is in addressCoolingPeriod
 func (addr AddressInfo) inCoolingPeriod() bool {
 	return time.Since(addr.UnassignedTime) < addressCoolingPeriod
+}
+
+// Synchronized Executing transactions in locks
+func (ds *DataStore) Synchronized(task func() error) error {
+	ds.lock.Lock()
+	defer ds.lock.Unlock()
+	return task()
 }
 
 func (ds *DataStore) AllocatePodPrivateIP(node string) (string, error) {
@@ -170,8 +186,16 @@ func (ds *DataStore) AllocatePodPrivateIPByENI(node, eniID string) (string, erro
 func (ds *DataStore) ReleasePodPrivateIP(node, eniID, ip string) error {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
+	ds.ReleasePodPrivateIPUnsafe(node, eniID, ip)
+	return nil
+}
 
-	instance, ok := ds.store[node]
+func (ds *DataStore) ReleasePodPrivateIPUnsafe(node, eniID, ip string) {
+	ds.__ReleasePodPrivateIPUnsafe(node, eniID, ip, false)
+	ds.__ReleasePodPrivateIPUnsafe(node, eniID, ip, true)
+}
+func (ds *DataStore) __ReleasePodPrivateIPUnsafe(node, eniID, ip string, crossSubnet bool) error {
+	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
 		return UnknownNodeError
 	}
@@ -198,7 +222,8 @@ func (ds *DataStore) ReleasePodPrivateIP(node, eniID, ip string) error {
 	return UnknownIPError
 }
 
-func (ds *DataStore) AddPrivateIPToStore(node, eniID, ipAddress string, assigned bool) error {
+// Add the IP address to the Eni cache, and mark whether the IP address is an IP address across the subnet
+func (ds *DataStore) AddPrivateIPToStoreUnsafe(node, eniID, ipAddress string, assigned, crossSubnet bool) error {
 	if node == "" {
 		return EmptyNodeError
 	}
@@ -207,10 +232,7 @@ func (ds *DataStore) AddPrivateIPToStore(node, eniID, ipAddress string, assigned
 		return EmptyENIError
 	}
 
-	ds.lock.Lock()
-	defer ds.lock.Unlock()
-
-	instance, ok := ds.store[node]
+	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
 		return UnknownNodeError
 	}
@@ -234,8 +256,9 @@ func (ds *DataStore) AddPrivateIPToStore(node, eniID, ipAddress string, assigned
 	}
 
 	addr := &AddressInfo{
-		Address:  ipAddress,
-		Assigned: assigned,
+		Address:     ipAddress,
+		Assigned:    assigned,
+		CrossSubnet: crossSubnet,
 	}
 
 	// increase counter
@@ -252,11 +275,27 @@ func (ds *DataStore) AddPrivateIPToStore(node, eniID, ipAddress string, assigned
 	return nil
 }
 
-func (ds *DataStore) DeletePrivateIPFromStore(node, eniID, ipAddress string) error {
+func (ds *DataStore) AddPrivateIPToStore(node, eniID, ipAddress string, assigned bool) error {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
+	return ds.AddPrivateIPToStoreUnsafe(node, eniID, ipAddress, assigned, false)
+}
 
-	instance, ok := ds.store[node]
+func (ds *DataStore) DeletePrivateIPFromStore(node, eniID, ipAddress string) {
+	ds.lock.Lock()
+	defer ds.lock.Unlock()
+	ds.DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress)
+}
+
+func (ds *DataStore) DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress string) {
+	ds.__DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress, false)
+	// delete cross subnet ip
+	ds.__DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress, true)
+
+}
+
+func (ds *DataStore) __DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress string, crossSubnet bool) error {
+	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
 		return UnknownNodeError
 	}
@@ -302,6 +341,11 @@ func (ds *DataStore) AddNodeToStore(node, instanceID string) error {
 		eniPool: make(map[string]*ENI),
 	}
 
+	ds.crossSubnetStore[node] = &Instance{
+		ID:      instanceID,
+		eniPool: make(map[string]*ENI),
+	}
+
 	return nil
 }
 
@@ -318,6 +362,7 @@ func (ds *DataStore) DeleteNodeFromStore(node string) error {
 	defer ds.lock.Unlock()
 
 	delete(ds.store, node)
+	delete(ds.crossSubnetStore, node)
 
 	return nil
 }
@@ -344,6 +389,19 @@ func (ds *DataStore) AddENIToStore(node, eniID string) error {
 		ID:            eniID,
 		IPv4Addresses: make(map[string]*AddressInfo),
 		idle:          newPriorityQueue(),
+	}
+
+	// add eni to cross subnet
+	instance, ok = ds.getNodeInstance(node, true)
+	if ok {
+		_, ok = instance.eniPool[eniID]
+		if !ok {
+			instance.eniPool[eniID] = &ENI{
+				ID:            eniID,
+				IPv4Addresses: make(map[string]*AddressInfo),
+				idle:          newPriorityQueue(),
+			}
+		}
 	}
 
 	return nil
@@ -381,9 +439,22 @@ func (ds *DataStore) DeleteENIFromStore(node, eniID string) error {
 
 	instance.total -= total
 	instance.assigned -= assigned
-
 	delete(instance.eniPool, eniID)
 
+	// delete eni cross subnet
+	if crossSubnetInstance, ok := ds.crossSubnetStore[node]; ok {
+		eni, ok := crossSubnetInstance.eniPool[eniID]
+		if !ok {
+			return nil
+		}
+
+		total := eni.TotalIPv4Addresses()
+		assigned := eni.AssignedIPv4Addresses()
+
+		crossSubnetInstance.total -= total
+		crossSubnetInstance.assigned -= assigned
+		delete(crossSubnetInstance.eniPool, eniID)
+	}
 	return nil
 }
 
@@ -396,7 +467,15 @@ func (ds *DataStore) GetNodeStats(node string) (int, int, error) {
 		return 0, 0, UnknownNodeError
 	}
 
-	return instance.total, instance.assigned, nil
+	total := instance.total
+	assigned := instance.assigned
+
+	if crossSubnetInstance, ok := ds.crossSubnetStore[node]; ok {
+		total += crossSubnetInstance.total
+		assigned += crossSubnetInstance.assigned
+	}
+
+	return total, assigned, nil
 }
 
 func (ds *DataStore) GetENIStats(node, eniID string) (int, int, error) {
@@ -415,6 +494,15 @@ func (ds *DataStore) GetENIStats(node, eniID string) (int, int, error) {
 
 	total := eni.TotalIPv4Addresses()
 	assigned := eni.AssignedIPv4Addresses()
+
+	if instance, ok := ds.crossSubnetStore[node]; ok {
+		eni, ok := instance.eniPool[eniID]
+		if ok {
+			total += eni.TotalIPv4Addresses()
+			assigned += eni.AssignedIPv4Addresses()
+			logger.V(5).Infof(context.TODO(), "eni %s of node %s datastore total: %d ,assigned: %d", eniID, node, total, assigned)
+		}
+	}
 
 	return total, assigned, nil
 }
@@ -455,4 +543,32 @@ func setAddressCoolingPeriodByEnv() {
 		return
 	}
 	addressCoolingPeriod = time.Duration(period) * time.Second
+}
+
+// get bcc machine instance which contains some enis
+// from datastore when crossSubnet is false or
+// from crossSubnetDataStore when crossSubnet is true and create a new instance by normal datastore
+// if instance is not exists
+func (ds *DataStore) getNodeInstance(node string, crossSubnet bool) (*Instance, bool) {
+	var (
+		instance       *Instance
+		normalInstance *Instance
+		ok             bool
+	)
+	if crossSubnet {
+		instance, ok = ds.crossSubnetStore[node]
+		if !ok {
+			normalInstance, ok = ds.store[node]
+			if ok {
+				instance = &Instance{
+					ID:      normalInstance.ID,
+					eniPool: make(map[string]*ENI),
+				}
+				ds.crossSubnetStore[node] = instance
+			}
+		}
+	} else {
+		instance, ok = ds.store[node]
+	}
+	return instance, ok
 }

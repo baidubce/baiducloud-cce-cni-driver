@@ -23,6 +23,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	crdlisters "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
+	roce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
@@ -45,6 +46,9 @@ var (
 		// VPC-CNI BBC
 		types.CCEModeBBCSecondaryIPVeth:   CCETemplateFileBasePath + "cce-cni-bbc-secondary-ip-veth.tmpl",
 		types.CCEModeBBCSecondaryIPIPVlan: CCETemplateFileBasePath + "cce-cni-bbc-secondary-ip-ipvlan.tmpl",
+		// Cross VPC ENI
+		types.CCEModeCrossVPCEni:          CCETemplateFileBasePath + "cce-cross-vpc-eni.tmpl",
+		types.CCEModeExclusiveCrossVPCEni: CCETemplateFileBasePath + "cce-exclusive-cross-vpc-eni.tmpl",
 	}
 )
 
@@ -59,6 +63,7 @@ type Controller struct {
 	netutil       networkutil.Interface
 	kernelhandler kernel.Interface
 	filesystem    fsutil.FileSystem
+	roceProbe     roce.IRoCEProbe
 }
 
 // CNIConfigData contains everything a cni config needs

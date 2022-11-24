@@ -5,35 +5,36 @@
 package testing
 
 import (
+	reflect "reflect"
+
 	metadata "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// GetAvailabilityZone mocks base method
+// GetAvailabilityZone mocks base method.
 func (m *MockInterface) GetAvailabilityZone() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAvailabilityZone")
@@ -42,13 +43,13 @@ func (m *MockInterface) GetAvailabilityZone() (string, error) {
 	return ret0, ret1
 }
 
-// GetAvailabilityZone indicates an expected call of GetAvailabilityZone
+// GetAvailabilityZone indicates an expected call of GetAvailabilityZone.
 func (mr *MockInterfaceMockRecorder) GetAvailabilityZone() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAvailabilityZone", reflect.TypeOf((*MockInterface)(nil).GetAvailabilityZone))
 }
 
-// GetInstanceID mocks base method
+// GetInstanceID mocks base method.
 func (m *MockInterface) GetInstanceID() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceID")
@@ -57,13 +58,13 @@ func (m *MockInterface) GetInstanceID() (string, error) {
 	return ret0, ret1
 }
 
-// GetInstanceID indicates an expected call of GetInstanceID
+// GetInstanceID indicates an expected call of GetInstanceID.
 func (mr *MockInterfaceMockRecorder) GetInstanceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceID", reflect.TypeOf((*MockInterface)(nil).GetInstanceID))
 }
 
-// GetInstanceName mocks base method
+// GetInstanceName mocks base method.
 func (m *MockInterface) GetInstanceName() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceName")
@@ -72,13 +73,13 @@ func (m *MockInterface) GetInstanceName() (string, error) {
 	return ret0, ret1
 }
 
-// GetInstanceName indicates an expected call of GetInstanceName
+// GetInstanceName indicates an expected call of GetInstanceName.
 func (mr *MockInterfaceMockRecorder) GetInstanceName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceName", reflect.TypeOf((*MockInterface)(nil).GetInstanceName))
 }
 
-// GetInstanceTypeEx mocks base method
+// GetInstanceTypeEx mocks base method.
 func (m *MockInterface) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceTypeEx")
@@ -87,13 +88,13 @@ func (m *MockInterface) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	return ret0, ret1
 }
 
-// GetInstanceTypeEx indicates an expected call of GetInstanceTypeEx
+// GetInstanceTypeEx indicates an expected call of GetInstanceTypeEx.
 func (mr *MockInterfaceMockRecorder) GetInstanceTypeEx() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceTypeEx", reflect.TypeOf((*MockInterface)(nil).GetInstanceTypeEx))
 }
 
-// GetLinkGateway mocks base method
+// GetLinkGateway mocks base method.
 func (m *MockInterface) GetLinkGateway(arg0, arg1 string) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetLinkGateway", arg0, arg1)
@@ -102,13 +103,13 @@ func (m *MockInterface) GetLinkGateway(arg0, arg1 string) (string, error) {
 	return ret0, ret1
 }
 
-// GetLinkGateway indicates an expected call of GetLinkGateway
+// GetLinkGateway indicates an expected call of GetLinkGateway.
 func (mr *MockInterfaceMockRecorder) GetLinkGateway(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLinkGateway", reflect.TypeOf((*MockInterface)(nil).GetLinkGateway), arg0, arg1)
 }
 
-// GetLinkMask mocks base method
+// GetLinkMask mocks base method.
 func (m *MockInterface) GetLinkMask(arg0, arg1 string) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetLinkMask", arg0, arg1)
@@ -117,13 +118,13 @@ func (m *MockInterface) GetLinkMask(arg0, arg1 string) (string, error) {
 	return ret0, ret1
 }
 
-// GetLinkMask indicates an expected call of GetLinkMask
+// GetLinkMask indicates an expected call of GetLinkMask.
 func (mr *MockInterfaceMockRecorder) GetLinkMask(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLinkMask", reflect.TypeOf((*MockInterface)(nil).GetLinkMask), arg0, arg1)
 }
 
-// GetLocalIPv4 mocks base method
+// GetLocalIPv4 mocks base method.
 func (m *MockInterface) GetLocalIPv4() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetLocalIPv4")
@@ -132,13 +133,13 @@ func (m *MockInterface) GetLocalIPv4() (string, error) {
 	return ret0, ret1
 }
 
-// GetLocalIPv4 indicates an expected call of GetLocalIPv4
+// GetLocalIPv4 indicates an expected call of GetLocalIPv4.
 func (mr *MockInterfaceMockRecorder) GetLocalIPv4() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLocalIPv4", reflect.TypeOf((*MockInterface)(nil).GetLocalIPv4))
 }
 
-// GetRegion mocks base method
+// GetRegion mocks base method.
 func (m *MockInterface) GetRegion() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetRegion")
@@ -147,13 +148,13 @@ func (m *MockInterface) GetRegion() (string, error) {
 	return ret0, ret1
 }
 
-// GetRegion indicates an expected call of GetRegion
+// GetRegion indicates an expected call of GetRegion.
 func (mr *MockInterfaceMockRecorder) GetRegion() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRegion", reflect.TypeOf((*MockInterface)(nil).GetRegion))
 }
 
-// GetSubnetID mocks base method
+// GetSubnetID mocks base method.
 func (m *MockInterface) GetSubnetID() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetSubnetID")
@@ -162,13 +163,13 @@ func (m *MockInterface) GetSubnetID() (string, error) {
 	return ret0, ret1
 }
 
-// GetSubnetID indicates an expected call of GetSubnetID
+// GetSubnetID indicates an expected call of GetSubnetID.
 func (mr *MockInterfaceMockRecorder) GetSubnetID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnetID", reflect.TypeOf((*MockInterface)(nil).GetSubnetID))
 }
 
-// GetVPCID mocks base method
+// GetVPCID mocks base method.
 func (m *MockInterface) GetVPCID() (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetVPCID")
@@ -177,7 +178,7 @@ func (m *MockInterface) GetVPCID() (string, error) {
 	return ret0, ret1
 }
 
-// GetVPCID indicates an expected call of GetVPCID
+// GetVPCID indicates an expected call of GetVPCID.
 func (mr *MockInterfaceMockRecorder) GetVPCID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVPCID", reflect.TypeOf((*MockInterface)(nil).GetVPCID))

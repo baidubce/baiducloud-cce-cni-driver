@@ -8,8 +8,16 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
+	// CrossVPCEnis returns a CrossVPCEniInformer.
+	CrossVPCEnis() CrossVPCEniInformer
 	// IPPools returns a IPPoolInformer.
 	IPPools() IPPoolInformer
+	// MultiIPWorkloadEndpoints returns a MultiIPWorkloadEndpointInformer.
+	MultiIPWorkloadEndpoints() MultiIPWorkloadEndpointInformer
+	// PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.
+	PodSubnetTopologySpreads() PodSubnetTopologySpreadInformer
+	// PodSubnetTopologySpreadTables returns a PodSubnetTopologySpreadTableInformer.
+	PodSubnetTopologySpreadTables() PodSubnetTopologySpreadTableInformer
 	// Subnets returns a SubnetInformer.
 	Subnets() SubnetInformer
 	// WorkloadEndpoints returns a WorkloadEndpointInformer.
@@ -27,9 +35,29 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
+// CrossVPCEnis returns a CrossVPCEniInformer.
+func (v *version) CrossVPCEnis() CrossVPCEniInformer {
+	return &crossVPCEniInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
 // IPPools returns a IPPoolInformer.
 func (v *version) IPPools() IPPoolInformer {
 	return &iPPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// MultiIPWorkloadEndpoints returns a MultiIPWorkloadEndpointInformer.
+func (v *version) MultiIPWorkloadEndpoints() MultiIPWorkloadEndpointInformer {
+	return &multiIPWorkloadEndpointInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.
+func (v *version) PodSubnetTopologySpreads() PodSubnetTopologySpreadInformer {
+	return &podSubnetTopologySpreadInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// PodSubnetTopologySpreadTables returns a PodSubnetTopologySpreadTableInformer.
+func (v *version) PodSubnetTopologySpreadTables() PodSubnetTopologySpreadTableInformer {
+	return &podSubnetTopologySpreadTableInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // Subnets returns a SubnetInformer.

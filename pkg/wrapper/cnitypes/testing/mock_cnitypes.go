@@ -5,35 +5,36 @@
 package testing
 
 import (
+	reflect "reflect"
+
 	types "github.com/containernetworking/cni/pkg/types"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockInterface is a mock of Interface interface
+// MockInterface is a mock of Interface interface.
 type MockInterface struct {
 	ctrl     *gomock.Controller
 	recorder *MockInterfaceMockRecorder
 }
 
-// MockInterfaceMockRecorder is the mock recorder for MockInterface
+// MockInterfaceMockRecorder is the mock recorder for MockInterface.
 type MockInterfaceMockRecorder struct {
 	mock *MockInterface
 }
 
-// NewMockInterface creates a new mock instance
+// NewMockInterface creates a new mock instance.
 func NewMockInterface(ctrl *gomock.Controller) *MockInterface {
 	mock := &MockInterface{ctrl: ctrl}
 	mock.recorder = &MockInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
-// LoadArgs mocks base method
+// LoadArgs mocks base method.
 func (m *MockInterface) LoadArgs(arg0 string, arg1 interface{}) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LoadArgs", arg0, arg1)
@@ -41,13 +42,13 @@ func (m *MockInterface) LoadArgs(arg0 string, arg1 interface{}) error {
 	return ret0
 }
 
-// LoadArgs indicates an expected call of LoadArgs
+// LoadArgs indicates an expected call of LoadArgs.
 func (mr *MockInterfaceMockRecorder) LoadArgs(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadArgs", reflect.TypeOf((*MockInterface)(nil).LoadArgs), arg0, arg1)
 }
 
-// PrintResult mocks base method
+// PrintResult mocks base method.
 func (m *MockInterface) PrintResult(arg0 types.Result, arg1 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PrintResult", arg0, arg1)
@@ -55,7 +56,7 @@ func (m *MockInterface) PrintResult(arg0 types.Result, arg1 string) error {
 	return ret0
 }
 
-// PrintResult indicates an expected call of PrintResult
+// PrintResult indicates an expected call of PrintResult.
 func (mr *MockInterfaceMockRecorder) PrintResult(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrintResult", reflect.TypeOf((*MockInterface)(nil).PrintResult), arg0, arg1)

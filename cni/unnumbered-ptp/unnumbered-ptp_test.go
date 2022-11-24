@@ -167,7 +167,7 @@ func Test_ptpPlugin_cmdAdd(t *testing.T) {
 
 				gomock.InOrder(
 					ip.EXPECT().EnableIP4Forward().Return(nil),
-					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{netlink.LinkAttrs{Name: "eth0"}}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "eth0"}}, nil),
 					nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return([]netlink.Addr{hostIP}, nil),
 					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
 					netns.EXPECT().Do(gomock.Any()).Return(nil),
@@ -218,7 +218,7 @@ func Test_ptpPlugin_cmdAdd(t *testing.T) {
 				gomock.InOrder(
 					ip.EXPECT().EnableIP4Forward().Return(nil),
 					ip.EXPECT().EnableIP6Forward().Return(nil),
-					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{netlink.LinkAttrs{Name: "eth0"}}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "eth0"}}, nil),
 					nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return(nil, nil),
 					nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return([]netlink.Addr{hostIP}, nil),
 					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),

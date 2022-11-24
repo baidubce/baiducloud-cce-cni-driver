@@ -32,6 +32,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/subnet"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/topology_spread"
 	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
@@ -108,6 +110,19 @@ type IPAM struct {
 	// event channel
 	buildDataStoreEventChan map[string]chan *event
 	increasePoolEventChan   map[string]chan *event
+
+	// Subsystem controller
+	sbnCtl               subnet.SubnetControl
+	tsCtl                topology_spread.TSControl
+	subsystemControllers []subsystemController
+
+	// lock for allocation IP from exclusisve subnet
+	exclusiveSubnetCond *sync.Cond
+	exclusiveSubnetFlag map[string]bool
 }
 
 var _ ipam.Interface = &IPAM{}
+
+type subsystemController interface {
+	Run(stopCh <-chan struct{})
+}

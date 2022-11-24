@@ -15,6 +15,8 @@ service CNIBackend {
 enum IPType {
     BCCMultiENIMultiIPType = 0;
     BBCPrimaryENIMultiIPType = 1;
+    CrossVPCENIIPType = 2;
+    RoceENIMultiIPType = 3;
 }
 
 message AllocateIPRequest {
@@ -27,6 +29,7 @@ message AllocateIPRequest {
     IPType IPType = 7;
     oneof NetworkInfo {
         ENIMultiIPRequest ENIMultiIP = 8;
+        CrossVPCENIRequest CrossVPCENI = 9;
     }
 }
 
@@ -36,6 +39,7 @@ message AllocateIPReply {
     IPType IPType = 3;
     oneof NetworkInfo {
         ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
     }
 }
 
@@ -49,6 +53,7 @@ message ReleaseIPRequest {
     IPType IPType = 7;
     oneof NetworkInfo {
         ENIMultiIPRequest ENIMultiIP = 8;
+        CrossVPCENIRequest CrossVPCENI = 9;
     }
 }
 
@@ -58,6 +63,7 @@ message ReleaseIPReply {
     IPType IPType = 3;
     oneof NetworkInfo {
         ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
     }
 }
 
@@ -70,6 +76,7 @@ message CheckIPRequest {
     string K8sNodeName = 6;
     oneof NetworkInfo {
         ENIMultiIPRequest ENIMultiIP = 7;
+        CrossVPCENIRequest CrossVPCENI = 8;
     }
 }
 
@@ -79,11 +86,13 @@ message CheckIPReply {
     IPType IPType = 3;
     oneof NetworkInfo {
         ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
     }
 }
 
 
 message ENIMultiIPRequest {
+    string Mac = 1;
 }
 
 
@@ -97,4 +106,15 @@ message ENIMultiIPReply {
     string SubnetID = 7;
     string EnableFixIP = 8;
     string FixIPDeletePolicy = 9;
+}
+
+message CrossVPCENIRequest {
+}
+
+message CrossVPCENIReply {
+    string IP = 1;
+    string Mac = 2;
+    string VPCCIDR = 3;
+    string DefaultRouteInterfaceDelegation = 4;
+    repeated string DefaultRouteExcludedCidrs = 5;
 }

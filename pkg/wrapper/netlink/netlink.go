@@ -23,6 +23,8 @@ import (
 type Interface interface {
 	// LinkByName gets a link object given the device name
 	LinkByName(name string) (netlink.Link, error)
+	// LinkByName gets a link object given the device name
+	LinkSetName(link netlink.Link, name string) error
 	// LinkSetNsFd is equivalent to `ip link set $link netns $ns`
 	LinkSetNsFd(link netlink.Link, fd int) error
 	// ParseAddr parses an address string
@@ -84,6 +86,10 @@ func (*client) LinkAdd(link netlink.Link) error {
 
 func (*client) LinkByName(name string) (netlink.Link, error) {
 	return netlink.LinkByName(name)
+}
+
+func (*client) LinkSetName(link netlink.Link, name string) error {
+	return netlink.LinkSetName(link, name)
 }
 
 func (*client) LinkSetNsFd(link netlink.Link, fd int) error {

@@ -237,3 +237,73 @@ data:
             }
         ]
     }
+  cce-cross-vpc-eni: |
+    {
+        "name":"{{ printf "{{ .NetworkName }}" }}",
+        "cniVersion":"0.3.1",
+        "plugins":[
+            {
+                "type":"ptp",
+                "enableARPProxy":true,
+                "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
+                "ipam":{
+                    "type":"host-local",
+                    "ranges":[
+                        [
+                            {
+                                "subnet":"{{ printf "{{ .Subnet }}" }}"
+                            }
+                        ]
+                    ],
+                    "routes":[
+                        {
+                            "dst":"0.0.0.0/0"
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "crossvpc-eni",
+                "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}"
+            },
+            {
+                "type": "portmap",
+                "capabilities": {"portMappings": true},
+                "externalSetMarkChain": "KUBE-MARK-MASQ"
+            }
+        ]
+    }
+  cce-exclusive-cross-vpc-eni: |
+    {
+        "name":"{{ printf "{{ .NetworkName }}" }}",
+        "cniVersion":"0.3.1",
+        "plugins":[
+               {
+                "type":"ptp",
+                "enableARPProxy":true,
+                "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
+                "ipam":{
+                    "type":"host-local",
+                    "ranges":[
+                        [
+                            {
+                                "subnet":"{{ printf "{{ .Subnet }}" }}"
+                            }
+                        ]
+                    ],
+                    "routes":[
+                        {
+                            "dst":"0.0.0.0/0"
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "crossvpc-eni",
+                "ifName": "eth0",
+                "endpoint":"{{ printf "{{ .IPAMEndPoint }}" }}"
+            }
+        ]
+    }

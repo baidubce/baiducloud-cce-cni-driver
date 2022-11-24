@@ -29,6 +29,7 @@ import (
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
@@ -83,6 +84,7 @@ type RouteController struct {
 
 	// properties from k8s
 	nodeName string
+	nodeRef  *v1.ObjectReference
 	podCIDRs []string
 }
 
@@ -99,7 +101,16 @@ func NewRouteController(
 	enableVPCRoute bool,
 	enableStaticRoute bool,
 	containerNetworkCIDRIPv4 string,
-	containerNetworkCIDRIPv6 string) (*RouteController, error) {
+	containerNetworkCIDRIPv6 string,
+) (*RouteController, error) {
+	var (
+		nodeRef = &v1.ObjectReference{
+			Kind:      "Node",
+			Name:      string(hostName),
+			UID:       types.UID(hostName),
+			Namespace: "",
+		}
+	)
 
 	rc := &RouteController{
 		cache:                    &StaticRouteCache{routeMap: make(map[string]*cachedStaticRoute)},
@@ -109,6 +120,7 @@ func NewRouteController(
 		metaClient:               metadata.NewClient(),
 		eventRecorder:            eventRecorder,
 		nodeName:                 hostName,
+		nodeRef:                  nodeRef,
 		clusterID:                clusterID,
 		hostInstanceID:           instanceID,
 		enableStaticRoute:        enableStaticRoute,
@@ -347,8 +359,6 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 			return err
 		}
 
-		rc.eventRecorder.Eventf(thisNode, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v", rc.nodeName)
-
 		podCIDRs, err := rc.getPodCIDRs(ctx)
 		if err != nil {
 			log.Errorf(ctx, "failed to get pod cidrs for node %s: %v", rc.nodeName, err)
@@ -360,6 +370,8 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 			log.Infof(ctx, "node %v skipped ensuring vpc route", rc.nodeName)
 			return nil
 		}
+
+		rc.eventRecorder.Eventf(rc.nodeRef, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v", rc.nodeName)
 
 		err = rc.ensureVPCRoute(ctx, thisNode)
 		// we only taint node if:
@@ -394,11 +406,11 @@ func (rc *RouteController) syncRoute(ctx context.Context, nodeName string) error
 
 		if err != nil {
 			log.Errorf(ctx, "sync route for node %v error: %v", nodeName, err)
-			rc.eventRecorder.Eventf(thisNode, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.nodeName, err)
+			rc.eventRecorder.Eventf(rc.nodeRef, v1.EventTypeWarning, "EnsuringVPCRoute", "Error ensure VPC route for node %v: %v", rc.nodeName, err)
 			return err
 		}
 
-		rc.eventRecorder.Eventf(thisNode, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v succeed", rc.nodeName)
+		rc.eventRecorder.Eventf(rc.nodeRef, v1.EventTypeNormal, "EnsuringVPCRoute", "Ensuring VPC route for node %v succeed", rc.nodeName)
 	}
 	return nil
 }

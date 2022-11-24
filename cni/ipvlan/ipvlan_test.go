@@ -124,7 +124,7 @@ func Test_ipvlanPlugin_cmdAdd(t *testing.T) {
 					types.EXPECT().LoadArgs(gomock.Any(), gomock.Any()).Return(nil),
 					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
 					ipam.EXPECT().ExecAdd(gomock.Any(), gomock.Any()).Return(ipamResult, nil),
-					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{netlink.LinkAttrs{Name: "eth0"}}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "eth0"}}, nil),
 					ip.EXPECT().RandomVethName().Return("vethxxxxxx", nil),
 					netns.EXPECT().Fd().Return(uintptr(100)),
 					nlink.EXPECT().LinkAdd(gomock.Any()).Return(nil),
@@ -330,7 +330,7 @@ func Test_ipvlanPlugin_updateMasterFromWep(t *testing.T) {
 				}, metav1.CreateOptions{})
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Device{netlink.LinkAttrs{Name: "eth0"}}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "eth0"}}, nil),
 				)
 
 				return fields{

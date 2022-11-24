@@ -2,6 +2,10 @@
 
 package v1alpha1
 
+// CrossVPCEniListerExpansion allows custom methods to be added to
+// CrossVPCEniLister.
+type CrossVPCEniListerExpansion interface{}
+
 // IPPoolListerExpansion allows custom methods to be added to
 // IPPoolLister.
 type IPPoolListerExpansion interface{}
@@ -9,6 +13,30 @@ type IPPoolListerExpansion interface{}
 // IPPoolNamespaceListerExpansion allows custom methods to be added to
 // IPPoolNamespaceLister.
 type IPPoolNamespaceListerExpansion interface{}
+
+// MultiIPWorkloadEndpointListerExpansion allows custom methods to be added to
+// MultiIPWorkloadEndpointLister.
+type MultiIPWorkloadEndpointListerExpansion interface{}
+
+// MultiIPWorkloadEndpointNamespaceListerExpansion allows custom methods to be added to
+// MultiIPWorkloadEndpointNamespaceLister.
+type MultiIPWorkloadEndpointNamespaceListerExpansion interface{}
+
+// PodSubnetTopologySpreadListerExpansion allows custom methods to be added to
+// PodSubnetTopologySpreadLister.
+type PodSubnetTopologySpreadListerExpansion interface{}
+
+// PodSubnetTopologySpreadNamespaceListerExpansion allows custom methods to be added to
+// PodSubnetTopologySpreadNamespaceLister.
+type PodSubnetTopologySpreadNamespaceListerExpansion interface{}
+
+// PodSubnetTopologySpreadTableListerExpansion allows custom methods to be added to
+// PodSubnetTopologySpreadTableLister.
+type PodSubnetTopologySpreadTableListerExpansion interface{}
+
+// PodSubnetTopologySpreadTableNamespaceListerExpansion allows custom methods to be added to
+// PodSubnetTopologySpreadTableNamespaceLister.
+type PodSubnetTopologySpreadTableNamespaceListerExpansion interface{}
 
 // SubnetListerExpansion allows custom methods to be added to
 // SubnetLister.

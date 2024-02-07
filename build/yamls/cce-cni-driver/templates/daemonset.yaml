@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cce-cni-node-agent
+  namespace: kube-system
+  labels:
+    k8s-app: cce-cni-node-agent
+spec:
+  selector:
+    matchLabels:
+      name: cce-cni-node-agent
+  template:
+    metadata:
+      labels:
+        name: cce-cni-node-agent
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ""
+    spec:
+      tolerations:
+        - operator: "Exists"
+      serviceAccountName: cce-cni
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      initContainers:
+        - name: install-cni-binary
+          image: {{ .Values.CCECNIImage }}
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: cni-bin-dir
+              mountPath: /opt/cni/bin
+            - name: cni-net-dir
+              mountPath: /etc/cni/net.d
+      containers:
+        - name: cce-cni-node-agent
+          image: {{ .Values.CCECNIImage }}
+          command:
+            - /bin/cni-node-agent
+            - --config=/etc/kubernetes/cni-node-agent.yaml
+            - --logtostderr=false
+            - --alsologtostderr=true
+            - --log-file=/var/log/cce/cce-cni-node-agent.log
+            - --log-file-max-size=1800
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: log-dir
+              mountPath: /var/log/cce
+            - name: lib-modules
+              mountPath: /lib/modules/
+            - name: cni-net-dir
+              mountPath: /etc/cni/net.d
+            - name: cce-cni-node-agent-config
+              mountPath: /etc/kubernetes
+            - name: cce-cni-config-template
+              mountPath: /etc/kubernetes/cni
+            {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+            - name: cce-plugin-token
+              mountPath: /var/run/secrets/cce/cce-plugin-token
+              readOnly: true
+            {{- end }}
+          env:
+            - name: CCE_GATEWAY_ENDPOINT
+              value: "{{ .Values.CCEGatewayEndpoint }}"
+            - name: BCC_ENDPOINT
+              value: "{{ .Values.BCCEndpoint }}"
+            - name: BBC_ENDPOINT
+              value: "{{ .Values.BBCEndpoint }}"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /uninstall-cni.sh
+          resources:
+            limits:
+              memory: 200Mi
+            requests:
+              memory: 200Mi
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - name: cni-bin-dir
+          hostPath:
+            path: /opt/cni/bin
+        - name: cni-net-dir
+          hostPath:
+            path: /etc/cni/net.d
+        - name: log-dir
+          hostPath:
+            path: /var/log/cce
+            type: "DirectoryOrCreate"
+        {{- if (or (empty .Values.AccessKeyID) (empty .Values.SecretAccessKey)) }}
+        - name: cce-plugin-token
+          secret:
+            defaultMode: 0400
+            secretName: cce-plugin-token
+        {{- end }}
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules/
+        - name: cce-cni-node-agent-config
+          configMap:
+            name: cce-cni-node-agent
+            optional: true
+            items:
+              - key: config
+                path: cni-node-agent.yaml
+        - name: cce-cni-config-template
+          configMap:
+            name: cce-cni-config-template
+            optional: true
+            items:
+              - key: cce-vpc-route-veth
+                path: cce-vpc-route-veth.tmpl
+              - key: cce-vpc-route-ipvlan
+                path: cce-vpc-route-ipvlan.tmpl
+              - key: cce-cni-secondary-ip-veth
+                path: cce-cni-secondary-ip-veth.tmpl
+              - key: cce-cni-secondary-ip-ipvlan
+                path: cce-cni-secondary-ip-ipvlan.tmpl
+              - key: cce-cni-bbc-secondary-ip-ipvlan
+                path: cce-cni-bbc-secondary-ip-ipvlan.tmpl
+              - key: cce-cni-bbc-secondary-ip-veth
+                path: cce-cni-bbc-secondary-ip-veth.tmpl
+              - key: cce-cross-vpc-eni
+                path: cce-cross-vpc-eni.tmpl
+              - key: cce-exclusive-cross-vpc-eni
+                path: cce-exclusive-cross-vpc-eni.tmpl

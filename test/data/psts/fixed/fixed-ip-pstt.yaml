@@ -1,0 +1,40 @@
+apiVersion: cce.io/v1alpha1
+kind: PodSubnetTopologySpreadTable
+metadata:
+  name: pstt-test
+spec:
+- name: fixed-ip-psts-test
+  subnets:
+    sbn-gxz5a4f0dtzp:
+      type: Fixed
+      releaseStrategy: Never
+      ipv4:
+      - 172.22.79.41
+      - 172.22.79.42
+      - 172.22.79.50
+  priority: 10    
+  selector:
+    matchLabels:
+      workloadType: sts
+      fixedIP: "true"
+      app: fixedIPApp
+- name: fixed-ip-psts-ttl
+  subnets:
+    sbn-gxz5a4f0dtzp:
+      type: Fixed
+      releaseStrategy: TTL
+      ipv4:
+      - 172.22.79.100
+      - 172.22.79.102
+      - 172.22.79.104
+      - 172.22.79.106
+  priority: 10    
+  selector:
+    matchLabels:
+      workloadType: sts
+      fixedIP: "true"
+      app: fixedIPAppTTL
+       
+
+
+

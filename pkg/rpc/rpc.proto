@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package rpc;
+
+// The service definition.
+service CNIBackend {
+    rpc AllocateIP (AllocateIPRequest) returns (AllocateIPReply) {
+    }
+    rpc ReleaseIP (ReleaseIPRequest) returns (ReleaseIPReply) {
+    }
+    rpc CheckIP (CheckIPRequest) returns (CheckIPReply) {
+    }
+}
+
+enum IPType {
+    BCCMultiENIMultiIPType = 0;
+    BBCPrimaryENIMultiIPType = 1;
+    CrossVPCENIIPType = 2;
+    RoceENIMultiIPType = 3;
+    ERIENIMultiIPType = 4;
+}
+
+message AllocateIPRequest {
+    string K8sPodName = 1;
+    string K8sPodNamespace = 2;
+    string K8sPodInfraContainerID = 3;
+    string Netns = 4;
+    string IfName = 5;
+    string K8sNodeName = 6;
+    IPType IPType = 7;
+    oneof NetworkInfo {
+        ENIMultiIPRequest ENIMultiIP = 8;
+        CrossVPCENIRequest CrossVPCENI = 9;
+    }
+}
+
+message AllocateIPReply {
+    bool IsSuccess = 1;
+    string ErrMsg = 2;
+    IPType IPType = 3;
+    oneof NetworkInfo {
+        ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
+    }
+}
+
+message ReleaseIPRequest {
+    string K8sPodName = 1;
+    string K8sPodNamespace = 2;
+    string K8sPodInfraContainerID = 3;
+    string Netns = 4;
+    string IfName = 5;
+    string K8sNodeName = 6;
+    IPType IPType = 7;
+    oneof NetworkInfo {
+        ENIMultiIPRequest ENIMultiIP = 8;
+        CrossVPCENIRequest CrossVPCENI = 9;
+    }
+}
+
+message ReleaseIPReply {
+    bool IsSuccess = 1;
+    string ErrMsg = 2;
+    IPType IPType = 3;
+    oneof NetworkInfo {
+        ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
+    }
+}
+
+message CheckIPRequest {
+    string K8sPodName = 1;
+    string K8sPodNamespace = 2;
+    string K8sPodInfraContainerID = 3;
+    string Netns = 4;
+    string IfName = 5;
+    string K8sNodeName = 6;
+    oneof NetworkInfo {
+        ENIMultiIPRequest ENIMultiIP = 7;
+        CrossVPCENIRequest CrossVPCENI = 8;
+    }
+}
+
+message CheckIPReply {
+    bool IsSuccess = 1;
+    string ErrMsg = 2;
+    IPType IPType = 3;
+    oneof NetworkInfo {
+        ENIMultiIPReply ENIMultiIP = 4;
+        CrossVPCENIReply CrossVPCENI = 5;
+    }
+}
+
+
+message ENIMultiIPRequest {
+    string Mac = 1;
+}
+
+
+message ENIMultiIPReply {
+    string IP = 1;
+    string Type = 2;
+    string Mac = 3;
+    string Gw = 4;
+    string ENIID = 5;
+    string Node = 6;
+    string SubnetID = 7;
+    string EnableFixIP = 8;
+    string FixIPDeletePolicy = 9;
+}
+
+message CrossVPCENIRequest {
+}
+
+message CrossVPCENIReply {
+    string IP = 1;
+    string Mac = 2;
+    string VPCCIDR = 3;
+    string DefaultRouteInterfaceDelegation = 4;
+    repeated string DefaultRouteExcludedCidrs = 5;
+}

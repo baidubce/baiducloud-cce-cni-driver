@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  labels:
-    addonmanager.kubernetes.io/mode: EnsureExists
-  name: cce-ipam-v2-config
-data:
-  cced: |
-    {{- toYaml .Values.ccedConfig | nindent 4 }}

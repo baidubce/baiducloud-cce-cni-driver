@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
+go install k8s.io/code-generator/cmd/go-to-protobuf@v0.24.0
+
+export PATH=${GOPATH}/bin:$PATH
+go-to-protobuf  $@
+#GO111MODULE=off go run "${GOPATH}/pkg/mod/k8s.io/code-generator@v0.24.0/cmd/go-to-protobuf" $@

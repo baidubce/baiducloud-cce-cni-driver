@@ -1,0 +1,445 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.6.2
+  creationTimestamp: null
+  name: netresourcesets.cce.baidubce.com
+spec:
+  group: cce.baidubce.com
+  names:
+    categories:
+    - cce
+    kind: NetResourceSet
+    listKind: NetResourceSetList
+    plural: netresourcesets
+    shortNames:
+    - nrs
+    singular: netresourceset
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.instance-id
+      name: ID
+      type: string
+    - jsonPath: .spec.eni.useMode
+      name: MODE
+      type: string
+    - jsonPath: .spec.eni.instance-type
+      name: TYPE
+      type: string
+    name: v2
+    schema:
+      openAPIV3Schema:
+        description: NetResourceSet represents a node managed by CCE. It contains a specification
+          to control various node specific configuration aspects and a status section
+          to represent the status of the node.
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the desired specification/configuration of the
+              node.
+            properties:
+              addresses:
+                description: Addresses is the list of all node addresses.
+                items:
+                  description: NodeAddress is a node address.
+                  properties:
+                    ip:
+                      description: IP is an IP of a node
+                      type: string
+                    type:
+                      description: Type is the type of the node address
+                      type: string
+                  type: object
+                type: array
+              eni:
+                description: ENI declaration expectation is used to describe what
+                  kind of ENI you want on a node This field is applicable to eni mode
+                properties:
+                  availability-zone:
+                    description: AvailabilityZone is the availability zone to use
+                      when allocating ENIs.
+                    type: string
+                  delete-on-termination:
+                    description: DeleteOnTermination defines that the ENI should be
+                      deleted when the associated instance is terminated. If the parameter
+                      is not set the default behavior is to delete the ENI on instance
+                      termination.
+                    type: boolean
+                  enterpriseSecurityGroupList:
+                    description: EnterpriseSecurityGroupList are enterprise security
+                      groups that bound to ENIs e.g. esg-twh19p9zcuqr, esg-5yhyct307p98
+                    items:
+                      type: string
+                    type: array
+                  first-interface-index:
+                    description: FirstInterfaceIndex is the index of the first ENI
+                      to use for IP allocation, e.g. if the node has eth0, eth1, eth2
+                      and FirstInterfaceIndex is set to 1, then only eth1 and eth2
+                      will be used for IP allocation, eth0 will be ignored for PodIP
+                      allocation.
+                    minimum: 0
+                    type: integer
+                  installSourceBasedRouting:
+                    description: InstallSourceBasedRouting install source based routing,
+                      default false
+                    type: boolean
+                  instance-type:
+                    description: InstanceType is the BCE Compute instance type, e.g.
+                      BCC BBC
+                    type: string
+                  maxAllocateENI:
+                    description: MaxAllocateENI maximum number of ENIs that can be
+                      applied for a single machine
+                    minimum: 0
+                    type: integer
+                  maxIPsPerENI:
+                    default: 1
+                    description: MaxIPsPerENI the maximum number of secondary IPs
+                      that can be applied for per eni
+                    minimum: 0
+                    type: integer
+                  preAllocateENI:
+                    default: 1
+                    description: PreAllocateENI Number of ENIs pre-allocate
+                    minimum: 0
+                    type: integer
+                  routeTableOffset:
+                    default: 127
+                    description: RouteTableOffset route policy offset, default 127
+                    minimum: 0
+                    type: integer
+                  security-groups:
+                    description: SecurityGroups is the list of security groups to
+                      attach to any ENI that is created and attached to the instance.
+                    items:
+                      type: string
+                    type: array
+                  subnet-ids:
+                    description: SubnetIDs is the list of subnet ids to use when evaluating
+                      what BCE subnets to use for ENI and IP allocation.
+                    items:
+                      type: string
+                    type: array
+                  use-primary-address:
+                    description: UsePrimaryAddress determines whether an ENI's primary
+                      address should be available for allocations on the node
+                    type: boolean
+                  useMode:
+                    default: Secondary
+                    description: UseMode usage mode of eni currently includes `Primary`
+                      and `Secondary`
+                    enum:
+                    - Secondary
+                    - Primary
+                    type: string
+                  vpc-id:
+                    description: VpcID is the VPC ID to use when allocating ENIs.
+                    type: string
+                required:
+                - maxAllocateENI
+                - maxIPsPerENI
+                - preAllocateENI
+                - routeTableOffset
+                type: object
+              instance-id:
+                description: InstanceID is the identifier of the node. This is different
+                  from the node name which is typically the FQDN of the node. The
+                  InstanceID typically refers to the identifier used by the cloud
+                  provider or some other means of identification.
+                type: string
+              ipam:
+                description: IPAM is the address management specification. This section
+                  can be populated by a user or it can be automatically populated
+                  by an IPAM operator.
+                properties:
+                  max-above-watermark:
+                    description: MaxAboveWatermark is the maximum number of addresses
+                      to allocate beyond the addresses needed to reach the PreAllocate
+                      watermark. Going above the watermark can help reduce the number
+                      of API calls to allocate IPs, e.g. when a new ENI is allocated,
+                      as many secondary IPs as possible are allocated. Limiting the
+                      amount can help reduce waste of IPs.
+                    minimum: 0
+                    type: integer
+                  max-allocate:
+                    description: MaxAllocate is the maximum number of IPs that can
+                      be allocated to the node. When the current amount of allocated
+                      IPs will approach this value, the considered value for PreAllocate
+                      will decrease down to 0 in order to not attempt to allocate
+                      more addresses than defined.
+                    minimum: 0
+                    type: integer
+                  min-allocate:
+                    description: MinAllocate is the minimum number of IPs that must
+                      be allocated when the node is first bootstrapped. It defines
+                      the minimum base socket of addresses that must be available.
+                      After reaching this watermark, the PreAllocate and MaxAboveWatermark
+                      logic takes over to continue allocating IPs.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-allocation-threshold:
+                    description: PodCIDRAllocationThreshold defines the minimum number
+                      of free IPs which must be available to this node via its pod
+                      CIDR pool. If the total number of IP addresses in the pod CIDR
+                      pool is less than this value, the pod CIDRs currently in-use
+                      by this node will be marked as depleted and cce-operator will
+                      allocate a new pod CIDR to this node. This value effectively
+                      defines the buffer of IP addresses available immediately without
+                      requiring cce-operator to get involved.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-release-threshold:
+                    description: PodCIDRReleaseThreshold defines the maximum number
+                      of free IPs which may be available to this node via its pod
+                      CIDR pool. While the total number of free IP addresses in the
+                      pod CIDR pool is larger than this value, cce-agent will attempt
+                      to release currently unused pod CIDRs.
+                    minimum: 0
+                    type: integer
+                  podCIDRs:
+                    description: PodCIDRs is the list of CIDRs available to the node
+                      for allocation. When an IP is used, the IP will be added to
+                      Status.IPAM.Used
+                    items:
+                      type: string
+                    type: array
+                  pool:
+                    additionalProperties:
+                      description: AllocationIP is an IP which is available for allocation,
+                        or already has been allocated
+                      properties:
+                        isPrimary:
+                          description: IsPrimary is set to true if the IP is the primary
+                            IP of the eni
+                          type: boolean
+                        owner:
+                          description: "Owner is the owner of the IP. This field is
+                            set if the IP has been allocated. It will be set to the
+                            pod name or another identifier representing the usage
+                            of the IP \n The owner field is left blank for an entry
+                            in Spec.IPAM.Pool and filled out as the IP is used and
+                            also added to Status.IPAM.Used."
+                          type: string
+                        resource:
+                          description: Resource is set for both available and allocated
+                            IPs, it represents what resource the IP is associated
+                            with, e.g. in combination with AWS ENI, this will refer
+                            to the ID of the ENI
+                          type: string
+                        subnetID:
+                          description: SubnetID is the subnet ID of the IP. This field
+                            is set if the IP is use in cross subnet mode
+                          type: string
+                      type: object
+                    description: Pool is the list of IPs available to the node for
+                      allocation. When an IP is used, the IP will remain on this list
+                      but will be added to Status.IPAM.Used
+                    type: object
+                  pre-allocate:
+                    description: PreAllocate defines the number of IP addresses that
+                      must be available for allocation in the IPAMspec. It defines
+                      the buffer of addresses available immediately without requiring
+                      cce-operator to get involved.
+                    minimum: 0
+                    type: integer
+                type: object
+            type: object
+          status:
+            description: Status defines the realized specification/configuration and
+              status of the node.
+            properties:
+              enis:
+                additionalProperties:
+                  description: SimpleENIStatus is the simple status of a ENI.
+                  properties:
+                    cceStatus:
+                      type: string
+                    id:
+                      type: string
+                    vpcStatus:
+                      type: string
+                  required:
+                  - cceStatus
+                  - id
+                  - vpcStatus
+                  type: object
+                description: ENIs The details of the ENI that has been bound on the
+                  node, including all the IP lists of the ENI
+                type: object
+              ipam:
+                description: IPAM is the IPAM status of the node.
+                properties:
+                  crossSubnetUsed:
+                    additionalProperties:
+                      description: AllocationIP is an IP which is available for allocation,
+                        or already has been allocated
+                      properties:
+                        isPrimary:
+                          description: IsPrimary is set to true if the IP is the primary
+                            IP of the eni
+                          type: boolean
+                        owner:
+                          description: "Owner is the owner of the IP. This field is
+                            set if the IP has been allocated. It will be set to the
+                            pod name or another identifier representing the usage
+                            of the IP \n The owner field is left blank for an entry
+                            in Spec.IPAM.Pool and filled out as the IP is used and
+                            also added to Status.IPAM.Used."
+                          type: string
+                        resource:
+                          description: Resource is set for both available and allocated
+                            IPs, it represents what resource the IP is associated
+                            with, e.g. in combination with AWS ENI, this will refer
+                            to the ID of the ENI
+                          type: string
+                        subnetID:
+                          description: SubnetID is the subnet ID of the IP. This field
+                            is set if the IP is use in cross subnet mode
+                          type: string
+                      type: object
+                    description: CrossSubnetUsed lists all IPs out of Spec.IPAM.Pool
+                      which have been allocated
+                    type: object
+                  operator-status:
+                    description: Operator is the Operator status of the node
+                    properties:
+                      error:
+                        description: Error is the error message set by cce-operator.
+                        type: string
+                    type: object
+                  pod-cidrs:
+                    additionalProperties:
+                      properties:
+                        status:
+                          description: Status describes the status of a pod CIDR
+                          enum:
+                          - released
+                          - depleted
+                          - in-use
+                          type: string
+                      type: object
+                    description: PodCIDRs lists the status of each pod CIDR allocated
+                      to this node.
+                    type: object
+                  release-ips:
+                    additionalProperties:
+                      description: IPReleaseStatus  defines the valid states in IP
+                        release handshake
+                      enum:
+                      - marked-for-release
+                      - ready-for-release
+                      - do-not-release
+                      - released
+                      type: string
+                    description: 'ReleaseIPs tracks the state for every IP considered
+                      for release. value can be one of the following string : * marked-for-release
+                      : Set by operator as possible candidate for IP * ready-for-release  :
+                      Acknowledged as safe to release by agent * do-not-release     :
+                      IP already in use / not owned by the node. Set by agent * released           :
+                      IP successfully released. Set by operator'
+                    type: object
+                  used:
+                    additionalProperties:
+                      description: AllocationIP is an IP which is available for allocation,
+                        or already has been allocated
+                      properties:
+                        isPrimary:
+                          description: IsPrimary is set to true if the IP is the primary
+                            IP of the eni
+                          type: boolean
+                        owner:
+                          description: "Owner is the owner of the IP. This field is
+                            set if the IP has been allocated. It will be set to the
+                            pod name or another identifier representing the usage
+                            of the IP \n The owner field is left blank for an entry
+                            in Spec.IPAM.Pool and filled out as the IP is used and
+                            also added to Status.IPAM.Used."
+                          type: string
+                        resource:
+                          description: Resource is set for both available and allocated
+                            IPs, it represents what resource the IP is associated
+                            with, e.g. in combination with AWS ENI, this will refer
+                            to the ID of the ENI
+                          type: string
+                        subnetID:
+                          description: SubnetID is the subnet ID of the IP. This field
+                            is set if the IP is use in cross subnet mode
+                          type: string
+                      type: object
+                    description: Used lists all IPs out of Spec.IPAM.Pool which have
+                      been allocated and are in use.
+                    type: object
+                  vpc-route-cidrs:
+                    additionalProperties:
+                      type: string
+                    description: VPCRouteCIDRs lists the status of each VPC route
+                      CIDR allocated to this node.
+                    type: object
+                type: object
+              privateCloudSubnet:
+                description: PrivateCloudSubnet is the baidu private cloud base specific
+                  status of the node.
+                properties:
+                  Region:
+                    type: string
+                  cidr:
+                    type: string
+                  enable:
+                    type: boolean
+                  excludes:
+                    type: string
+                  gateway:
+                    type: string
+                  ipVersion:
+                    type: integer
+                  isp:
+                    type: string
+                  name:
+                    type: string
+                  natGW:
+                    type: string
+                  priority:
+                    type: integer
+                  purpose:
+                    type: string
+                  rangeEnd:
+                    type: string
+                  rangeStart:
+                    type: string
+                  vlanID:
+                    type: integer
+                  vpc:
+                    type: string
+                required:
+                - ipVersion
+                type: object
+            type: object
+        required:
+        - metadata
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

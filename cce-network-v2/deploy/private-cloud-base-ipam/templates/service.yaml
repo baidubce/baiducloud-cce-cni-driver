@@ -1,0 +1,18 @@
+{{- if .Values.CCEIPAMv2.operator.webhook.enable }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: cce-ipam-v2
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: webhook
+      protocol: TCP
+      name: http
+  selector:
+    app.cce.baidubce.com: cce-ipam-v2-operator
+    {{- include "helm.selectorLabels" . | nindent 4 }}
+{{- end }}

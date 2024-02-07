@@ -1,0 +1,81 @@
+{{- if .Values.network.operator.webhook.enable }}
+
+{{- if not (empty .Values.network.operator.webhook.mutating) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ .Values.network.operator.webhook.mutating }}
+webhooks:
+  - clientConfig:
+      caBundle: Cg==
+      service:
+        name: cce-network-v2
+        namespace: kube-system
+        path: /mutating-pod
+        port: 443
+    failurePolicy: Ignore
+    name: mutating.pod.cce.baidubce.com
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    objectSelector:
+      matchExpressions:
+        - key : cce.baidubce.com/cniwebhook
+          operator: NotIn
+          values:
+            - "disabled"
+    rules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+        resources:
+          - pods
+    timeoutSeconds: 30
+  - clientConfig:
+      caBundle: Cg==
+      service:
+        name: cce-network-v2
+        namespace: kube-system
+        path: /mutating-psts
+        port: 443
+    failurePolicy: Fail
+    name: mutating.psts.cce.baidubce.com
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    rules:
+      - apiGroups:
+          - "cce.baidubce.com"
+        apiVersions:
+          - v2
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - podsubnettopologyspreads
+    timeoutSeconds: 30
+  - clientConfig:
+      caBundle: Cg==
+      service:
+        name: cce-network-v2
+        namespace: kube-system
+        path: /mutating-cluster-psts
+        port: 443
+    failurePolicy: Fail
+    name: mutating.cpsts.cce.baidubce.com
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    rules:
+      - apiGroups:
+          - "cce.baidubce.com"
+        apiVersions:
+          - v2alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - clusterpodsubnettopologyspreads
+    timeoutSeconds: 30    
+{{- end }}
+{{- end }}

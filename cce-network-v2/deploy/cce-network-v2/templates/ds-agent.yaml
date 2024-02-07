@@ -1,0 +1,167 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+  name: cce-network-agent
+  namespace: {{ .Release.Namespace }}
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.cce.baidubce.com: cce-network-agent
+      {{- include "helm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.cce.baidubce.com: cce-network-agent
+        cce.baidubce.com/cniwebhook: disabled
+        {{- include "helm.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - command:
+            - /bin/agent
+          args:
+            - --config=/etc/cce/network-v2-config.yaml
+            - --debug={{ .Values.ccedConfig.debug }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: CCE_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: CCE_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - "/home/cce/install-cni.sh"
+          image: "{{ .Values.network.agent.image.repository }}:{{ .Values.network.agent.image.tag | default .Chart.AppVersion }}{{ .Values.network.imageSuffix }}"
+          imagePullPolicy: Always
+          name: agent
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /dev/log
+              name: log
+            - mountPath: /var/run/cce-network-v2
+              name: socket-dir
+            - mountPath: /var/run/netns
+              name: netns-dir
+            - mountPath: /opt/cni/bin
+              name: cni-bin-dir
+            - mountPath: /etc/cni/net.d
+              name: cni-net-dir
+            - mountPath: /etc/cce
+              name: cce-network-v2-config
+            - mountPath: /sys
+              readOnly: true 
+              name: sys
+            - mountPath: /usr-host
+              name: usr-host
+            - mountPath: /etc-host
+              name: etc-host
+            - mountPath: /lib/modules
+              name: lib-modules
+            - mountPath: /etc/cce/cni-config-template
+              readOnly: true
+              name: cni-config-template  
+          ports:
+            - name: healthz
+              containerPort: 19879
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              host: "127.0.0.1"
+              path: /v1/healthz
+              port: healthz
+              scheme: HTTP
+              httpHeaders:
+                - name: "brief"
+                  value: "true"
+      dnsPolicy: ClusterFirst
+      priorityClassName: system-node-critical
+      enableServiceLinks: true
+      hostIPC: true
+      hostNetwork: true
+      hostPID: true
+      restartPolicy: Always
+      serviceAccountName: cce-cni-v2
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+          name: cni-bin-dir
+        - hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+          name: cni-net-dir
+        - hostPath:
+            path: /dev/log
+          name: log
+        - hostPath:
+            path: /var/run/cce-network-v2
+            type: DirectoryOrCreate
+          name: socket-dir
+        - hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate
+          name: netns-dir
+        - hostPath:
+            path: /lib/modules/
+            type: ""
+          name: lib-modules
+        - hostPath:
+            path: /usr
+            type: ""
+          name: usr-host
+        - hostPath:
+            path: /sys
+            type: ""
+          name: sys     
+        - hostPath:
+            path: /etc
+            type: ""
+          name: etc-host  
+        - configMap:
+            defaultMode: 420
+            items:
+              - key:  cced
+                path: network-v2-config.yaml
+            name: cce-network-v2-config
+          name: cce-network-v2-config
+        - configMap:
+            defaultMode: 420
+            name: cni-config-template 
+          name: cni-config-template  
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.network.agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate

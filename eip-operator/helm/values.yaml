@@ -1,0 +1,18 @@
+operator:
+  manager:
+    args:
+    - --region=
+    - --cce-cluster-id=
+    env:
+      cceGatewayEndpoint: 
+    image:
+      repository: registry.baidubce.com/cce-plugin-dev/cce-network-eip-operator
+      tag: latest
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 200m
+        memory: 128Mi
+  replicas: 1

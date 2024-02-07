@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-0
+  namespace: default
+  labels:
+    environment: production
+    app: nginx
+  annotations:
+    k1: v1
+    K2: v2
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.14.2
+    ports:
+    - containerPort: 80
+# ---
+# apiVersion: cce.baidubce.com/v2
+# kind: CCEEndpoint
+# metadata:
+#     name: media-server-0
+#     namespace: default
+#     # labels:
+#     #   environment: production
+#     #   app: nginx
+#     # finalizers:
+#     # - publicIP
+#     # - eni
+# spec:
+#     # 外部特性门控
+#     # 是否启动公共IP绑定，如启用公共IP绑定，则等待外部插件设置 extFeatureStatus 状态
+#     # 在公共IP未就绪时，会阻塞CNI ADD请求。
+#     # extFeatureGates:
+#     # - publicIP      
+#     network: 
+#         ipAllocation:
+#             type: PrimaryENI
+#             releaseStrategy: TTL
+#             # ttl: 0s
+#             useIPV4: true
+#             useIPV6: true
+#     external-identifiers:
+#         container-id: adasf-weq2fac-vsdfds
+# status:
+#     # 外部特性状态
+#     # extFeatureStatus:
+#     #    publicIP:
+#     #        # 只有 ready=true 且 spec.container-id 与 container-id 相等时，endpoint才会认为就绪。
+#     #        ready: true
+#     #        container-id: adasf-weq2fac-vsdfds
+#     #        msg: ""
+#     #     #    updateTime: 2090-08-08
+#     #        data:
+#     #            eip: 89.72.0.109
+#     #            # 直通模式direct,nat模式nat
+#     #            mode: direct
+#     external-identifiers:
+#         container-id: 88dddf768edf17a60eb36b88a3ebaeeef2acf39eafe5a3e8c146ad89d1ee5c1b
+#         k8s-namespace: kube-system
+#         k8s-object-id: c6a882c1-8737-4a07-910d-73e8aac6f741
+#         k8s-pod-name: coredns-86497c57cc-tpw9w
+#         netns: /proc/3002281/ns/net
+#         pod-name: coredns-86497c57cc-tpw9w
+#     log:
+#     - code: ok
+#       timestamp: "2023-04-06T10:58:02Z"
+#     networking:
+#       addressing:
+#       - cidr:
+#         - 172.22.80.0/24
+#         family: "4"
+#         gateway: 172.22.80.1
+#         interface: eni-i1evfpn1k1mb
+#         ipv4: 172.22.80.3
+#         subnet: sbn-50st4bb33pri
+#         vpcID: vpc-z675a4duznep
+#       node: 172.22.0.14
+#     state: ip-allocated

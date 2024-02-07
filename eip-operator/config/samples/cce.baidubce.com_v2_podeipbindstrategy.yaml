@@ -1,0 +1,13 @@
+apiVersion: cce.baidubce.com/v2
+kind: PodEIPBindStrategy
+metadata:
+  name: pebs-sample
+  namespace: default
+spec:
+  # TODO(user): Add fields here
+  selector:
+    matchLabels:
+      app: nginx
+  staticEIPPool:
+    - 106.13.198.78
+    - 182.61.25.1

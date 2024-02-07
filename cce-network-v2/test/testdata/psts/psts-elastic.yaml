@@ -1,0 +1,15 @@
+apiVersion: cce.baidubce.com/v2
+kind: PodSubnetTopologySpread
+metadata:
+  name: zrq-test-cpsts-1
+  namespace: default
+spec:
+  name: zrq-test-cpsts-1
+  selector:
+    matchLabels:
+      app: fixedIP
+  strategy:
+    releaseStrategy: TTL
+    type: Elastic
+  subnets:
+    sbn-dc175x709psi: []

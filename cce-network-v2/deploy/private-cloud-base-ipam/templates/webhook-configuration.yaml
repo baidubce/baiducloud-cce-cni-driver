@@ -1,0 +1,71 @@
+{{- if .Values.CCEIPAMv2.operator.webhook.enable }}
+
+{{- if not (empty .Values.CCEIPAMv2.operator.webhook.mutating) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ .Values.CCEIPAMv2.operator.webhook.mutating }}
+webhooks:
+  - clientConfig:
+      caBundle: Cg==
+      service:
+        name: cce-ipam-v2
+        namespace: kube-system
+        path: /mutating-pod
+        port: 443
+    failurePolicy: Ignore
+    name: mutating.pod.cce.baidubce.com
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    objectSelector:
+      matchExpressions:
+        - key : cce.baidubce.com/cniwebhook
+          operator: NotIn
+          values:
+            - "disabled"
+    rules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+        resources:
+          - pods
+    timeoutSeconds: 30
+{{- end }}
+
+---
+
+{{- if not (empty .Values.CCEIPAMv2.operator.webhook.validating) }}
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: { { .Values.CCEIPAMv2.operator.webhook.validating } }
+webhooks:
+  - clientConfig:
+      caBundle: Cg==
+      service:
+        name: cce-eni-ipam
+        namespace: kube-system
+        path: /validating-pod-subnet-topology-spread
+        port: 18921
+    failurePolicy: Fail
+    name: validate.psts.cce.baidubce.com
+    sideEffects: None
+    admissionReviewVersions: ["v1beta1"]
+    rules:
+      - apiGroups:
+          - "cce.io"
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - podsubnettopologyspreads
+          - podsubnettopologyspreadtables
+    timeoutSeconds: 30
+{{- end }}
+{{- end }}

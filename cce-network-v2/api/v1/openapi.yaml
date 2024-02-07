@@ -1,0 +1,736 @@
+---
+swagger: "2.0"
+info:
+  title: Cce API
+  description: CCE
+  version: v1beta
+x-schemes:
+  - unix
+basePath: "/v1"
+produces:
+  - application/json
+consumes:
+  - application/json
+paths:
+  "/healthz":
+    get:
+      summary: Get health of CCE daemon
+      description: |
+        Returns health and status information of the CCE daemon and related
+        components such as the local container runtime, connected datastore,
+        Kubernetes integration and Hubble.
+      tags:
+        - daemon
+      parameters:
+        - name: brief
+          description: |
+            Brief will return a brief representation of the CCE status.
+          in: header
+          required: false
+          type: boolean
+      responses:
+        "200":
+          description: Success
+          schema:
+            "$ref": "#/definitions/StatusResponse"
+  "/metrics/":
+    get:
+      summary: Retrieve CCE metrics
+      tags:
+        - metrics
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          schema:
+            type: array
+            items:
+              "$ref": "#/definitions/Metric"
+        "500":
+          description: Metrics cannot be retrieved
+  "/ipam":
+    post:
+      summary: Allocate an IP address
+      tags:
+        - ipam
+      parameters:
+        - "$ref": "#/parameters/ipam-family"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-expiration"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+      responses:
+        "201":
+          description: Success
+          schema:
+            "$ref": "#/definitions/IPAMResponse"
+        "502":
+          description: Allocation failure
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+  "/ipam/{ip}":
+    post:
+      summary: Allocate an IP address
+      tags:
+        - ipam
+      parameters:
+        - "$ref": "#/parameters/ipam-ip"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid IP address
+          x-go-name: Invalid
+        "409":
+          description: IP already allocated
+          x-go-name: Exists
+        "500":
+          description: IP allocation failure. Details in message.
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+        "501":
+          description: Allocation for address family disabled
+          x-go-name: Disabled
+    delete:
+      summary: Release an allocated IP address
+      tags:
+        - ipam
+      parameters:
+        - "$ref": "#/parameters/ipam-release-arg"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid IP address
+          x-go-name: Invalid
+        "404":
+          description: IP address not found
+        "500":
+          description: Address release failure
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+        "501":
+          description: Allocation for address family disabled
+          x-go-name: Disabled
+  "/eni":
+    post:
+      summary: Allocate an IP address for exclusive ENI
+      tags:
+        - eni
+      parameters:
+        - "$ref": "#/parameters/eni-spec"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+      responses:
+        "200":
+          description: Success
+          schema:
+            "$ref": "#/definitions/IPAMResponse"
+        "400":
+          description: Invalid IP address
+          x-go-name: Invalid
+        "409":
+          description: IP already allocated
+          x-go-name: Exists
+        "500":
+          description: IP allocation failure. Details in message.
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+        "501":
+          description: Allocation for address family disabled
+          x-go-name: Disabled
+    delete:
+      summary: Release an allocated IP address for exclusive ENI
+      tags:
+        - eni
+      parameters:
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid IP address
+          x-go-name: Invalid
+        "404":
+          description: IP address not found
+        "500":
+          description: Address release failure
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+        "501":
+          description: Allocation for address family disabled
+          x-go-name: Disabled
+  "/endpoint/extplugin/status":
+    get:
+      summary: get external plugin status
+      tags:
+        - endpoint
+      parameters:
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+      responses:
+        "200":
+          description: Success
+          schema:
+            "$ref": "#/definitions/ExtFeatureData"
+        "500":
+          description: failed to get external plugin status. Details in message.
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+  "/endpoint/probe":
+    put:
+      summary: create or update endpint probe
+      tags:
+        - endpoint
+      parameters:
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/cni-driver"
+      responses:
+        "201":
+          description: Success
+          schema:
+            "$ref": "#/definitions/EndpointProbeResponse"
+        "500":
+          description: update endpoint failed. Details in message.
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+
+parameters:
+  pod-name:
+    name: pod
+    description: |
+      K8s pod name
+    required: true
+    in: path
+    type: string
+
+  ipam-ip:
+    name: ip
+    description: IP address
+    in: path
+    required: true
+    type: string
+  ipam-release-arg:
+    name: ip
+    description: IP address or owner name
+    in: path
+    required: true
+    type: string
+  ipam-family:
+    name: family
+    in: query
+    type: string
+    enum:
+      - ipv4
+      - ipv6
+  ipam-owner:
+    name: owner
+    in: query
+    type: string
+  ipam-expiration:
+    name: expiration
+    in: header
+    type: boolean
+  ipam-containerid:
+    name: containerID
+    description: container id provider by cni
+    in: query
+    required: false
+    type: string
+  ipam-netns:
+    name: netns
+    description: netns provider by cni
+    in: query
+    required: false
+    type: string
+  ipam-ifname:
+    name: ifname
+    description: ifname provider by cni
+    in: query
+    required: false
+    type: string
+  cidr:
+    name: cidr
+    description: A CIDR range of IPs
+    required: false
+    in: query
+    type: string
+  source:
+    name: source
+    description: Source from which FQDN entries come from
+    required: false
+    in: query
+    type: string
+  eni-spec:
+    name: eni
+    description: Expectations when applying for ENI
+    in: body
+    schema:
+      "$ref": "#/definitions/ENI"
+  cni-driver:
+    name: cni-driver
+    in: query
+    type: string
+
+definitions:
+  EndpointState:
+    description: State of endpoint
+    type: string
+    enum:
+      - waiting-for-identity
+      - not-ready
+      - waiting-to-regenerate
+      - regenerating
+      - restoring
+      - ready
+      - disconnecting
+      - disconnected
+      - invalid
+      - ip-allocated
+      - pod-deleted
+  EndpointStatusLog:
+    description: Status log of endpoint
+    type: array
+    items:
+      "$ref": "#/definitions/EndpointStatusChange"
+  EndpointStatusChange:
+    description: |-
+      Indication of a change of status
+
+      +deepequal-gen=true
+    type: object
+    properties:
+      timestamp:
+        description: Timestamp when status change occurred
+        type: string
+      code:
+        description: Code indicate type of status change
+        type: string
+        enum:
+          - ok
+          - failed
+      message:
+        description: Status message
+        type: string
+      state:
+        "$ref": "#/definitions/EndpointState"
+
+  IPAMResponse:
+    description: IPAM configuration of an endpoint
+    type: object
+    required:
+      - address
+      - host-addressing
+    properties:
+      address:
+        "$ref": "#/definitions/AddressPair"
+      ipv4:
+        "$ref": "#/definitions/IPAMAddressResponse"
+      ipv6:
+        "$ref": "#/definitions/IPAMAddressResponse"
+      host-addressing:
+        "$ref": "#/definitions/NodeAddressing"
+  IPAMAddressResponse:
+    description: IPAM configuration of an individual address family
+    type: object
+    properties:
+      ip:
+        description: Allocated IP for endpoint
+        type: string
+      gateway:
+        description: IP of gateway
+        type: string
+      cidrs:
+        description: List of CIDRs out of which IPs are allocated
+        type: array
+        items:
+          type: string
+      master-mac:
+        type: string
+        description: MAC of master interface if address is a slave/secondary of a master interface
+      expiration-uuid:
+        type: string
+        description: |
+          The UUID for the expiration timer. Set when expiration has been
+          enabled while allocating.
+      interface-number:
+        type: string
+        description: |
+          InterfaceNumber is a field for generically identifying an interface. This is only useful in ENI mode.
+  AddressPair:
+    description: Addressing information of an endpoint
+    type: object
+    properties:
+      ipv4:
+        description: IPv4 address
+        type: string
+      ipv4-expiration-uuid:
+        description: UUID of IPv4 expiration timer
+        type: string
+      ipv6:
+        description: IPv6 address
+        type: string
+      ipv6-expiration-uuid:
+        description: UUID of IPv6 expiration timer
+        type: string
+  Address:
+    description: IP address
+    type: string
+  StatusResponse:
+    description: |-
+      Health and status information of daemon
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      cce:
+        description: Status of CCE daemon
+        "$ref": "#/definitions/Status"
+      container-runtime:
+        description: Status of local container runtime
+        "$ref": "#/definitions/Status"
+      controllers:
+        description: Status of all endpoint controllers
+        "$ref": "#/definitions/ControllerStatuses"
+      stale:
+        description: List of stale information in the status
+        type: object
+        additionalProperties:
+          description: Timestamp when the probe was started
+          type: string
+          format: date-time
+      client-id:
+        description: |
+          When supported by the API, this client ID should be used by the
+          client when making another request to the server.
+          See for example "/cluster/nodes".
+        type: string
+  Status:
+    description: |
+      Status of an individual component
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      state:
+        type: string
+        description: State the component is in
+        enum:
+          - Ok
+          - Warning
+          - Failure
+          - Disabled
+      msg:
+        type: string
+        description: Human readable status/error/warning message
+  DatapathMode:
+    description: Datapath mode
+    type: string
+    enum:
+      - veth
+      - ipvlan
+  NodeAddressing:
+    description: |-
+      Addressing information of a node for all address families
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      ipv6:
+        "$ref": "#/definitions/NodeAddressingElement"
+      ipv4:
+        "$ref": "#/definitions/NodeAddressingElement"
+  NodeAddressingElement:
+    description: Addressing information
+    type: object
+    properties:
+      enabled:
+        description: True if address family is enabled
+        type: boolean
+      ip:
+        description: IP address of node
+        type: string
+      alloc-range:
+        description: Address pool to be used for local endpoints
+        type: string
+      address-type:
+        description: Node address type, one of HostName, ExternalIP or InternalIP
+        type: string
+  Metric:
+    description: Metric information
+    type: object
+    properties:
+      name:
+        description: Name of the metric
+        type: string
+      value:
+        description: Value of the metric
+        type: number
+      labels:
+        description: Labels of the metric
+        type: object
+        additionalProperties:
+          type: string
+  ControllerStatuses:
+    description: Collection of controller statuses
+    type: array
+    items:
+      "$ref": "#/definitions/ControllerStatus"
+  ControllerStatus:
+    description: |-
+      Status of a controller
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      name:
+        description: Name of controller
+        type: string
+      uuid:
+        description: UUID of controller
+        type: string
+        format: uuid
+      configuration:
+        description: |-
+          Configuration of controller
+
+          +deepequal-gen=true
+          +k8s:deepcopy-gen=true
+        type: object
+        properties:
+          interval:
+            description: Regular synchronization interval
+            type: string
+            format: duration
+          error-retry-base:
+            description: Base error retry back-off time
+            type: string
+            format: duration
+          error-retry:
+            description: Retry on error
+            type: boolean
+      status:
+        description: |-
+          Current status of controller
+
+          +k8s:deepcopy-gen=true
+        type: object
+        properties:
+          success-count:
+            description: Total number of successful runs
+            type: integer
+          last-success-timestamp:
+            description: Timestamp of last success
+            type: string
+            format: date-time
+          failure-count:
+            description: Total number of failed runs
+            type: integer
+          last-failure-timestamp:
+            description: Timestamp of last error
+            type: string
+            format: date-time
+          consecutive-failure-count:
+            description: Number of consecutive errors since last success
+            type: integer
+          last-failure-msg:
+            description: Error message of last failed run
+            type: string
+  ENI:
+    description: |
+      eni definition
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      id:
+        description: ID unique identifier available for the resource
+        type: string
+      name:
+        description: The name of eni was created by CCE and format as {clusterID}-{instance_name}-{randmon}
+        type: string
+      zoneName:
+        description: ZoneName zone name of eni instance
+        type: string
+      instanceID:
+        description: |
+          InstanceID insance ID of node resource, like ID of BCC.
+          This field represents the node name that ENI expects to attached.
+          Example:
+          i-wWANcEYK
+        type: string
+      vpcID:
+        description: |
+          VPCID vpc id of eni instance
+          In scenarios where ENI is used across VPCs (such as BCI), the VPC ID of ENI may
+          be different from that of the cluster
+          Example:
+          vpc-8nh1ks7a55a2
+        type: string
+      description:
+        type: string
+      macAddress:
+        description: |
+          MacAddress mac address of eni instance
+          After the ENI is attached to the VM, the ENI device should be found in the
+          VM through this mac address
+          Example:
+          fa:26:00:0d:51:c7
+        type: string
+      subnetID:
+        description: |
+          SubnetID subnet id of eni instance
+          In scenarios where ENI is used across Subnet (such as PodSubnetTopologySpread), the subnet ID of ENI may
+          be different from secondry IP of the ENI.
+          Example:
+          sbn-na1y2xryjyf3
+        type: string
+      securityGroupIds:
+        description: |
+          SecurityGroupIds list of security group IDs
+          An ENI should have at least one default security group
+          Example:
+          ["g-xpy9eitxhfib"]
+        type: array
+        x-omitempty: true
+        items:
+          type: string
+      enterpriseSecurityGroupIds:
+        type: array
+        x-omitempty: true
+        items:
+          type: string
+      privateIPSet:
+        type: array
+        x-omitempty: true
+        items:
+          "$ref": "#/definitions/PrivateIP"
+      ipv6PrivateIPSet:
+        type: array
+        x-omitempty: true
+        items:
+          "$ref": "#/definitions/PrivateIP"
+  PrivateIP:
+    description: |
+      VPC IP address
+
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      publicIPAddress:
+        type: string
+      primary:
+        type: boolean
+      privateIPAddress:
+        type: string
+      subnetID:
+        description: |
+          SubnetID subnet id of  private ip assigned with this.
+          When allocating IP across subnets, the subnet of private IP may be
+          different from ENI
+        type: string
+      gatewayIP:
+        type: string
+      cidrAddress:
+        type: string
+
+  Error:
+    type: string
+  EndpointIdentifiers:
+    description: |-
+      Unique identifiers for this endpoint from outside CCE
+
+      +deepequal-gen=true
+    type: object
+    properties:
+      container-id:
+        description: ID assigned by container runtime
+        type: string
+      container-name:
+        description: Name assigned to container
+        type: string
+      pod-name:
+        description: K8s pod for this endpoint(Deprecated, use K8sPodName and K8sNamespace instead)
+        type: string
+      k8s-pod-name:
+        description: K8s pod name for this endpoint
+        type: string
+      k8s-namespace:
+        description: K8s namespace for this endpoint
+        type: string
+      k8s-object-id:
+        description: K8s object id to indentifier a unique object
+        type: string
+      external-identifier:
+        description: External network ID, such as the ID of the ENI occupied by the container
+        type: string
+      netns:
+        description: netns use by CNI
+        type: string
+      cnidriver:
+        description: device driver name
+        type: string
+  ExtFeatureData:
+    description: ExtFeatureData is a map
+    type: object
+    additionalProperties:
+      type: object
+      additionalProperties:
+        type: string
+
+  EndpointProbeResponse:
+    description: |
+      EndpointProbeResponse is the response of probe endpoint
+    type: object
+    properties:
+      bandWidth:
+       "$ref": "#/definitions/BandwidthOption"
+       x-omitempty: true
+      featureGates:
+        type: array
+        x-omitempty: true
+        items:
+          "$ref": "#/definitions/ExtFeatureData"
+  BandwidthOption:
+    description: |
+      BandwidthOption is the bandwidth option of network
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      mode: 
+        x-omitempty: true
+        type: string
+        enum:
+        - edt
+        - tc
+        - ""
+      ingress:
+        type: integer
+        x-omitempty: true
+      egress:
+        type: integer
+        x-omitempty: true

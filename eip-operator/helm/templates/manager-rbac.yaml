@@ -1,0 +1,143 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eip-operator-role
+  labels:
+  {{- include "cce-network-eip-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - cceendpoints
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - cceendpoints/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - cceendpoints/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - eips
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - eips/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - eips/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - podeipbindstrategies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - podeipbindstrategies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cce.baidubce.com
+  resources:
+  - podeipbindstrategies/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eip-operator-rolebinding
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: eip-operator
+    app.kubernetes.io/part-of: eip-operator
+  {{- include "cce-network-eip-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: 'eip-operator-role'
+subjects:
+- kind: ServiceAccount
+  name: 'eip-operator'
+  namespace: '{{ .Release.Namespace }}'

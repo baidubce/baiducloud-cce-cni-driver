@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cce-ipam-v2-operator
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.CCEIPAMv2.operator.replicaCount }}
+  selector:
+    matchLabels:
+      app.cce.baidubce.com: cce-ipam-v2-operator
+      {{- include "helm.selectorLabels" . | nindent 6 }}
+
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.cce.baidubce.com: cce-ipam-v2-operator
+        cce.baidubce.com/cniwebhook: disabled
+        {{- include "helm.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: cce-cni-v2
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: operator
+          image: "{{ .Values.CCEIPAMv2.operator.image.repository }}:{{ .Values.CCEIPAMv2.operator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.CCEIPAMv2.operator.image.pullPolicy }}
+          command:
+            - /bin/cce-ipam-operator
+          args:
+            - --config=/etc/cce/ipam-v2-config.yaml
+            - --k8s-namespace={{ .Release.Namespace }}
+            - --debug={{ .Values.ccedConfig.debug }}
+          env:
+            - name: CCE_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: CCE_CCE_POD_LABELS
+              value: app.cce.baidubce.com=cce-ipam-v2-agent
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: CCE_K8S_NAMESPACE
+              valueFrom:
+                  fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+          ports:
+            - name: prometheus
+              containerPort: 9962
+              protocol: TCP
+            - name: api
+              containerPort: 9234
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+          resources:
+            {{- toYaml .Values.CCEIPAMv2.operator.resources | nindent 12 }}
+          volumeMounts:
+            - mountPath: /var/log/cce
+              name: log-dir
+            - mountPath: /etc/cce
+              name: cce-ipam-v2-config
+
+        {{- if .Values.CCEIPAMv2.operator.webhook.enable }}
+
+        - name: webhook
+          image: "{{ .Values.CCEIPAMv2.operator.image.repository }}:{{ .Values.CCEIPAMv2.operator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.CCEIPAMv2.operator.image.pullPolicy }}
+          command: ["/bin/webhook"]
+          args:
+            - --validting-webhook-configuration-name={{ .Values.CCEIPAMv2.operator.webhook.validating }}
+            - --mutating-webhook-configuration-name={{ .Values.CCEIPAMv2.operator.webhook.mutating }}
+            - --webhook-service-name=cce-ipam-v2
+            - --webhook-secret-name=cce-ipam-v2-operator
+            - --namespace={{ .Release.Namespace }}
+          ports:
+            - name: webhook
+              containerPort: 18921
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.CCEIPAMv2.operator.resources | nindent 12 }}
+        {{- end }}
+
+      volumes:
+        - hostPath:
+            path: /var/log/cce
+            type: DirectoryOrCreate
+          name: log-dir
+        - configMap:
+            defaultMode: 420
+            items:
+              - key: cced
+                path: ipam-v2-config.yaml
+            name: cce-ipam-v2-config
+          name: cce-ipam-v2-config
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      priorityClassName: system-cluster-critical
+      hostNetwork: true

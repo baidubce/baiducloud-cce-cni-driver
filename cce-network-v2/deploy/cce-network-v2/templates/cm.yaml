@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: EnsureExists
+  name: cce-network-v2-config
+  namespace: {{ .Release.Namespace }}
+data:
+  cced: |
+    {{- toYaml .Values.ccedConfig | nindent 4 }}

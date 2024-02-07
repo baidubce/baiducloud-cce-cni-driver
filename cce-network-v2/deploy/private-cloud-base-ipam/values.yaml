@@ -1,0 +1,157 @@
+# Default values for helm.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+CCEIPAMv2:
+  operator:
+    replicaCount: 1
+    image:
+      repository: registry.baidubce.com/cce-plugin-dev/cce_ipam_operator
+      pullPolicy: Always
+      # Overrides the image tag whose default is the chart appVersion.
+      tag: ""
+    resources: { }
+    webhook:
+      mutating: cce-ipam-v2-mutating-webhook-configuration
+      validating: ""
+      enable: true
+  agent:
+    image:
+      repository: registry.baidubce.com/cce-plugin-dev/cce_ipam_agent
+      pullPolicy: Always
+      # Overrides the image tag whose default is the chart appVersion.
+      tag: ""
+    resources: { }
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: topology.kubernetes.io/subnet
+                  operator: Exists
+tolerations:
+  - operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/disk-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/memory-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/pid-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/unschedulable
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/network-unavailable
+    operator: Exists
+
+
+imagePullSecrets: [ ]
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: { }
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: { }
+
+podSecurityContext: { }
+# fsGroup: 2000
+
+securityContext: { }
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+# runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources: { }
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+#   memory: 128Mi
+
+nodeSelector: { }
+
+affinity: { }
+
+# cce守护进程配置
+ccedConfig:
+  # 开启debug模式(会多打日志)
+  debug: true
+  # 在非k8s环境运行使用
+  # k8s-kubeconfig-path: /run/kubeconfig
+  k8s-client-burst: 10
+  k8s-client-qps: 5
+  k8s-api-discovery: false
+  leader-election-lease-duration: 60s
+  leader-election-renew-deadline: 30s
+
+  # 启用自动创建cce node资源
+  auto-create-network-resource-set-resource: true
+  enable-monitor: false
+  endpoint-gc-interval: 30s
+  nodes-gc-interval: 30s
+  skip-crd-creation: true
+  mtu: 1500
+
+  # 调试
+  pprof: false
+  pprof-port: 14386
+  agent-health-port: 9879
+  gops-port: 9891
+  prometheus-serve-addr: ":9962"
+  operator-prometheus-serve-addr: ":9965"
+  operator-api-serve-addr: ":9234"
+  #  log-driver: syslog
+  log-opt: '{"syslog.level":"debug","syslog.facility":"local4"}'
+
+  # cni 配置，从指定文件读取，写入到另一个路径
+  read-cni-conf: ""
+  write-cni-conf-when-ready: ""
+
+
+  # ipam 模式. privatecloudbase: 私有云底座，
+  ipam: privatecloudbase
+  # 启动ipv4
+  enable-ipv4: true
+  enable-ipv6: false
+  cce-endpoint-gc-interval: 30s
+  # cni 固定IP申请等待超时时间
+  fixed-ip-allocate-timeout: 30s
+  # 启用对远程固定IP的回收功能(开启后当系统发现远程记录有固定IP,但是k8s中没有与之对应的endpoint时,会删除远程固定IP)
+  enable-remote-fixed-ip-gc: false
+  # cni IP申请请求的超时时间
+  ip-allocation-timeout: 30s
+  # pod删除后固定ip保留时间
+  fixed-ip-ttl-duration: 87600h
+
+  # 私有云底座配置: 边缘IPAM服务地址
+  bce-cloud-host: http://221.204.50.53:8007
+  # 边缘IPAM region
+  bce-cloud-region: cn-test-cm
+

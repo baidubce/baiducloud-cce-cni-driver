@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- cce.baidubce.com_v2_podeipbindstrategy.yaml
+- cce.baidubce.com_v2_eip.yaml
+- cce.baidubce.com_v2_cceendpoint.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

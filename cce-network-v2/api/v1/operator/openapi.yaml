@@ -1,0 +1,48 @@
+---
+swagger: '2.0'
+info:
+  title: CCE Operator
+  description: CCE
+  version: v1beta
+x-schemes:
+- unix
+basePath: "/v1"
+produces:
+- application/json
+consumes:
+- application/json
+paths:
+  "/metrics/":
+    get:
+      summary: Retrieve cce operator metrics
+      tags:
+      - metrics
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          schema:
+            type: array
+            items:
+              "$ref": "../openapi.yaml#/definitions/Metric"
+        '500':
+          x-go-name: Failed
+          description: Metrics cannot be retrieved
+  "/healthz":
+    get:
+      summary: Get health of CCE operator
+      description: This path will return the status of cce operator instance.
+      tags:
+      - operator
+      parameters: []
+      produces:
+      - text/plain
+      responses:
+        '200':
+          description: CCE operator is healthy
+          schema:
+            type: string
+        '500':
+          description: CCE operator is not healthy
+          schema:
+            type: string

@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+  name: cce-cni-v2-agent
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.cce.baidubce.com: cce-ipam-v2-agent
+      {{- include "helm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.cce.baidubce.com: cce-ipam-v2-agent
+        cce.baidubce.com/cniwebhook: disabled
+        {{- include "helm.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - command:
+            - /bin/agent
+          args:
+            - --config=/etc/cce/ipam-v2-config.yaml
+            - --debug={{ .Values.ccedConfig.debug }}
+          env:
+            - name: BBC_ENDPOINT
+              value: bbc.bj.baidubce.com
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: CCE_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: CCE_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - "/home/cce/install-cni.sh"
+          image: "{{ .Values.CCEIPAMv2.agent.image.repository }}:{{ .Values.CCEIPAMv2.agent.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: Always
+          name: agent
+          resources:
+            limits:
+              memory: 300Mi
+            requests:
+              memory: 100Mi
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /var/log/cce
+              name: log-dir
+            - mountPath: /var/run/cce-ipam-v2
+              name: socket-dir
+            - mountPath: /opt/cni/bin
+              name: cni-bin-dir
+            - mountPath: /lib/modules/
+              name: lib-modules
+            - mountPath: /etc/cni/net.d
+              name: cni-net-dir
+            - mountPath: /etc/cce
+              name: cce-ipam-v2-config
+          ports:
+            - name: healthz
+              containerPort: 9879
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              host: "127.0.0.1"
+              path: /healthz
+              port: healthz
+              scheme: HTTP
+              httpHeaders:
+                - name: "brief"
+                  value: "true"
+      dnsPolicy: ClusterFirst
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      restartPolicy: Always
+      serviceAccountName: cce-cni-v2
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+          name: cni-bin-dir
+        - hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+          name: cni-net-dir
+        - hostPath:
+            path: /var/log/cce
+            type: DirectoryOrCreate
+          name: log-dir
+        - hostPath:
+            path: /var/run/cce-ipam-v2
+            type: DirectoryOrCreate
+          name: socket-dir
+        - hostPath:
+            path: /lib/modules/
+            type: ""
+          name: lib-modules
+        - configMap:
+            defaultMode: 420
+            items:
+              - key:  cced
+                path: ipam-v2-config.yaml
+            name: cce-ipam-v2-config
+          name: cce-ipam-v2-config
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.CCEIPAMv2.agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate

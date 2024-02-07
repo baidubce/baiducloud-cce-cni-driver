@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cce-network-eip-operator-cce-reserved
+  namespace: '{{ .Release.Namespace }}'
+  labels:
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app: cce-network-eip-operator
+data:
+  hash: "31a59072410167c388460fbaa3ed7958a5de27cc9ffe729737a80e1dbab1c0bc"

@@ -1,0 +1,13 @@
+apiVersion: cce.baidubce.com/v2
+kind: EIP
+metadata:
+  labels:
+    app.kubernetes.io/name: eip
+    app.kubernetes.io/instance: eip-sample
+    app.kubernetes.io/part-of: eip-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: eip-operator
+  name: eip-sample
+spec:
+  # TODO(user): Add fields here
+  foo: "EIP"

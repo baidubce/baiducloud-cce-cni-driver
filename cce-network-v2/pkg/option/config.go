@@ -291,6 +291,10 @@ const (
 	// local address
 	ExcludeLocalAddress = "exclude-local-address"
 
+	EnableBandwidthManager   = "enable-bandwidth-manager"
+	EnableEgressPriority     = "enable-egress-priority"
+	EnableEgressPriorityDSCP = "enable-egress-priority-dscp"
+
 	// IPv4PodSubnets A list of IPv4 subnets that pods may be
 	// assigned from. Used with CNI chaining where IPs are not directly managed
 	// by CCE.
@@ -394,6 +398,9 @@ const (
 	// allows to keep a Kubernetes node NotReady until CCE is up and
 	// running and able to schedule endpoints.
 	WriteCNIConfigurationWhenReady = "write-cni-conf-when-ready"
+
+	// OverwriteCNIConfigurationWhenStart Overwrite the CNI configuration when agent starts
+	OverwriteCNIConfigurationWhenStart = "overwrite-cni-conf"
 
 	// EnableCCEEndpointSlice enables the cce endpoint slicing feature.
 	EnableCCEEndpointSlice = "enable-cce-endpoint-slice"
@@ -685,6 +692,10 @@ type DaemonConfig struct {
 	// allows to keep a Kubernetes node NotReady until CCE is up and
 	// running and able to schedule endpoints.
 	WriteCNIConfigurationWhenReady string
+
+	// OverwriteCNIConfigurationWhenStart Overwrite the CNI configuration when agent starts
+	OverwriteCNIConfigurationWhenStart bool
+
 	// EnableHealthDatapath enables IPIP health probes data path
 	EnableHealthDatapath bool
 
@@ -755,6 +766,11 @@ type DaemonConfig struct {
 	ClusterID string
 	// only use for vpc-eni mode
 	ENI *bceapi.ENISpec
+
+	// EnableBandwidthManager enables bandwidth manager
+	EnableBandwidthManager   bool
+	EnableEgressPriority     bool
+	EnableEgressPriorityDSCP bool
 }
 
 var (
@@ -1131,7 +1147,11 @@ func (c *DaemonConfig) Populate() {
 	c.TracePayloadlen = viper.GetInt(TracePayloadlen)
 	c.Version = viper.GetString(Version)
 	c.WriteCNIConfigurationWhenReady = viper.GetString(WriteCNIConfigurationWhenReady)
+	c.OverwriteCNIConfigurationWhenStart = viper.GetBool(OverwriteCNIConfigurationWhenStart)
 	c.CRDWaitTimeout = viper.GetDuration(CRDWaitTimeout)
+	c.EnableBandwidthManager = viper.GetBool(EnableBandwidthManager)
+	c.EnableEgressPriority = viper.GetBool(EnableEgressPriority)
+	c.EnableEgressPriorityDSCP = viper.GetBool(EnableEgressPriorityDSCP)
 
 	// for cce
 	c.CCEEndpointGC = viper.GetDuration(CCEEndpointGCInterval)

@@ -44,6 +44,8 @@ type Client struct {
 type ClientService interface {
 	GetEndpointExtpluginStatus(params *GetEndpointExtpluginStatusParams) (*GetEndpointExtpluginStatusOK, error)
 
+	PutEndpointProbe(params *PutEndpointProbeParams) (*PutEndpointProbeCreated, error)
+
 	SetTransport(transport runtime.ClientTransport)
 }
 
@@ -78,6 +80,40 @@ func (a *Client) GetEndpointExtpluginStatus(params *GetEndpointExtpluginStatusPa
 	// unexpected success response
 	// safeguard: normally, absent a default response, unknown success responses return an error above: so this is a codegen issue
 	msg := fmt.Sprintf("unexpected success response for GetEndpointExtpluginStatus: API contract not enforced by server. Client expected to get an error, but got: %T", result)
+	panic(msg)
+}
+
+/*
+PutEndpointProbe creates or update endpint probe
+*/
+func (a *Client) PutEndpointProbe(params *PutEndpointProbeParams) (*PutEndpointProbeCreated, error) {
+	// TODO: Validate the params before sending
+	if params == nil {
+		params = NewPutEndpointProbeParams()
+	}
+
+	result, err := a.transport.Submit(&runtime.ClientOperation{
+		ID:                 "PutEndpointProbe",
+		Method:             "PUT",
+		PathPattern:        "/endpoint/probe",
+		ProducesMediaTypes: []string{"application/json"},
+		ConsumesMediaTypes: []string{"application/json"},
+		Schemes:            []string{"http"},
+		Params:             params,
+		Reader:             &PutEndpointProbeReader{formats: a.formats},
+		Context:            params.Context,
+		Client:             params.HTTPClient,
+	})
+	if err != nil {
+		return nil, err
+	}
+	success, ok := result.(*PutEndpointProbeCreated)
+	if ok {
+		return success, nil
+	}
+	// unexpected success response
+	// safeguard: normally, absent a default response, unknown success responses return an error above: so this is a codegen issue
+	msg := fmt.Sprintf("unexpected success response for PutEndpointProbe: API contract not enforced by server. Client expected to get an error, but got: %T", result)
 	panic(msg)
 }
 

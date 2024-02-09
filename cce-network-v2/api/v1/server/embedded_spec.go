@@ -78,6 +78,46 @@ func init() {
         }
       }
     },
+    "/endpoint/probe": {
+      "put": {
+        "tags": [
+          "endpoint"
+        ],
+        "summary": "create or update endpint probe",
+        "parameters": [
+          {
+            "$ref": "#/parameters/ipam-owner"
+          },
+          {
+            "$ref": "#/parameters/ipam-containerid"
+          },
+          {
+            "$ref": "#/parameters/ipam-netns"
+          },
+          {
+            "$ref": "#/parameters/ipam-ifname"
+          },
+          {
+            "$ref": "#/parameters/cni-driver"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "schema": {
+              "$ref": "#/definitions/EndpointProbeResponse"
+            }
+          },
+          "500": {
+            "description": "update endpoint failed. Details in message.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          }
+        }
+      }
+    },
     "/eni": {
       "post": {
         "tags": [
@@ -386,6 +426,29 @@ func init() {
         }
       }
     },
+    "BandwidthOption": {
+      "description": "BandwidthOption is the bandwidth option of network\n+k8s:deepcopy-gen=true\n",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "type": "integer",
+          "x-omitempty": true
+        },
+        "ingress": {
+          "type": "integer",
+          "x-omitempty": true
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "edt",
+            "tc",
+            ""
+          ],
+          "x-omitempty": true
+        }
+      }
+    },
     "ControllerStatus": {
       "description": "Status of a controller\n\n+k8s:deepcopy-gen=true",
       "type": "object",
@@ -538,6 +601,10 @@ func init() {
       "description": "Unique identifiers for this endpoint from outside CCE\n\n+deepequal-gen=true",
       "type": "object",
       "properties": {
+        "cnidriver": {
+          "description": "device driver name",
+          "type": "string"
+        },
         "container-id": {
           "description": "ID assigned by container runtime",
           "type": "string"
@@ -569,6 +636,23 @@ func init() {
         "pod-name": {
           "description": "K8s pod for this endpoint(Deprecated, use K8sPodName and K8sNamespace instead)",
           "type": "string"
+        }
+      }
+    },
+    "EndpointProbeResponse": {
+      "description": "EndpointProbeResponse is the response of probe endpoint\n",
+      "type": "object",
+      "properties": {
+        "bandWidth": {
+          "x-omitempty": true,
+          "$ref": "#/definitions/BandwidthOption"
+        },
+        "featureGates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExtFeatureData"
+          },
+          "x-omitempty": true
         }
       }
     },
@@ -828,6 +912,11 @@ func init() {
       "name": "cidr",
       "in": "query"
     },
+    "cni-driver": {
+      "type": "string",
+      "name": "cni-driver",
+      "in": "query"
+    },
     "eni-spec": {
       "description": "Expectations when applying for ENI",
       "name": "eni",
@@ -948,6 +1037,59 @@ func init() {
           },
           "500": {
             "description": "failed to get external plugin status. Details in message.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          }
+        }
+      }
+    },
+    "/endpoint/probe": {
+      "put": {
+        "tags": [
+          "endpoint"
+        ],
+        "summary": "create or update endpint probe",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "owner",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "container id provider by cni",
+            "name": "containerID",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "netns provider by cni",
+            "name": "netns",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "ifname provider by cni",
+            "name": "ifname",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "name": "cni-driver",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "schema": {
+              "$ref": "#/definitions/EndpointProbeResponse"
+            }
+          },
+          "500": {
+            "description": "update endpoint failed. Details in message.",
             "schema": {
               "$ref": "#/definitions/Error"
             },
@@ -1340,6 +1482,29 @@ func init() {
         }
       }
     },
+    "BandwidthOption": {
+      "description": "BandwidthOption is the bandwidth option of network\n+k8s:deepcopy-gen=true\n",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "type": "integer",
+          "x-omitempty": true
+        },
+        "ingress": {
+          "type": "integer",
+          "x-omitempty": true
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "edt",
+            "tc",
+            ""
+          ],
+          "x-omitempty": true
+        }
+      }
+    },
     "ControllerStatus": {
       "description": "Status of a controller\n\n+k8s:deepcopy-gen=true",
       "type": "object",
@@ -1544,6 +1709,10 @@ func init() {
       "description": "Unique identifiers for this endpoint from outside CCE\n\n+deepequal-gen=true",
       "type": "object",
       "properties": {
+        "cnidriver": {
+          "description": "device driver name",
+          "type": "string"
+        },
         "container-id": {
           "description": "ID assigned by container runtime",
           "type": "string"
@@ -1575,6 +1744,23 @@ func init() {
         "pod-name": {
           "description": "K8s pod for this endpoint(Deprecated, use K8sPodName and K8sNamespace instead)",
           "type": "string"
+        }
+      }
+    },
+    "EndpointProbeResponse": {
+      "description": "EndpointProbeResponse is the response of probe endpoint\n",
+      "type": "object",
+      "properties": {
+        "bandWidth": {
+          "x-omitempty": true,
+          "$ref": "#/definitions/BandwidthOption"
+        },
+        "featureGates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExtFeatureData"
+          },
+          "x-omitempty": true
         }
       }
     },
@@ -1832,6 +2018,11 @@ func init() {
       "type": "string",
       "description": "A CIDR range of IPs",
       "name": "cidr",
+      "in": "query"
+    },
+    "cni-driver": {
+      "type": "string",
+      "name": "cni-driver",
       "in": "query"
     },
     "eni-spec": {

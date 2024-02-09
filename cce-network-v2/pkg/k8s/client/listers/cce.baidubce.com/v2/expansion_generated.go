@@ -25,13 +25,13 @@ type CCEEndpointListerExpansion interface{}
 // CCEEndpointNamespaceLister.
 type CCEEndpointNamespaceListerExpansion interface{}
 
-// NetResourceSetListerExpansion allows custom methods to be added to
-// NetResourceSetLister.
-type NetResourceSetListerExpansion interface{}
-
 // ENIListerExpansion allows custom methods to be added to
 // ENILister.
 type ENIListerExpansion interface{}
+
+// NetResourceSetListerExpansion allows custom methods to be added to
+// NetResourceSetLister.
+type NetResourceSetListerExpansion interface{}
 
 // PodSubnetTopologySpreadListerExpansion allows custom methods to be added to
 // PodSubnetTopologySpreadLister.

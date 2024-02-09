@@ -239,6 +239,8 @@ manifests: ## Generate K8s manifests e.g. CRD, RBAC etc.
 	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2)
 	$(CONTROLLER_GEN) rbac:roleName=cce-eni crd:crdVersions=v1 webhook paths="$(PWD)/pkg/k8s/apis/cce.baidubce.com/v2;" \
 		output:dir="$(TMPDIR)"
+	$(CONTROLLER_GEN) rbac:roleName=cce-eni crd:crdVersions=v1 webhook paths="$(PWD)/pkg/k8s/apis/cce.baidubce.com/v2alpha1;" \
+		output:dir="$(TMPDIR)"
 	$(CONTROLLER_GEN) rbac:roleName=cce-eni crd:crdVersions=v1 webhook paths="$(PWD)/pkg/k8s/apis/cce.baidubce.com/v1;" \
 		output:dir="$(TMPDIR)"	
 
@@ -264,7 +266,7 @@ generate-api: api/v1/openapi.yaml ## Generate cce-agent client, model and server
 	-$(QUIET) find api/v1/server/ -type f -name "*.go" -print | PATH="$(PWD)/tools:$(PATH)" xargs goimports -w
 
 	## custom external logic
-	mv api/v1/models/e_n_i.go api/v1/models/enigo
+	mv api/v1/models/e_n_i.go api/v1/models/eni.go
 
 generate-health-api: api/v1/health/openapi.yaml ## Generate cce-health client, model and server code from openapi spec.
 	@$(ECHO_GEN)api/v1/health/openapi.yaml
@@ -310,7 +312,7 @@ generate-k8s-api: ## Generate CCE k8s API client, deepcopy and deepequal Go sour
 	$(call generate_k8s_api_deepcopy_deepequal,$(base_package)/api,"$\
 	v1:models")
 	
-	$(call generate_k8s_api_all,$(base_package)/pkg/k8s/apis,"cce.baidubce.com:v2 cce.baidubce.com:v1")
+	$(call generate_k8s_api_all,$(base_package)/pkg/k8s/apis,"cce.baidubce.com:v2 cce.baidubce.com:v2alpha1 cce.baidubce.com:v1")
 	$(call generate_k8s_api_deepcopy_deepequal,$(base_package),"$\
 	pkg:k8s")
 	cp -rf $(PWD)/output/deepequal/$(base_package)/* $(PWD)/

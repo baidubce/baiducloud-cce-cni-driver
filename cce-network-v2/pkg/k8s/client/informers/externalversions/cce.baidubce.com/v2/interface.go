@@ -25,10 +25,10 @@ import (
 type Interface interface {
 	// CCEEndpoints returns a CCEEndpointInformer.
 	CCEEndpoints() CCEEndpointInformer
-	// NetResourceSets returns a NetResourceSetInformer.
-	NetResourceSets() NetResourceSetInformer
 	// ENIs returns a ENIInformer.
 	ENIs() ENIInformer
+	// NetResourceSets returns a NetResourceSetInformer.
+	NetResourceSets() NetResourceSetInformer
 	// PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.
 	PodSubnetTopologySpreads() PodSubnetTopologySpreadInformer
 }
@@ -49,14 +49,14 @@ func (v *version) CCEEndpoints() CCEEndpointInformer {
 	return &cCEEndpointInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// NetResourceSets returns a NetResourceSetInformer.
-func (v *version) NetResourceSets() NetResourceSetInformer {
-	return &netResourceSetInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
-}
-
 // ENIs returns a ENIInformer.
 func (v *version) ENIs() ENIInformer {
 	return &eNIInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// NetResourceSets returns a NetResourceSetInformer.
+func (v *version) NetResourceSets() NetResourceSetInformer {
+	return &netResourceSetInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.

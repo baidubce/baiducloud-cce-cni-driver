@@ -140,6 +140,7 @@ ccedConfig:
   # cni 配置，从指定文件读取，写入到另一个路径
   read-cni-conf: ""
   write-cni-conf-when-ready: ""
+  overwrite-cni-conf: true
 
 
   # ipam 模式. privatecloudbase: 私有云底座;vpc-eni: BCE VPC ENI

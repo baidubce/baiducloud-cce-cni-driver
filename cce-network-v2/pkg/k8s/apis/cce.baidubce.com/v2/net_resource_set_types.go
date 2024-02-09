@@ -80,13 +80,13 @@ type NetResourceSet struct {
 	metav1.ObjectMeta `json:"metadata"`
 
 	// Spec defines the desired specification/configuration of the node.
-	Spec NodeSpec `json:"spec"`
+	Spec NetResourceSpec `json:"spec"`
 
 	// Status defines the realized specification/configuration and status
 	// of the node.
 	//
 	// +kubebuilder:validation:Optional
-	Status NodeStatus `json:"status,omitempty"`
+	Status NetResourceStatus `json:"status,omitempty"`
 }
 
 // NodeAddress is a node address.
@@ -98,8 +98,8 @@ type NodeAddress struct {
 	IP string `json:"ip,omitempty"`
 }
 
-// NodeSpec is the configuration specific to a node.
-type NodeSpec struct {
+// NetResourceSpec is the configuration specific to a node.
+type NetResourceSpec struct {
 	// InstanceID is the identifier of the node. This is different from the
 	// node name which is typically the FQDN of the node. The InstanceID
 	// typically refers to the identifier used by the cloud provider or
@@ -148,8 +148,8 @@ type EncryptionSpec struct {
 	Key int `json:"key,omitempty"`
 }
 
-// NodeStatus is the status of a node.
-type NodeStatus struct {
+// NetResourceStatus is the status of a node.
+type NetResourceStatus struct {
 
 	// IPAM is the IPAM status of the node.
 	//
@@ -173,6 +173,24 @@ type SimpleENIStatus struct {
 	ID        string `json:"id"`
 	VPCStatus string `json:"vpcStatus"`
 	CCEStatus string `json:"cceStatus"`
+
+	// AvailableIPNum how many more IPs can be applied for on eni
+	// This field only considers the ip quota of eni
+	AvailableIPNum int `json:"availableIPNum,omitempty"`
+
+	// AllocatedIPNum Number of IPs assigned to eni
+	AllocatedIPNum int `json:"allocatedIPNum,omitempty"`
+
+	// AllocatedCrossSubnetIPNum number of IPs assigned to eni across subnet
+	AllocatedCrossSubnetIPNum int `json:"allocatedCrossSubnetIPNum,omitempty"`
+
+	// SubnetID the subnet id of eni primary ip
+	SubnetID string `json:"subnetId,omitempty"`
+
+	// IsMoreAvailableIPInSubnet Are there more available IPs in the subnet
+	IsMoreAvailableIPInSubnet bool `json:"isMoreAvailableIPInSubnet,omitempty"`
+
+	LastAllocatedIPError *StatusChange `json:"lastAllocatedIPError,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -185,12 +203,4 @@ type NetResourceSetList struct {
 
 	// Items is a list of NetResourceSet
 	Items []NetResourceSet `json:"items"`
-}
-
-// InstanceID returns the InstanceID of a NetResourceSet.
-func (n *NetResourceSet) InstanceID() (instanceID string) {
-	if n != nil {
-		instanceID = n.Spec.InstanceID
-	}
-	return
 }

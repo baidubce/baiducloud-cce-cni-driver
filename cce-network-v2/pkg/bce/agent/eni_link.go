@@ -13,6 +13,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/sysctl"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -46,11 +47,13 @@ type eniLink struct {
 
 	ipv4Gateway string
 	ipv6Gateway string
+
+	release *os.OSRelease
 }
 
 // newENILink create a new link config from ccev2 ENI mac
 // this method will rename link to cce-eni-{index}
-func newENILink(eni *ccev2.ENI) (*eniLink, error) {
+func newENILink(eni *ccev2.ENI, release *os.OSRelease) (*eniLink, error) {
 	var ec = &eniLink{}
 
 	ec.macAddr = eni.Spec.ENI.MacAddress
@@ -70,6 +73,7 @@ func newENILink(eni *ccev2.ENI) (*eniLink, error) {
 		"linkIndex": ec.linkIndex,
 		"linkName":  ec.linkName,
 	})
+	ec.release = release
 	return ec, nil
 }
 
@@ -103,7 +107,7 @@ func (ec *eniLink) rename(isPrimary bool) error {
 			}
 		}
 
-		err = ec.generateIfcfg(eniName)
+		err = ec.release.HostOS().DisableDHCPv6(eniName)
 		if err != nil {
 			return err
 		}

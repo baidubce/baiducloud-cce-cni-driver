@@ -1,5 +1,40 @@
-# 2.0
+# 2.0 
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
+
+### 2.9 (2023/11/10)
+新特性功能：
+1. 新的 CRD: 支持集群级 psts ClusterPodSubnetTopologyStrategy (cpsts)，单个cpsts 可以控制作用于整个集群的 psts 策略。
+2. CRD 字段变更: NetworkResourceSet 资源池增加了节点上 ENI 的异常状态，报错单机 IP 容量状态，整机 ENI 网卡状态。
+3. 新特性: 支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
+4. 新特性：支持 pod 级 Qos
+
+### 2.9.0
+1. [optimize] 申请 IP 失败时,支持给出失败的原因.包括:
+    a. 没有可用子网
+    b. IP 地址池已满
+    c. 节点 ENI 池已满
+    d. 子网没有可用 IP
+    e. IP 缓存池超限
+2. [Feature] 新增 CRD: ClusterPodSubnetTopologyStrategy (cpsts), 用于控制集群级别的 psts 策略。
+    a. 当前 crd 版本 cce.baidu.com/v2beta1
+    b. cpsts 支持为所有符合namespaceSelector的 namespace 配置 psts 策略，并作为自身的子对象管理生命周期和状态。
+3. [Feature]支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
+4. [Feature]支持 pod 级别的带宽控制，通过在 Pod 上设置 annotation 控制 Pod 级别的带宽。
+    a. `kubernetes.io/ingress-bandwidth: 10M` 配置 Pod 的 ingress 带宽为 10M
+    b. `kubernetes.io/egress-bandwidth: 10M` 配置 Pod 的 egress 带宽为 10M
+5. [Feature]支持 pod 级别的 QoS，通过在 Pod 上设置 annotation 控制 Pod 的 QoS。
+    a. `cce.baidubce.com/egress-priority: Guaranteed` 配置 Pod 的流量为 Guaranteed （最低延迟）优先级
+    b. `cce.baidubce.com/egress-priority: Burstable` 配置 Pod 的流量为 Burstable （高优先级）
+    c. `cce.baidubce.com/egress-priority: BestEffort` 配置 Pod 的 egress 流量为低优级
+6. [optimize] 修改 --bce-customer-max-eni 及 --bce-customer-max-ip 参数的逻辑，当参数非 0 时，强制生效
+7. [BUG] 修复独占eni模式下容器网络命名空间挂载类型为tmpfs 时，无法读取netns的问题
+8. [Feature] 增加override-cni-config开关，默认在 agent 启动时强制覆盖 cni 配置文件
+9. [Feature] psts 复用 IP 时增加亲和性调度功能，保证同名 Pod 重复调度时，可以调度到同一可用区服用子网。
+10. [optimize] 优化并发创建 ENI 逻辑，避免在业务无需过多 IP 时并发创建过多 ENI
+11. [optimize] 优化 ENI 命名长度，限制为 64 字符
+12. [BUG] 修复VPC-ENI 并发申请和释放IP 时，Pod 可能申请到过期的 IP 地址的问题
+
+
 
 ### 2.8 (2023/08/07)
 #### 2.8.8 [20231227]

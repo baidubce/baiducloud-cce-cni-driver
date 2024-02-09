@@ -466,6 +466,10 @@ func onOperatorStartLeading(ctx context.Context) {
 		if err != nil {
 			log.WithError(err).Fatal("Unable to setup PSTS watcher")
 		}
+		err = operatorWatchers.StartSynchronizingCPSTS(ctx)
+		if err != nil {
+			log.WithError(err).Fatal("Unable to setup CPSTS watcher")
+		}
 	}
 
 	log.Info("Initialization complete")

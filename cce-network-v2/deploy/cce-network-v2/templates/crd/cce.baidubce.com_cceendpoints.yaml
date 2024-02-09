@@ -73,6 +73,9 @@ spec:
                   the endpoint apart from the pod name. This includes container runtime
                   IDs.
                 properties:
+                  cnidriver:
+                    description: device driver name
+                    type: string
                   container-id:
                     description: ID assigned by container runtime
                     type: string
@@ -103,6 +106,29 @@ spec:
               network:
                 description: EndpointNetworkSpec Network config for CCE Endpoint
                 properties:
+                  bindwidth:
+                    description: BindwidthOption is the option of bindwidth
+                    properties:
+                      egress:
+                        format: int64
+                        type: integer
+                      ingress:
+                        format: int64
+                        type: integer
+                      mode:
+                        type: string
+                    type: object
+                  egressPriority:
+                    properties:
+                      bands:
+                        format: int32
+                        type: integer
+                      dscp:
+                        format: int32
+                        type: integer
+                      priority:
+                        type: string
+                    type: object
                   ipAllocation:
                     properties:
                       node:
@@ -239,6 +265,9 @@ spec:
                   the endpoint apart from the pod name. This includes container runtime
                   IDs.
                 properties:
+                  cnidriver:
+                    description: device driver name
+                    type: string
                   container-id:
                     description: ID assigned by container runtime
                     type: string

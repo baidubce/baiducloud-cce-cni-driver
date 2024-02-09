@@ -22,6 +22,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -207,6 +208,16 @@ func (n *NodeDiscovery) fillLocalNode() {
 }
 
 func (n *NodeDiscovery) updateLocalNode() {
+	// we should init the os distribution before we do anything
+	release, err := os.NewOSDistribution()
+	if err != nil {
+		log.WithError(err).Fatal("Unable to detect OS distribution")
+	}
+	err = release.HostOS().DisableMacPersistant()
+	if err != nil {
+		log.WithError(err).Fatal("Unable to disable mac persist")
+	}
+
 	if k8s.IsEnabled() {
 		// CRD IPAM endpoint restoration depends on the completion of this
 		// to avoid custom resource update conflicts.

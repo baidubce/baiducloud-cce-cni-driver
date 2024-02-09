@@ -23,6 +23,7 @@ import (
 
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2"
+	ccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2alpha1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -31,6 +32,7 @@ import (
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
 	CceV2() ccev2.CceV2Interface
+	CceV2alpha1() ccev2alpha1.CceV2alpha1Interface
 	CceV1() ccev1.CceV1Interface
 }
 
@@ -38,13 +40,19 @@ type Interface interface {
 // version included in a Clientset.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	cceV2 *ccev2.CceV2Client
-	cceV1 *ccev1.CceV1Client
+	cceV2       *ccev2.CceV2Client
+	cceV2alpha1 *ccev2alpha1.CceV2alpha1Client
+	cceV1       *ccev1.CceV1Client
 }
 
 // CceV2 retrieves the CceV2Client
 func (c *Clientset) CceV2() ccev2.CceV2Interface {
 	return c.cceV2
+}
+
+// CceV2alpha1 retrieves the CceV2alpha1Client
+func (c *Clientset) CceV2alpha1() ccev2alpha1.CceV2alpha1Interface {
+	return c.cceV2alpha1
 }
 
 // CceV1 retrieves the CceV1Client
@@ -100,6 +108,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 	if err != nil {
 		return nil, err
 	}
+	cs.cceV2alpha1, err = ccev2alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 	cs.cceV1, err = ccev1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
@@ -126,6 +138,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
 	cs.cceV2 = ccev2.New(c)
+	cs.cceV2alpha1 = ccev2alpha1.New(c)
 	cs.cceV1 = ccev1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)

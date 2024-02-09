@@ -15,42 +15,83 @@
 
 package v2
 
-var (
-	// ErrEmptyCNP is an error representing a CNP that is empty, which means it is
-	// missing both a `spec` and `specs` (both are nil).
-	ErrEmptyCNP = NewErrParse("Invalid CCENetworkPolicy spec(s): empty policy")
+import (
+	"fmt"
 
-	// ErrEmptyCCNP is an error representing a CCNP that is empty, which means it is
-	// missing both a `spec` and `specs` (both are nil).
-	ErrEmptyCCNP = NewErrParse("Invalid CCEClusterwideNetworkPolicy spec(s): empty policy")
-
-	// ParsingErr is for comparison when checking error types.
-	ParsingErr = NewErrParse("")
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
-// ErrParse is an error to describe where policy fails to parse due any invalid
-// rule.
-//
-// +k8s:deepcopy-gen=false
-// +deepequal-gen=false
-type ErrParse struct {
-	msg string
+const (
+	// errors for eni
+	ErrorCodeENIIPCapacityExceed = "ENIIPCapacityExceed"
+	ErrorCodeENISubnetNoMoreIP   = "SubnetNoMoreIP"
+	ErrorCodeWaitNewENIInuse     = "WaitCreateMoreENI"
+	ErrorCodeENICapacityExceed   = "ENICapacityExceed"
+	ErrorCodeIPPoolExhausted     = "IPPoolExhausted"
+	ErrorCodeNoMoreIP            = "NoMoreIP"
+	ErrorCodeNoAvailableSubnet   = "NoAvailableSubnet"
+
+	// errors for open api
+	ErrorCodeOpenAPIError = "OpenAPIError"
+)
+
+type CodeError struct {
+	Code string `json:"code,omitempty"`
+	Msg  string `json:"msg,omitempty"`
 }
 
-// NewErrParse returns a new ErrParse.
-func NewErrParse(msg string) ErrParse {
-	return ErrParse{
-		msg: msg,
+func NewCodeError(code, msg string) *CodeError {
+	return &CodeError{
+		Code: code,
+		Msg:  msg,
 	}
 }
 
-// Error returns the error message for parsing
-func (e ErrParse) Error() string {
-	return e.msg
+func (e *CodeError) Error() string {
+	return fmt.Sprintf("code: %s, msg: %s", e.Code, e.Msg)
 }
 
-// Is returns true if the given error is the type of 'ErrParse'.
-func (_ ErrParse) Is(e error) bool {
-	_, ok := e.(ErrParse)
-	return ok
+var _ error = &CodeError{}
+
+// ErrorList holds a set of Errors.  It is plausible that we might one day have
+// non-field errors in this same umbrella package, but for now we don't, so
+// we can keep it simple and leave ErrorList here.
+type CodeErrorList []*CodeError
+
+// ToAggregate converts the ErrorList into an errors.Aggregate.
+func (list CodeErrorList) ToAggregate() utilerrors.Aggregate {
+	if len(list) == 0 {
+		return nil
+	}
+	errs := make([]error, 0, len(list))
+	errorMsgs := sets.NewString()
+	for _, err := range list {
+		msg := fmt.Sprintf("%v", err)
+		if errorMsgs.Has(msg) {
+			continue
+		}
+		errorMsgs.Insert(msg)
+		errs = append(errs, err)
+	}
+	return utilerrors.NewAggregate(errs)
+}
+
+func fromAggregate(agg utilerrors.Aggregate) CodeErrorList {
+	errs := agg.Errors()
+	list := make(CodeErrorList, len(errs))
+	for i := range errs {
+		list[i] = errs[i].(*CodeError)
+	}
+	return list
+}
+
+// Filter removes items from the ErrorList that match the provided fns.
+func (list CodeErrorList) Filter(fns ...utilerrors.Matcher) CodeErrorList {
+	err := utilerrors.FilterOut(list.ToAggregate(), fns...)
+	if err == nil {
+		return nil
+	}
+	// FilterOut takes an Aggregate and returns an Aggregate
+	return fromAggregate(err.(utilerrors.Aggregate))
 }

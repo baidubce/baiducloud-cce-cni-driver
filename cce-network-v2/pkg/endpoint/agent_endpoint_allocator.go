@@ -181,11 +181,11 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		psts *ccev2.PodSubnetTopologySpread
 		pod  *corev1.Pod
 	)
-	logEntry.Debug("start cni add")
+	logEntry.Debug("start cni ADD")
 
 	defer func() {
 		if err != nil {
-			logEntry.WithError(err).Error("cni add error")
+			logEntry.WithError(err).Error("cni ADD error")
 			return
 		}
 		cancelFun()
@@ -195,7 +195,7 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		if ipv6Result != nil {
 			logEntry = logEntry.WithField("ipv6", ipv6Result.IP.String())
 		}
-		logEntry.Infof("cni add success")
+		logEntry.Infof("cni ADD success")
 	}()
 
 	pod, err = e.podClient.Get(namespace, name)

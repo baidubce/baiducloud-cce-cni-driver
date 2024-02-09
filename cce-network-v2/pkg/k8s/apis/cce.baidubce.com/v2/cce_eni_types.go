@@ -133,6 +133,14 @@ type ENIStatus struct {
 
 // ENIStatusChange history of ENIStatus. This is used to track changes
 type ENIStatusChange struct {
+	StatusChange `json:",inline"`
+
+	// state
+	CCEENIStatus CCEENIStatus `json:"CCEStatus,omitempty"`
+	VPCStatus    VPCENIStatus `json:"VPCStatus,omitempty"`
+}
+
+type StatusChange struct {
 	// +kubebuilder:validation:Enum=ok;failed
 
 	// Code indicate type of status change
@@ -141,10 +149,6 @@ type ENIStatusChange struct {
 
 	// Status message
 	Message string `json:"message,omitempty"`
-
-	// state
-	CCEENIStatus CCEENIStatus `json:"CCEStatus,omitempty"`
-	VPCStatus    VPCENIStatus `json:"VPCStatus,omitempty"`
 
 	Time metav1.Time `json:"time,omitempty"`
 }

@@ -11,6 +11,8 @@ Profiles:
       environment:
         image: DECK_CENTOS6U3_K3
         resourceType: SMALL
+        tools:
+          - go: 1.20
       build:
         command: make build
       check:

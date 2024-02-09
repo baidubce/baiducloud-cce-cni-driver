@@ -87,6 +87,9 @@ func NewCceAPIAPI(spec *loads.Document) *CceAPIAPI {
 		IpamPostIpamIPHandler: ipam.PostIpamIPHandlerFunc(func(params ipam.PostIpamIPParams) middleware.Responder {
 			return middleware.NotImplemented("operation ipam.PostIpamIP has not yet been implemented")
 		}),
+		EndpointPutEndpointProbeHandler: endpoint.PutEndpointProbeHandlerFunc(func(params endpoint.PutEndpointProbeParams) middleware.Responder {
+			return middleware.NotImplemented("operation endpoint.PutEndpointProbe has not yet been implemented")
+		}),
 	}
 }
 
@@ -137,6 +140,8 @@ type CceAPIAPI struct {
 	IpamPostIpamHandler ipam.PostIpamHandler
 	// IpamPostIpamIPHandler sets the operation handler for the post ipam IP operation
 	IpamPostIpamIPHandler ipam.PostIpamIPHandler
+	// EndpointPutEndpointProbeHandler sets the operation handler for the put endpoint probe operation
+	EndpointPutEndpointProbeHandler endpoint.PutEndpointProbeHandler
 	// ServeError is called when an error is received, there is a default handler
 	// but you can set your own with this
 	ServeError func(http.ResponseWriter, *http.Request, error)
@@ -236,6 +241,9 @@ func (o *CceAPIAPI) Validate() error {
 	}
 	if o.IpamPostIpamIPHandler == nil {
 		unregistered = append(unregistered, "ipam.PostIpamIPHandler")
+	}
+	if o.EndpointPutEndpointProbeHandler == nil {
+		unregistered = append(unregistered, "endpoint.PutEndpointProbeHandler")
 	}
 
 	if len(unregistered) > 0 {
@@ -357,6 +365,10 @@ func (o *CceAPIAPI) initHandlerCache() {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}
 	o.handlers["POST"]["/ipam/{ip}"] = ipam.NewPostIpamIP(o.context, o.IpamPostIpamIPHandler)
+	if o.handlers["PUT"] == nil {
+		o.handlers["PUT"] = make(map[string]http.Handler)
+	}
+	o.handlers["PUT"]["/endpoint/probe"] = endpoint.NewPutEndpointProbe(o.context, o.EndpointPutEndpointProbeHandler)
 }
 
 // Serve creates a http handler to serve the API over HTTP

@@ -268,9 +268,45 @@ spec:
                 additionalProperties:
                   description: SimpleENIStatus is the simple status of a ENI.
                   properties:
+                    allocatedCrossSubnetIPNum:
+                      description: AllocatedCrossSubnetIPNum number of IPs assigned
+                        to eni across subnet
+                      type: integer
+                    allocatedIPNum:
+                      description: AllocatedIPNum Number of IPs assigned to eni
+                      type: integer
+                    availableIPNum:
+                      description: AvailableIPNum how many more IPs can be applied
+                        for on eni This field only considers the ip quota of eni
+                      type: integer
                     cceStatus:
                       type: string
                     id:
+                      type: string
+                    isMoreAvailableIPInSubnet:
+                      description: IsMoreAvailableIPInSubnet Are there more available
+                        IPs in the subnet
+                      type: boolean
+                    lastAllocatedIPError:
+                      properties:
+                        code:
+                          description: 'Code indicate type of status change Enum:
+                            [ok failed]'
+                          enum:
+                          - ok
+                          - failed
+                          type: string
+                        message:
+                          description: Status message
+                          type: string
+                        time:
+                          format: date-time
+                          type: string
+                      required:
+                      - code
+                      type: object
+                    subnetId:
+                      description: SubnetID the subnet id of eni primary ip
                       type: string
                     vpcStatus:
                       type: string
@@ -285,6 +321,12 @@ spec:
               ipam:
                 description: IPAM is the IPAM status of the node.
                 properties:
+                  available-subnet-ids:
+                    description: AvailableSubnets lists all subnets which are available
+                      for allocation
+                    items:
+                      type: string
+                    type: array
                   crossSubnetUsed:
                     additionalProperties:
                       description: AllocationIP is an IP which is available for allocation,

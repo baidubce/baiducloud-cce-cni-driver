@@ -48,9 +48,10 @@ func NewEndpointTemplate(containerID, netnsPath string, pod *corev1.Pod) *ccev2.
 	name := pod.Name
 	newEP := &ccev2.CCEEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-			Labels:    pod.Labels,
+			Namespace:   namespace,
+			Name:        name,
+			Labels:      pod.Labels,
+			Annotations: pod.Annotations,
 		},
 		Spec: ccev2.EndpointSpec{
 			ExternalIdentifiers: &models.EndpointIdentifiers{
@@ -76,6 +77,10 @@ func NewEndpointTemplate(containerID, netnsPath string, pod *corev1.Pod) *ccev2.
 		newEP.Labels = make(map[string]string)
 	}
 	newEP.Labels[k8s.LabelNodeName] = nodeTypes.GetName()
+
+	if newEP.Annotations == nil {
+		newEP.Annotations = make(map[string]string)
+	}
 	return newEP
 }
 

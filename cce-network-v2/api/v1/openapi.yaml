@@ -1,16 +1,16 @@
 ---
-swagger: '2.0'
+swagger: "2.0"
 info:
   title: Cce API
   description: CCE
   version: v1beta
 x-schemes:
-- unix
+  - unix
 basePath: "/v1"
 produces:
-- application/json
+  - application/json
 consumes:
-- application/json
+  - application/json
 paths:
   "/healthz":
     get:
@@ -20,16 +20,16 @@ paths:
         components such as the local container runtime, connected datastore,
         Kubernetes integration and Hubble.
       tags:
-      - daemon
+        - daemon
       parameters:
-      - name: brief
-        description: |
-          Brief will return a brief representation of the CCE status.
-        in: header
-        required: false
-        type: boolean
+        - name: brief
+          description: |
+            Brief will return a brief representation of the CCE status.
+          in: header
+          required: false
+          type: boolean
       responses:
-        '200':
+        "200":
           description: Success
           schema:
             "$ref": "#/definitions/StatusResponse"
@@ -37,35 +37,35 @@ paths:
     get:
       summary: Retrieve CCE metrics
       tags:
-      - metrics
+        - metrics
       parameters: []
       responses:
-        '200':
+        "200":
           description: Success
           schema:
             type: array
             items:
               "$ref": "#/definitions/Metric"
-        '500':
-          description: Metrics cannot be retrieved          
+        "500":
+          description: Metrics cannot be retrieved
   "/ipam":
     post:
       summary: Allocate an IP address
       tags:
-      - ipam
+        - ipam
       parameters:
-      - "$ref": "#/parameters/ipam-family"
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-expiration"
-      - "$ref": "#/parameters/ipam-containerid"
-      - "$ref": "#/parameters/ipam-netns"
-      - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/ipam-family"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-expiration"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
       responses:
-        '201':
+        "201":
           description: Success
           schema:
             "$ref": "#/definitions/IPAMResponse"
-        '502':
+        "502":
           description: Allocation failure
           x-go-name: Failure
           schema:
@@ -74,129 +74,151 @@ paths:
     post:
       summary: Allocate an IP address
       tags:
-      - ipam
+        - ipam
       parameters:
-      - "$ref": "#/parameters/ipam-ip"
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-containerid"
-      - "$ref": "#/parameters/ipam-netns"
-      - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/ipam-ip"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
       responses:
-        '200':
+        "200":
           description: Success
-        '400':
+        "400":
           description: Invalid IP address
           x-go-name: Invalid
-        '409':
+        "409":
           description: IP already allocated
           x-go-name: Exists
-        '500':
+        "500":
           description: IP allocation failure. Details in message.
           x-go-name: Failure
           schema:
             "$ref": "#/definitions/Error"
-        '501':
+        "501":
           description: Allocation for address family disabled
           x-go-name: Disabled
     delete:
       summary: Release an allocated IP address
       tags:
-      - ipam
+        - ipam
       parameters:
-      - "$ref": "#/parameters/ipam-release-arg"
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-containerid"
-      - "$ref": "#/parameters/ipam-netns"
-      - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/ipam-release-arg"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
       responses:
-        '200':
+        "200":
           description: Success
-        '400':
+        "400":
           description: Invalid IP address
           x-go-name: Invalid
-        '404':
+        "404":
           description: IP address not found
-        '500':
+        "500":
           description: Address release failure
           x-go-name: Failure
           schema:
             "$ref": "#/definitions/Error"
-        '501':
+        "501":
           description: Allocation for address family disabled
           x-go-name: Disabled
   "/eni":
     post:
       summary: Allocate an IP address for exclusive ENI
       tags:
-      - eni
+        - eni
       parameters:
-      - "$ref": "#/parameters/eni-spec"
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-containerid"
-      - "$ref": "#/parameters/ipam-netns"
-      - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/eni-spec"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
       responses:
-        '200':
+        "200":
           description: Success
           schema:
             "$ref": "#/definitions/IPAMResponse"
-        '400':
+        "400":
           description: Invalid IP address
           x-go-name: Invalid
-        '409':
+        "409":
           description: IP already allocated
           x-go-name: Exists
-        '500':
+        "500":
           description: IP allocation failure. Details in message.
           x-go-name: Failure
           schema:
             "$ref": "#/definitions/Error"
-        '501':
+        "501":
           description: Allocation for address family disabled
           x-go-name: Disabled
     delete:
       summary: Release an allocated IP address for exclusive ENI
       tags:
-      - eni
+        - eni
       parameters:
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-containerid"
-      - "$ref": "#/parameters/ipam-netns"
-      - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
       responses:
-        '200':
+        "200":
           description: Success
-        '400':
+        "400":
           description: Invalid IP address
           x-go-name: Invalid
-        '404':
+        "404":
           description: IP address not found
-        '500':
+        "500":
           description: Address release failure
           x-go-name: Failure
           schema:
             "$ref": "#/definitions/Error"
-        '501':
+        "501":
           description: Allocation for address family disabled
           x-go-name: Disabled
   "/endpoint/extplugin/status":
     get:
       summary: get external plugin status
       tags:
-      - endpoint
+        - endpoint
       parameters:
-      - "$ref": "#/parameters/ipam-owner"
-      - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
       responses:
-        '200':
+        "200":
           description: Success
           schema:
             "$ref": "#/definitions/ExtFeatureData"
-        '500':
+        "500":
           description: failed to get external plugin status. Details in message.
           x-go-name: Failure
           schema:
-            "$ref": "#/definitions/Error"   
+            "$ref": "#/definitions/Error"
+  "/endpoint/probe":
+    put:
+      summary: create or update endpint probe
+      tags:
+        - endpoint
+      parameters:
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/ipam-ifname"
+        - "$ref": "#/parameters/cni-driver"
+      responses:
+        "201":
+          description: Success
+          schema:
+            "$ref": "#/definitions/EndpointProbeResponse"
+        "500":
+          description: update endpoint failed. Details in message.
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+
 parameters:
   pod-name:
     name: pod
@@ -223,8 +245,8 @@ parameters:
     in: query
     type: string
     enum:
-    - ipv4
-    - ipv6
+      - ipv4
+      - ipv6
   ipam-owner:
     name: owner
     in: query
@@ -269,7 +291,10 @@ parameters:
     in: body
     schema:
       "$ref": "#/definitions/ENI"
-
+  cni-driver:
+    name: cni-driver
+    in: query
+    type: string
 
 definitions:
   EndpointState:
@@ -306,14 +331,14 @@ definitions:
         description: Code indicate type of status change
         type: string
         enum:
-         - ok
-         - failed
+          - ok
+          - failed
       message:
         description: Status message
         type: string
       state:
         "$ref": "#/definitions/EndpointState"
-  
+
   IPAMResponse:
     description: IPAM configuration of an endpoint
     type: object
@@ -328,7 +353,7 @@ definitions:
       ipv6:
         "$ref": "#/definitions/IPAMAddressResponse"
       host-addressing:
-        "$ref": "#/definitions/NodeAddressing"      
+        "$ref": "#/definitions/NodeAddressing"
   IPAMAddressResponse:
     description: IPAM configuration of an individual address family
     type: object
@@ -397,7 +422,7 @@ definitions:
         additionalProperties:
           description: Timestamp when the probe was started
           type: string
-          format: date-time  
+          format: date-time
       client-id:
         description: |
           When supported by the API, this client ID should be used by the
@@ -415,10 +440,10 @@ definitions:
         type: string
         description: State the component is in
         enum:
-        - Ok
-        - Warning
-        - Failure
-        - Disabled
+          - Ok
+          - Warning
+          - Failure
+          - Disabled
       msg:
         type: string
         description: Human readable status/error/warning message
@@ -534,7 +559,7 @@ definitions:
             type: integer
           last-failure-msg:
             description: Error message of last failed run
-            type: string      
+            type: string
   ENI:
     description: |
       eni definition
@@ -550,14 +575,14 @@ definitions:
         type: string
       zoneName:
         description: ZoneName zone name of eni instance
-        type: string 
+        type: string
       instanceID:
         description: |
           InstanceID insance ID of node resource, like ID of BCC.
           This field represents the node name that ENI expects to attached.
           Example:
           i-wWANcEYK
-        type: string 
+        type: string
       vpcID:
         description: |
           VPCID vpc id of eni instance
@@ -565,9 +590,9 @@ definitions:
           be different from that of the cluster
           Example:
           vpc-8nh1ks7a55a2
-        type: string 
+        type: string
       description:
-        type: string   
+        type: string
       macAddress:
         description: |
           MacAddress mac address of eni instance
@@ -575,7 +600,7 @@ definitions:
           VM through this mac address
           Example:
           fa:26:00:0d:51:c7
-        type: string 
+        type: string
       subnetID:
         description: |
           SubnetID subnet id of eni instance
@@ -603,7 +628,7 @@ definitions:
         type: array
         x-omitempty: true
         items:
-          "$ref": "#/definitions/PrivateIP"    
+          "$ref": "#/definitions/PrivateIP"
       ipv6PrivateIPSet:
         type: array
         x-omitempty: true
@@ -659,12 +684,15 @@ definitions:
         type: string
       k8s-object-id:
         description: K8s object id to indentifier a unique object
-        type: string  
+        type: string
       external-identifier:
         description: External network ID, such as the ID of the ENI occupied by the container
         type: string
       netns:
         description: netns use by CNI
+        type: string
+      cnidriver:
+        description: device driver name
         type: string
   ExtFeatureData:
     description: ExtFeatureData is a map
@@ -674,5 +702,35 @@ definitions:
       additionalProperties:
         type: string
 
-    
-
+  EndpointProbeResponse:
+    description: |
+      EndpointProbeResponse is the response of probe endpoint
+    type: object
+    properties:
+      bandWidth:
+       "$ref": "#/definitions/BandwidthOption"
+       x-omitempty: true
+      featureGates:
+        type: array
+        x-omitempty: true
+        items:
+          "$ref": "#/definitions/ExtFeatureData"
+  BandwidthOption:
+    description: |
+      BandwidthOption is the bandwidth option of network
+      +k8s:deepcopy-gen=true
+    type: object
+    properties:
+      mode: 
+        x-omitempty: true
+        type: string
+        enum:
+        - edt
+        - tc
+        - ""
+      ingress:
+        type: integer
+        x-omitempty: true
+      egress:
+        type: integer
+        x-omitempty: true

@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: network-debug
+  namespace: kube-system
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: network-debug
+  template:
+    metadata:
+      labels:
+        app: network-debug
+    spec:
+      containers:
+      - args:
+        - "500000"
+        command:
+        - sleep
+        image: registry.baidubce.com/cce-plugin-dev/bpftrace:v0.17.0
+        imagePullPolicy: IfNotPresent
+        name: debug
+        resources: {}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /sys
+          name: sys
+          readOnly: true
+        - mountPath: /usr-host
+          name: usr-host
+        - mountPath: /usr/src
+          name: usr-src  
+        - mountPath: /lib/modules
+          name: modules-host
+          readOnly: true  
+      volumes:
+      - hostPath:
+          path: /usr
+          type: ""
+        name: usr-host
+      - hostPath:
+          path: /usr/src
+          type: ""
+        name: usr-src
+      - hostPath:
+          path: /lib/modules
+          type: ""
+        name: modules-host
+      - hostPath:
+          path: /sys
+          type: ""
+        name: sys    
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: true
+      hostIPC: true
+      hostNetwork: true
+      hostPID: true
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists  
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #         - matchExpressions:
+      #           - operator: In
+      #             key: "kubernetes.io/hostname"
+      #             values:
+      #               - 10.51.16.19
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 10
+    type: RollingUpdate

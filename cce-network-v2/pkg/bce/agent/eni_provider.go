@@ -6,12 +6,14 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/qos"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/enim/eniprovider"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/health/plugin"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,6 +27,9 @@ type eniInitFactory struct {
 	fullENIs  map[string]*ccev2.ENI
 
 	eniClient *watchers.ENIClient
+
+	// the host os release
+	release *os.OSRelease
 }
 
 // RegisterENIInitFatory create a eniInitFactory and register it to ENI event handler
@@ -34,9 +39,13 @@ func RegisterENIInitFatory(watcher *watchers.K8sWatcher) {
 		fullENIs:  make(map[string]*ccev2.ENI),
 		eniClient: watcher.NewENIClient(),
 	}
+	eniHandler.release, _ = os.NewOSDistribution()
 
 	watcher.RegisterENISubscriber(eniHandler)
 	plugin.RegisterPlugin("eni-init-factory", eniHandler)
+
+	qos.InitEgressPriorityManager()
+	qos.GlobalManager.Start(watcher.NewCCEEndpointClient())
 }
 
 func (eh *eniInitFactory) Check() error {
@@ -62,7 +71,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	isBCCSecondary := isBCC && !isPrimary
 
 	if resource.Status.VPCStatus == ccev2.VPCENIStatusInuse || !isBCC {
-		eniLink, err := newENILink(resource)
+		eniLink, err := newENILink(resource, eh.release)
 		if err != nil {
 			scopedLog.WithError(err).Error("Get eniLink falied")
 			return err
@@ -127,6 +136,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 			}
 		}
 		eh.localENIs[resource.Spec.ENI.ID] = resource
+		qos.GlobalManager.ENIUpdateEventHandler(resource)
 	}
 
 	return err

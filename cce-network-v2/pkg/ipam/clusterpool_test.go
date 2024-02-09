@@ -659,7 +659,7 @@ func TestNewCRDWatcher(t *testing.T) {
 			// Test that the watcher updates the NetResourceSet CRD.
 			c := newCRDWatcher(fakeConfig, fakeK8sNetResourceSetAPI, fakeK8sEventRegister, fakeK8sNetResourceSetAPI)
 			c.localNetResourceUpdated(&ccev2.NetResourceSet{
-				Spec: ccev2.NodeSpec{
+				Spec: ccev2.NetResourceSpec{
 					IPAM: types.IPAMSpec{
 						PodCIDRs: []string{
 							tc.podCIDR1,
@@ -689,7 +689,7 @@ func TestNewCRDWatcher(t *testing.T) {
 
 			// Allocate the second pod CIDR.
 			c.localNetResourceUpdated(&ccev2.NetResourceSet{
-				Spec: ccev2.NodeSpec{
+				Spec: ccev2.NetResourceSpec{
 					IPAM: types.IPAMSpec{
 						PodCIDRs: []string{
 							tc.podCIDR1,
@@ -750,7 +750,7 @@ func TestNewCRDWatcher(t *testing.T) {
 
 			// Deallocate the second pod CIDR.
 			c.localNetResourceUpdated(&ccev2.NetResourceSet{
-				Spec: ccev2.NodeSpec{
+				Spec: ccev2.NetResourceSpec{
 					IPAM: types.IPAMSpec{
 						PodCIDRs: []string{
 							tc.podCIDR1,
@@ -793,7 +793,7 @@ func TestNewCRDWatcher_restoreFinished(t *testing.T) {
 
 	c := newCRDWatcher(fakeConfig, fakeK8sEventRegister, fakeK8sEventRegister, fakeK8sNetResourceSetAPI)
 	c.localNetResourceUpdated(&ccev2.NetResourceSet{
-		Spec: ccev2.NodeSpec{
+		Spec: ccev2.NetResourceSpec{
 			IPAM: types.IPAMSpec{
 				PodCIDRs: []string{
 					"192.168.0.0/24",

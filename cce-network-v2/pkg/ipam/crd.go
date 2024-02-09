@@ -397,7 +397,6 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 		} else {
 			n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMReadyForRelease
 		}
-		
 		n.mutex.Unlock()
 		allocator.mutex.RUnlock()
 	}
@@ -537,8 +536,7 @@ func (n *nodeStore) allocateNext(allocated ipamTypes.AllocationMap, family Famil
 			return parsedIP, &ipInfo, nil
 		}
 	}
-
-	return nil, nil, fmt.Errorf("No more IPs available")
+	return nil, nil, ccev2.NewCodeError(ccev2.ErrorCodeNoMoreIP, "No more IPs available")
 }
 
 // crdAllocator implements the CRD-backed IP allocator
@@ -593,6 +591,16 @@ func deriveGatewayIP(cidr string, index int) string {
 	return gw.String()
 }
 
+func (a *crdAllocator) handlerAllocateNextError(err error) error {
+	if _, ok := err.(*ccev2.CodeError); ok {
+		if a.conf.IPAMMode() == ipamOption.IPAMVpcEni &&
+			a.store.ownNode != nil {
+			return a.store.ownNode.SpeculationNoMoreIPReson(false)
+		}
+	}
+	return err
+}
+
 func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.AllocationIP) (result *AllocationResult, err error) {
 	result = &AllocationResult{IP: ip}
 
@@ -614,6 +622,8 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 		}
 		result.GatewayIP = deriveGatewayIP(cidr, 1)
 		result.CIDRs = []string{cidr}
+		// this field presents the ENI ID
+		result.InterfaceNumber = ipInfo.Resource
 
 	// In ENI mode, the Resource points to the ENI so we can derive the
 	// master interface and all CIDRs of the VPC
@@ -730,6 +740,7 @@ func (a *crdAllocator) AllocateNext(owner string) (*AllocationResult, error) {
 	defer a.mutex.Unlock()
 
 	ip, ipInfo, err := a.store.allocateNext(a.allocated, a.family)
+	err = a.handlerAllocateNextError(err)
 	if err != nil {
 		return nil, err
 	}

@@ -113,7 +113,7 @@ type bceNode struct {
 	instanceType string
 
 	// The node currently being created by ENI should have only one.
-	creatingENI *ccev2.ENI
+	creatingEni *creatingEniSet
 
 	// limit
 	capacity    *limit.NodeCapacity
@@ -128,24 +128,27 @@ type bceNode struct {
 	// this key is eni id, value is the resource version
 	expiredVPCVersion map[string]int64
 
-	creatingENINums int
-
 	eventRecorder record.EventRecorder
 
 	log *logrus.Entry
+
+	availableSubnets        []*ccev1.Subnet
+	eniAllocatedIPsErrorMap map[string]*ccev2.StatusChange
 }
 
 // NewNode returns a new Node
 func NewNode(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *InstancesManager) *bceNode {
 	// 1. Create a new CCE Node object
 	anode := &bceNode{
-		node:              node,
-		k8sObj:            k8sObj,
-		manager:           manager,
-		instanceID:        k8sObj.Spec.InstanceID,
-		expiredVPCVersion: make(map[string]int64),
-		log:               logging.NewSubysLogger(vpcENISubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("nodeName", k8sObj.Name),
-		eventRecorder:     k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: vpcENISubsys}),
+		node:                    node,
+		k8sObj:                  k8sObj,
+		manager:                 manager,
+		instanceID:              k8sObj.Spec.InstanceID,
+		expiredVPCVersion:       make(map[string]int64),
+		log:                     logging.NewSubysLogger(vpcENISubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("nodeName", k8sObj.Name),
+		eventRecorder:           k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: vpcENISubsys}),
+		eniAllocatedIPsErrorMap: make(map[string]*ccev2.StatusChange),
+		creatingEni:             newCreatingEniSet(),
 	}
 
 	// 2. Get isSuportedENI from ccev2.NetResourceSet Label[k8s.LabelIsSupportENI], this Label is setted by nodediscovery determined by metadata api.
@@ -296,9 +299,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 
 			// The node currently being created by ENI can be viewed in the informer.
 			// It can be deleted from the cache
-			if n.creatingENI != nil && e.Name == n.creatingENI.Name {
-				n.creatingENI = nil
-			}
+			n.creatingEni.removeCreatingENI(e.Name)
 
 			addAllocationIP := func(ips []*models.PrivateIP) {
 				for _, addr := range ips {
@@ -364,24 +365,21 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 			return nil
 		})
 
-	n.mutex.RLock()
-	if n.creatingENINums > 0 {
-		n.mutex.RUnlock()
-		return 0, "", fmt.Errorf("eni [%d] be creating", n.creatingENINums)
+	if n.creatingEni.hasCreatingENI() {
+		return 0, "", fmt.Errorf("concurrent eni creating")
 	}
-	n.mutex.RUnlock()
 
-	n.addCreatingENINumbers(1)
+	n.creatingEni.add(1)
 	inums, msg, err := n.real.createInterface(ctx, allocation, scopedLog)
-	n.addCreatingENINumbers(-1)
+	n.creatingEni.add(-1)
 
 	preAllocateENI := n.k8sObj.Spec.ENI.PreAllocateENI - availableENICount - 1
 	for i := 0; i < preAllocateENI; i++ {
 		inums++
 		go func() {
-			n.addCreatingENINumbers(1)
+			n.creatingEni.add(1)
 			_, _, e := n.real.createInterface(ctx, allocation, scopedLog)
-			n.addCreatingENINumbers(-1)
+			n.creatingEni.add(-1)
 			if e == nil {
 				scopedLog.Infof("create addition interface success")
 				return
@@ -391,12 +389,6 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 
 	}
 	return inums, msg, err
-}
-
-func (n *bceNode) addCreatingENINumbers(num int) {
-	n.mutex.Lock()
-	n.creatingENINums += num
-	n.mutex.Unlock()
 }
 
 // PopulateStatusFields is called to give the implementation a chance
@@ -414,10 +406,16 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	}
 
 	for i := 0; i < len(enis); i++ {
+		var (
+			allocatedCrossSubnetIPNum = 0
+		)
+		// add eni statistics
 		simple := ccev2.SimpleENIStatus{
-			ID:        enis[i].Spec.ENI.ID,
-			VPCStatus: string(enis[i].Status.VPCStatus),
-			CCEStatus: string(enis[i].Status.CCEStatus),
+			ID:                        enis[i].Spec.ENI.ID,
+			VPCStatus:                 string(enis[i].Status.VPCStatus),
+			CCEStatus:                 string(enis[i].Status.CCEStatus),
+			SubnetID:                  enis[i].Spec.SubnetID,
+			IsMoreAvailableIPInSubnet: false,
 		}
 		eniStatusMap[enis[i].Name] = simple
 
@@ -433,6 +431,7 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 			}
 			if addr.SubnetID != enis[i].Spec.ENI.SubnetID {
 				crossSubnetUsed[addr.PrivateIPAddress] = allocationIP
+				allocatedCrossSubnetIPNum++
 			}
 		}
 
@@ -442,9 +441,32 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 		for _, addr := range enis[i].Spec.IPV6PrivateIPSet {
 			addCrossSubnetAddr(addr)
 		}
+
+		// if IPv6 is enabled, we need to allocate 2 * maxIPPerENI
+		capacity := n.capacity.MaxIPPerENI
+		if len(enis[i].Spec.IPV6PrivateIPSet) > 0 {
+			capacity = 2 * capacity
+		}
+		simple.AvailableIPNum = capacity - len(enis[i].Spec.PrivateIPSet) - len(enis[i].Spec.IPV6PrivateIPSet)
+		simple.AllocatedCrossSubnetIPNum = allocatedCrossSubnetIPNum
+		simple.AllocatedIPNum = len(enis[i].Spec.PrivateIPSet) + len(enis[i].Spec.IPV6PrivateIPSet)
+
+		for i := range n.availableSubnets {
+			if n.availableSubnets[i].Spec.ID == enis[i].Spec.ENI.SubnetID {
+				simple.IsMoreAvailableIPInSubnet = !n.availableSubnets[i].Status.HasNoMoreIP
+			}
+		}
 	}
 	resource.Status.ENIs = eniStatusMap
 	resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
+
+	// update available subnet ids
+	var availableSubnetIDs []string
+	for i := range n.availableSubnets {
+		availableSubnetIDs = append(availableSubnetIDs, n.availableSubnets[i].Spec.ID)
+	}
+	resource.Status.IPAM.AvailableSubnetIDs = availableSubnetIDs
+	n.refreshENIAllocatedIPErrors(resource)
 }
 
 // PrepareIPAllocation is called to calculate the number of IPs that
@@ -460,7 +482,7 @@ func (n *bceNode) PrepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 func (n *bceNode) AllocateIPs(ctx context.Context, allocation *ipam.AllocationAction) error {
 	limiter := n.calculateLimiter()
 	if limiter == nil {
-		return fmt.Errorf("limiter is nil")
+		return fmt.Errorf("limiter is nil, please check the node status")
 	}
 	effectiveLimits := limiter.MaxIPPerENI
 
@@ -523,6 +545,11 @@ func (n *bceNode) AllocateIPs(ctx context.Context, allocation *ipam.AllocationAc
 			// allocate ip from real eni implementation
 			partialIPv4Result, partialIPv6Result, err := n.real.allocateIPs(ctx, scopedLog, allocation, ipv4PaticalToAllocate, ipv6PaticalToAllocate)
 			if err != nil {
+				// append error to eni status
+				n.appendAllocatedIPError(allocation.InterfaceID,
+					ccev2.NewErrorStatusChange(
+						fmt.Sprintf("allocate ips from eni [%s] failed: %v", allocation.InterfaceID, err)))
+
 				allocateLog.WithError(err).Error("failed to allocate ips from eni")
 				if !isPartialSuccess {
 					return err
@@ -891,6 +918,7 @@ func (n *bceNode) FilterAvailableSubnet(subnets []*ccev1.Subnet) []*ccev1.Subnet
 			filtedSubnets = append(filtedSubnets, subnet)
 		}
 	}
+	n.availableSubnets = filtedSubnets
 	return filtedSubnets
 }
 
@@ -944,6 +972,17 @@ func (n *bceNode) AllocateIP(ctx context.Context, action *endpoint.DirectIPActio
 
 	action.Addressing = resultAddressPairList
 
+	// add node affinities
+	zone, err := api.TransZoneNameToAvailableZone(sbn.Spec.AvailabilityZone)
+	if err != nil {
+		return fmt.Errorf("trans zone name to available zone failed: %v", err)
+	}
+	action.NodeSelectorRequirement = append(action.NodeSelectorRequirement, corev1.NodeSelectorRequirement{
+		Key:      k8s.TopologyKeyOfPod,
+		Operator: corev1.NodeSelectorOpIn,
+		Values:   []string{zone},
+	})
+
 	eni, err := n.manager.enilister.Get(interfaceID)
 	if err != nil {
 		return fmt.Errorf("get eni %s failed: %v", interfaceID, err)
@@ -982,6 +1021,79 @@ func (n *bceNode) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAct
 	return n.ReleaseIPs(ctx, action)
 }
 
+// appendAllocatedIPError append eni allocated ip error to bcenode
+// those errors will be added to the status of nrs by 2 minutes
+func (n *bceNode) appendAllocatedIPError(eniID string, openAPIStatus *ccev2.StatusChange) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	n.eniAllocatedIPsErrorMap[eniID] = openAPIStatus
+}
+
+// refreshENIAllocatedIPErrors fill nrs status with eni allocated ip errors
+// error are only valid if they occured within the last 10 minutes
+func (n *bceNode) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+
+	now := time.Now()
+	for eniID := range resource.Status.ENIs {
+		eniStastic := resource.Status.ENIs[eniID]
+		eniStastic.LastAllocatedIPError = nil
+
+		if eniStatus, ok := n.eniAllocatedIPsErrorMap[eniID]; ok {
+			if now.Sub(n.eniAllocatedIPsErrorMap[eniID].Time.Time) < 10*time.Minute {
+				eniStastic.LastAllocatedIPError = eniStatus
+			}
+		}
+	}
+
+	for eniID := range n.eniAllocatedIPsErrorMap {
+		if _, ok := resource.Status.ENIs[eniID]; !ok {
+			delete(n.eniAllocatedIPsErrorMap, eniID)
+		}
+	}
+}
+
 var (
 	_ endpoint.DirectEndpointOperation = &bceNode{}
 )
+
+type creatingEniSet struct {
+	mutex *lock.Mutex
+	// The node currently being created by ENI should have only one.
+	creatingENI     map[string]*ccev2.ENI
+	creatingENINums int
+}
+
+func newCreatingEniSet() *creatingEniSet {
+	return &creatingEniSet{
+		mutex:       &lock.Mutex{},
+		creatingENI: map[string]*ccev2.ENI{},
+	}
+}
+
+func (c *creatingEniSet) addCreatingENI(eni *ccev2.ENI) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.creatingENI[eni.Name] = eni
+}
+
+func (c *creatingEniSet) removeCreatingENI(eniName string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	delete(c.creatingENI, eniName)
+}
+
+func (c *creatingEniSet) add(num int) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.creatingENINums += num
+}
+
+func (c *creatingEniSet) hasCreatingENI() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return len(c.creatingENI) > 0 || c.creatingENINums > 0
+}

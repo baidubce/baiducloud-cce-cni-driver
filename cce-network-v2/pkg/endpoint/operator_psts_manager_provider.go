@@ -23,6 +23,7 @@ import (
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/pststrategy"
 	"github.com/sirupsen/logrus"
 )
 
@@ -83,7 +84,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		if err != nil {
 			return err
 		}
-		if psts.Spec.Strategy != nil && psts.Spec.Strategy.EnableReuseIPAddress {
+		if pststrategy.EnableReuseIPPSTS(psts) {
 			// allocate ip from local pool
 			localAllocator := &localAllocator{
 				localPool: provider.localPool,
@@ -136,6 +137,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 	log.Info("allocate remote psts ip success")
 
 	status.Networking.Addressing = action.Addressing
+	status.NodeSelectorRequirement = action.NodeSelectorRequirement
 	return nil
 }
 

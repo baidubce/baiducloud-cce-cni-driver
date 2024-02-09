@@ -134,7 +134,7 @@ func (s *NodeSuite) TestGetIPByType(c *C) {
 func (s *NodeSuite) TestParseNetResourceSet(c *C) {
 	nodeResource := &ccev2.NetResourceSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
-		Spec: ccev2.NodeSpec{
+		Spec: ccev2.NetResourceSpec{
 			Addresses: []ccev2.NodeAddress{
 				{Type: addressing.NodeInternalIP, IP: "2.2.2.2"},
 				{Type: addressing.NodeExternalIP, IP: "3.3.3.3"},
@@ -191,7 +191,7 @@ func (s *NodeSuite) TestNode_ToNetResourceSet(c *C) {
 			Namespace:   "",
 			Annotations: map[string]string{},
 		},
-		Spec: ccev2.NodeSpec{
+		Spec: ccev2.NetResourceSpec{
 			Addresses: []ccev2.NodeAddress{
 				{Type: addressing.NodeInternalIP, IP: "2.2.2.2"},
 				{Type: addressing.NodeExternalIP, IP: "3.3.3.3"},

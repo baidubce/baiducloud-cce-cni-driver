@@ -1,14 +1,16 @@
 module github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2
 
-go 1.18
+go 1.20
 
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/cilium/deepequal-gen v0.0.0-20200406125435-ad6a9003139e
+	github.com/cilium/ebpf v0.12.3
 	github.com/cilium/ipam v0.0.0-20211026130907-54a76012817c
 	github.com/cilium/lumberjack/v2 v2.2.2
 	github.com/containernetworking/cni v1.1.1
 	github.com/containernetworking/plugins v1.1.1
+	github.com/coreos/go-systemd/v22 v22.3.2
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-openapi/errors v0.20.3
 	github.com/go-openapi/loads v0.21.1
@@ -22,7 +24,7 @@ require (
 	github.com/google/gops v0.3.23
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.8.0
-	github.com/kr/pretty v0.3.0
+	github.com/kr/pretty v0.3.1
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.27.4
 	github.com/pmezard/go-difflib v1.0.0
@@ -39,7 +41,7 @@ require (
 	go.uber.org/multierr v1.8.0
 	golang.org/x/net v0.8.0
 	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.6.0
+	golang.org/x/sys v0.14.1-0.20231108175955-e4099bfacb8c
 	golang.org/x/time v0.3.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	gopkg.in/yaml.v2 v2.4.0
@@ -59,11 +61,13 @@ require (
 	github.com/coreos/go-iptables v0.6.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
+	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/safchain/ethtool v0.0.0-20210803160452-9aa261dae9b1 // indirect
 	go.opentelemetry.io/otel v1.11.1 // indirect
 	go.opentelemetry.io/otel/trace v1.11.1 // indirect
+	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )
 
@@ -107,10 +111,10 @@ require (
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.1 // indirect
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/errors v0.9.1
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
-	github.com/rogpeppe/go-internal v1.8.0 // indirect
+	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/spf13/afero v1.8.2 // indirect
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect

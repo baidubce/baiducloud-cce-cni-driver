@@ -40,60 +40,42 @@ webhooks:
         namespace: kube-system
         path: /mutating-psts
         port: 443
-    failurePolicy: Ignore
+    failurePolicy: Fail
     name: mutating.psts.cce.baidubce.com
     sideEffects: None
     admissionReviewVersions: ["v1"]
-    objectSelector:
-      matchExpressions:
-        - key : cce.baidubce.com/cniwebhook
-          operator: NotIn
-          values:
-            - "disabled"
     rules:
       - apiGroups:
-          - ""
+          - "cce.baidubce.com"
         apiVersions:
-          - v1
+          - v2
         operations:
           - CREATE
           - UPDATE
         resources:
           - podsubnettopologyspreads
-    timeoutSeconds: 30  
-{{- end }}
-
----
-
-{{- if not (empty .Values.network.operator.webhook.validating) }}
-
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingWebhookConfiguration
-metadata:
-  name: { { .Values.network.operator.webhook.validating } }
-webhooks:
+    timeoutSeconds: 30
   - clientConfig:
       caBundle: Cg==
       service:
         name: cce-network-v2
         namespace: kube-system
-        path: /validating-pod-subnet-topology-spread
-        port: 18921
+        path: /mutating-cluster-psts
+        port: 443
     failurePolicy: Fail
-    name: validate.psts.cce.baidubce.com
+    name: mutating.cpsts.cce.baidubce.com
     sideEffects: None
     admissionReviewVersions: ["v1"]
     rules:
       - apiGroups:
-          - "cce.io"
+          - "cce.baidubce.com"
         apiVersions:
-          - v1alpha1
+          - v2alpha1
         operations:
           - CREATE
           - UPDATE
         resources:
-          - podsubnettopologyspreads
-          - podsubnettopologyspreadtables
-    timeoutSeconds: 30
+          - clusterpodsubnettopologyspreads
+    timeoutSeconds: 30    
 {{- end }}
 {{- end }}

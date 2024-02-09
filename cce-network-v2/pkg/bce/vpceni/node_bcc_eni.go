@@ -180,7 +180,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	// The cache will be cleared in the function ResyncInterfacesAndIPs.
-	if n.k8sObj.Spec.ENI.PreAllocateENI >= availableENICount && n.creatingENI != nil {
+	if n.k8sObj.Spec.ENI.PreAllocateENI <= availableENICount && len(n.creatingEni.creatingENI) > 0 {
 		msg = errUnableToCreateENI
 		err = fmt.Errorf(errCrurrentlyCreatingENI)
 		return
@@ -273,12 +273,11 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
 
-	n.mutex.Lock()
-	n.creatingENI = newENI
-	n.mutex.Unlock()
+	n.creatingEni.addCreatingENI(newENI)
 
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
+		n.creatingEni.removeCreatingENI(eniID)
 		return fmt.Errorf("failed to create ENI: %w", err)
 	}
 
@@ -303,7 +302,12 @@ func CreateNameForENI(clusterID, instanceID, nodeName string) string {
 	hash := sha1.Sum([]byte(time.Now().String()))
 	suffix := hex.EncodeToString(hash[:])
 
-	return fmt.Sprintf("%s/%s/%s/%s", clusterID, instanceID, nodeName, suffix[:6])
+	// eni name length is 64
+	name := fmt.Sprintf("%s/%s/%s", clusterID, instanceID, nodeName)
+	if len(name) > 57 {
+		name = name[:57]
+	}
+	return fmt.Sprintf("%s/%s", name, suffix[:6])
 }
 
 // createENI create ENI with a given name and param

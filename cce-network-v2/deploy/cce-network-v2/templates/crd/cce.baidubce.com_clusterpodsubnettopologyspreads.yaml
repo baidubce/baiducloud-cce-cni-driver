@@ -1,0 +1,457 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.6.2
+  creationTimestamp: null
+  name: clusterpodsubnettopologyspreads.cce.baidubce.com
+spec:
+  group: cce.baidubce.com
+  names:
+    categories:
+    - cce
+    kind: ClusterPodSubnetTopologySpread
+    listKind: ClusterPodSubnetTopologySpreadList
+    plural: clusterpodsubnettopologyspreads
+    shortNames:
+    - cpsts
+    singular: clusterpodsubnettopologyspread
+  scope: Cluster
+  versions:
+  - name: v2alpha1
+    schema:
+      openAPIV3Schema:
+        description: ClusterPodSubnetTopologySpread describes how to distribute pods
+          in the scenario of sub customized subnets
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              maxSkew:
+                default: 1
+                description: 'MaxSkew describes the degree to which pods may be unevenly
+                  distributed. It''s the maximum permitted difference between the
+                  number of matching pods in any two topology domains of a given topology
+                  type. For example, in a 3-zone cluster, MaxSkew is set to 1, and
+                  pods with the same labelSelector spread as 1/1/0: | zone1 | zone2
+                  | zone3 | |   P   |   P   |       | - if MaxSkew is 1, incoming
+                  pod can only be scheduled to zone3 to become 1/1/1; scheduling it
+                  onto zone1(zone2) would make the ActualSkew(2-0) on zone1(zone2)
+                  violate MaxSkew(1). - if MaxSkew is 2, incoming pod can be scheduled
+                  onto any zone. It''s a required field. Default value is 1 and 0
+                  is not allowed.'
+                format: int32
+                minimum: 0
+                type: integer
+              name:
+                type: string
+              namespaceSelector:
+                description: A label selector is a label query over a set of resources.
+                  The result of matchLabels and matchExpressions are ANDed. An empty
+                  label selector matches all objects. A null label selector matches
+                  no objects.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: A label selector requirement is a selector that
+                        contains values, a key, and an operator that relates the key
+                        and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: operator represents a key's relationship to
+                            a set of values. Valid operators are In, NotIn, Exists
+                            and DoesNotExist.
+                          type: string
+                        values:
+                          description: values is an array of string values. If the
+                            operator is In or NotIn, the values array must be non-empty.
+                            If the operator is Exists or DoesNotExist, the values
+                            array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: matchLabels is a map of {key,value} pairs. A single
+                      {key,value} in the matchLabels map is equivalent to an element
+                      of matchExpressions, whose key field is "key", the operator
+                      is "In", and the values array contains only "value". The requirements
+                      are ANDed.
+                    type: object
+                type: object
+              priority:
+                description: Priority describes which object the target pod should
+                  use when multiple objects affect a pod at the same time. The higher
+                  the priority value, the earlier the object is configured. When multiple
+                  objects have the same priority value, only the configuration of
+                  the first object is taken.
+                format: int32
+                minimum: 0
+                type: integer
+              selector:
+                description: 'A label query over pods that are managed by the daemon
+                  set. Must match in order to be controlled. It must match the pod
+                  template''s labels. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors'
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: A label selector requirement is a selector that
+                        contains values, a key, and an operator that relates the key
+                        and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: operator represents a key's relationship to
+                            a set of values. Valid operators are In, NotIn, Exists
+                            and DoesNotExist.
+                          type: string
+                        values:
+                          description: values is an array of string values. If the
+                            operator is In or NotIn, the values array must be non-empty.
+                            If the operator is Exists or DoesNotExist, the values
+                            array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: matchLabels is a map of {key,value} pairs. A single
+                      {key,value} in the matchLabels map is equivalent to an element
+                      of matchExpressions, whose key field is "key", the operator
+                      is "In", and the values array contains only "value". The requirements
+                      are ANDed.
+                    type: object
+                type: object
+              strategy:
+                description: Strategy IP allocate strategy, which is a global ip application
+                  strategy. If the subnet also sets these fields, the subnet will
+                  override the global configuration If no global policy is defined,
+                  the policy of the first subnet is the global policy by default
+                properties:
+                  enableReuseIPAddress:
+                    description: ReuseIPAddress Whether to enable address reuse with
+                      the same pod name
+                    type: boolean
+                  releaseStrategy:
+                    default: TTL
+                    description: 'IP address recycling policy TTL: represents the
+                      default dynamic IP address recycling policy,default. Never:
+                      this policy can only be used in fixed IP scenarios'
+                    enum:
+                    - TTL
+                    - Never
+                    type: string
+                  ttl:
+                    description: TTL How long after the pod is deleted, the IP will
+                      be deleted, regardless of whether the IP reuse mode is enabled
+                    type: string
+                  type:
+                    description: If the type is empty, the subnet type is used
+                    enum:
+                    - Elastic
+                    - Fixed
+                    - Manual
+                    - Custom
+                    - IPAllocTypeNil
+                    - PrimaryENI
+                    type: string
+                type: object
+              subnets:
+                additionalProperties:
+                  items:
+                    description: CustomAllocation User defined IP address management
+                      policy
+                    properties:
+                      family:
+                        default: 4
+                        description: Family of IP Address. 4 or 6
+                        type: string
+                      range:
+                        description: Range User defined IP address range. Note that
+                          this range must be smaller than the subnet range Note that
+                          the definitions of multiple ranges cannot be duplicate
+                        items:
+                          description: CustomIPRange User defined IP address range.
+                            Note that this range must be smaller than the subnet range
+                          properties:
+                            end:
+                              description: End end address must be greater than or
+                                equal to the start address
+                              type: string
+                            start:
+                              type: string
+                          required:
+                          - end
+                          - start
+                          type: object
+                        type: array
+                    type: object
+                  type: array
+                description: Subnets for the subnet used by the object, each subnet
+                  topology constraint object must specify at least one available subnet.
+                  The subnet must be the subnet ID of the same VPC as the current
+                  cluster. The format is `sbn-*` for example, sbn-ccfud13pwcqf If
+                  a dedicated subnet is used, the user should confirm that the subnet
+                  is only used by the current CCE cluster
+                minProperties: 1
+                type: object
+              whenUnsatisfiable:
+                default: DoNotSchedule
+                description: 'WhenUnsatisfiable indicates how to deal with a pod if
+                  it doesn''t satisfy the spread constraint. - DoNotSchedule (default)
+                  tells the scheduler not to schedule it - ScheduleAnyway tells the
+                  scheduler to still schedule it It''s considered as "Unsatisfiable"
+                  if and only if placing incoming pod on any topology violates "MaxSkew".
+                  For example, in a 3-zone cluster, MaxSkew is set to 1, and pods
+                  with the same labelSelector spread as 3/1/1: | zone1 | zone2 | zone3
+                  | | P P P |   P   |   P   | If WhenUnsatisfiable is set to DoNotSchedule,
+                  incoming pod can only be scheduled to zone2(zone3) to become 3/2/1(3/1/2)
+                  as ActualSkew(2-1) on zone2(zone3) satisfies MaxSkew(1). In other
+                  words, the cluster can still be imbalanced, but scheduler won''t
+                  make it *more* imbalanced. It''s a required field.'
+                type: string
+            required:
+            - subnets
+            type: object
+          status:
+            properties:
+              expect-object-count:
+                type: integer
+              status:
+                properties:
+                  availableSubnets:
+                    additionalProperties:
+                      properties:
+                        availabilityZone:
+                          type: string
+                        availableIPNum:
+                          type: integer
+                        cidr:
+                          type: string
+                        enable:
+                          type: boolean
+                        hasNoMoreIP:
+                          type: boolean
+                        id:
+                          type: string
+                        ipAllocations:
+                          additionalProperties:
+                            type: string
+                          description: 'IP address allocation details under the subnet
+                            KEY: ip address VALUE: pod name Only when the `PodSubnetTopologySpread.spec.enableIPAllocationStatus`
+                            spec value is true, the IP address allocation information
+                            will be recorded'
+                          type: object
+                        ipv6Cidr:
+                          type: string
+                        message:
+                          description: error message for subnets
+                          type: string
+                        name:
+                          type: string
+                        podCount:
+                          description: total number of pods under this subnet
+                          format: int32
+                          type: integer
+                      type: object
+                    type: object
+                  availableSubnetsNum:
+                    format: int32
+                    type: integer
+                  name:
+                    type: string
+                  podAffectedCount:
+                    description: Total pod expected to be affected
+                    format: int32
+                    type: integer
+                  podMatchedCount:
+                    description: total number of pods match label selector
+                    format: int32
+                    type: integer
+                  unavailableSubnets:
+                    additionalProperties:
+                      properties:
+                        availabilityZone:
+                          type: string
+                        availableIPNum:
+                          type: integer
+                        cidr:
+                          type: string
+                        enable:
+                          type: boolean
+                        hasNoMoreIP:
+                          type: boolean
+                        id:
+                          type: string
+                        ipAllocations:
+                          additionalProperties:
+                            type: string
+                          description: 'IP address allocation details under the subnet
+                            KEY: ip address VALUE: pod name Only when the `PodSubnetTopologySpread.spec.enableIPAllocationStatus`
+                            spec value is true, the IP address allocation information
+                            will be recorded'
+                          type: object
+                        ipv6Cidr:
+                          type: string
+                        message:
+                          description: error message for subnets
+                          type: string
+                        name:
+                          type: string
+                        podCount:
+                          description: total number of pods under this subnet
+                          format: int32
+                          type: integer
+                      type: object
+                    type: object
+                  unavailableSubnetsNum:
+                    format: int32
+                    type: integer
+                type: object
+              subStatus:
+                additionalProperties:
+                  properties:
+                    availableSubnets:
+                      additionalProperties:
+                        properties:
+                          availabilityZone:
+                            type: string
+                          availableIPNum:
+                            type: integer
+                          cidr:
+                            type: string
+                          enable:
+                            type: boolean
+                          hasNoMoreIP:
+                            type: boolean
+                          id:
+                            type: string
+                          ipAllocations:
+                            additionalProperties:
+                              type: string
+                            description: 'IP address allocation details under the
+                              subnet KEY: ip address VALUE: pod name Only when the
+                              `PodSubnetTopologySpread.spec.enableIPAllocationStatus`
+                              spec value is true, the IP address allocation information
+                              will be recorded'
+                            type: object
+                          ipv6Cidr:
+                            type: string
+                          message:
+                            description: error message for subnets
+                            type: string
+                          name:
+                            type: string
+                          podCount:
+                            description: total number of pods under this subnet
+                            format: int32
+                            type: integer
+                        type: object
+                      type: object
+                    availableSubnetsNum:
+                      format: int32
+                      type: integer
+                    name:
+                      type: string
+                    podAffectedCount:
+                      description: Total pod expected to be affected
+                      format: int32
+                      type: integer
+                    podMatchedCount:
+                      description: total number of pods match label selector
+                      format: int32
+                      type: integer
+                    unavailableSubnets:
+                      additionalProperties:
+                        properties:
+                          availabilityZone:
+                            type: string
+                          availableIPNum:
+                            type: integer
+                          cidr:
+                            type: string
+                          enable:
+                            type: boolean
+                          hasNoMoreIP:
+                            type: boolean
+                          id:
+                            type: string
+                          ipAllocations:
+                            additionalProperties:
+                              type: string
+                            description: 'IP address allocation details under the
+                              subnet KEY: ip address VALUE: pod name Only when the
+                              `PodSubnetTopologySpread.spec.enableIPAllocationStatus`
+                              spec value is true, the IP address allocation information
+                              will be recorded'
+                            type: object
+                          ipv6Cidr:
+                            type: string
+                          message:
+                            description: error message for subnets
+                            type: string
+                          name:
+                            type: string
+                          podCount:
+                            description: total number of pods under this subnet
+                            format: int32
+                            type: integer
+                        type: object
+                      type: object
+                    unavailableSubnetsNum:
+                      format: int32
+                      type: integer
+                  type: object
+                type: object
+              subobject-count:
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

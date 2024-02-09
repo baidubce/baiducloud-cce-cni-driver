@@ -10,22 +10,30 @@ import (
 )
 
 func DetectDefaultRouteInterfaceName() (string, error) {
-	routeToDstIP, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	link, err := DetectDefaultRouteInterface()
 	if err != nil {
 		return "", err
+	}
+
+	return link.Attrs().Name, nil
+}
+
+func DetectDefaultRouteInterface() (netlink.Link, error) {
+	routeToDstIP, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, v := range routeToDstIP {
 		if v.Dst == nil {
 			l, err := netlink.LinkByIndex(v.LinkIndex)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			return l.Attrs().Name, nil
+			return l, nil
 		}
 	}
-
-	return "", fmt.Errorf("no default route interface found")
+	return nil, fmt.Errorf("no default route interface found")
 }
 
 // DisableRpFilter tries to disable rpfilter on specified interface

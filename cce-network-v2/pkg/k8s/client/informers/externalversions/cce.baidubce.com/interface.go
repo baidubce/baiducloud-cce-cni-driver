@@ -20,6 +20,7 @@ package cce
 import (
 	v1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions/cce.baidubce.com/v1"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions/cce.baidubce.com/v2"
+	v2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions/cce.baidubce.com/v2alpha1"
 	internalinterfaces "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions/internalinterfaces"
 )
 
@@ -27,6 +28,8 @@ import (
 type Interface interface {
 	// V2 provides access to shared informers for resources in V2.
 	V2() v2.Interface
+	// V2alpha1 provides access to shared informers for resources in V2alpha1.
+	V2alpha1() v2alpha1.Interface
 	// V1 provides access to shared informers for resources in V1.
 	V1() v1.Interface
 }
@@ -45,6 +48,11 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // V2 returns a new v2.Interface.
 func (g *group) V2() v2.Interface {
 	return v2.New(g.factory, g.namespace, g.tweakListOptions)
+}
+
+// V2alpha1 returns a new v2alpha1.Interface.
+func (g *group) V2alpha1() v2alpha1.Interface {
+	return v2alpha1.New(g.factory, g.namespace, g.tweakListOptions)
 }
 
 // V1 returns a new v1.Interface.

@@ -45,7 +45,9 @@ type EndpointSpec struct {
 
 // EndpointNetworkSpec Network config for CCE Endpoint
 type EndpointNetworkSpec struct {
-	IPAllocation *IPAllocation `json:"ipAllocation,omitempty"`
+	IPAllocation   *IPAllocation      `json:"ipAllocation,omitempty"`
+	Bindwidth      *BindwidthOption   `json:"bindwidth,omitempty"`
+	EgressPriority *EgressPriorityOpt `json:"egressPriority,omitempty"`
 }
 
 // EndpointStatus is the status of a CCE endpoint.
@@ -179,6 +181,63 @@ type ExtFeatureStatus struct {
 
 	// Data is a set of key-value pairs that can be used to store additional information
 	Data map[string]string `json:"data,omitempty"`
+}
+
+const (
+	BindwidthModeEDT  = "edt"
+	BindwidthModeTC   = "tc"
+	BindwidthModeNone = ""
+)
+
+type BindwidthMode string
+
+// BindwidthOption is the option of bindwidth
+type BindwidthOption struct {
+	Mode    BindwidthMode `json:"mode,omitempty"`
+	Ingress int64         `json:"ingress,omitempty"`
+	Egress  int64         `json:"egress,omitempty"`
+}
+
+func (opt *BindwidthOption) IsValid() bool {
+	return opt.Ingress > 0 || opt.Egress > 0
+}
+
+type EgressPriority uint32
+type EgressDSCP uint32
+
+var (
+	EgressPriorityGuaranteed EgressPriority = 1
+	EgressPriorityBestEffort EgressPriority = 2
+	EgressPriorityBurstable  EgressPriority = 3
+
+	EgressDSCPGuaranteed EgressDSCP = 17
+	EgressDSCPBurstable  EgressDSCP = 1
+	EgressDSCPBestEffort EgressDSCP = 9
+)
+
+type EgressPriorityOpt struct {
+	Bands    EgressPriority `json:"bands,omitempty"`
+	DSCP     EgressDSCP     `json:"dscp,omitempty"`
+	Priority string         `json:"priority,omitempty"`
+}
+
+func NewEngressPriorityOpt(priority string) *EgressPriorityOpt {
+	var opt EgressPriorityOpt
+	opt.Priority = priority
+	switch priority {
+	case "Guaranteed":
+		opt.Bands = EgressPriorityGuaranteed
+		opt.DSCP = EgressDSCPGuaranteed
+	case "Burstable":
+		opt.Bands = EgressPriorityBurstable
+		opt.DSCP = EgressDSCPBurstable
+	case "BestEffort":
+		opt.Bands = EgressPriorityBestEffort
+		opt.DSCP = EgressDSCPBestEffort
+	default:
+		return nil
+	}
+	return &opt
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

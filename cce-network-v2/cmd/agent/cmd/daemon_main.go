@@ -415,6 +415,9 @@ func initializeFlags() {
 	flags.String(option.WriteCNIConfigurationWhenReady, "", fmt.Sprintf("Write the CNI configuration as specified via --%s to path when agent is ready", option.ReadCNIConfiguration))
 	option.BindEnv(option.WriteCNIConfigurationWhenReady)
 
+	flags.Bool(option.OverwriteCNIConfigurationWhenStart, true, "Overwrite the CNI configuration when agent starts")
+	option.BindEnv(option.OverwriteCNIConfigurationWhenStart)
+
 	flags.Duration(option.K8sHeartbeatTimeout, 30*time.Second, "Configures the timeout for api-server heartbeat, set to 0 to disable")
 	option.BindEnv(option.K8sHeartbeatTimeout)
 
@@ -475,6 +478,15 @@ func initializeFlags() {
 
 	flags.StringSlice(option.ENIEnterpriseSecurityGroupIds, []string{}, "enterprise security group ids")
 	option.BindEnv(option.ENIEnterpriseSecurityGroupIds)
+
+	flags.Bool(option.EnableBandwidthManager, true, "enable bandwidth manager")
+	option.BindEnv(option.EnableBandwidthManager)
+
+	flags.Bool(option.EnableEgressPriority, true, "enable engress priority")
+	option.BindEnv(option.EnableEgressPriority)
+
+	flags.Bool(option.EnableEgressPriorityDSCP, false, "enable engress priority by dscp")
+	option.BindEnv(option.EnableEgressPriorityDSCP)
 
 	viper.BindPFlags(flags)
 }
@@ -654,14 +666,23 @@ func runDaemon() {
 	log.WithField("bootstrapTime", time.Since(bootstrapTimestamp)).
 		Info("Daemon initialization completed")
 
+	firstWriteCNIConfig := false
+	if option.Config.OverwriteCNIConfigurationWhenStart {
+		firstWriteCNIConfig = true
+	}
 	if option.Config.WriteCNIConfigurationWhenReady != "" {
 		d.controllers.UpdateController(cniUpdateControllerName, controller.ControllerParams{
 			RunInterval: option.Config.ResourceResyncInterval,
 			DoFunc: func(ctx context.Context) error {
-				_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
-				if err == nil {
-					return nil
+				// Overwrite the CNI configuration when agent starts, so we should skip read config file which has been existed.
+				if !firstWriteCNIConfig {
+					_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
+					if err == nil {
+						return nil
+					}
 				}
+				firstWriteCNIConfig = false
+
 				input, err := os.ReadFile(option.Config.ReadCNIConfiguration)
 				if err != nil {
 					log.WithError(err).Fatal("Unable to read CNI configuration file")
@@ -737,5 +758,6 @@ func (d *Daemon) instantiateAPI() *restapi.CceAPIAPI {
 
 	// endpoints
 	restAPI.EndpointGetEndpointExtpluginStatusHandler = NewGetEndpointExtpluginStatusHandler(d)
+	restAPI.EndpointPutEndpointProbeHandler = NewPutEndpointProbeHandler(d)
 	return restAPI
 }

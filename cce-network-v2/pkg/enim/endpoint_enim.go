@@ -26,6 +26,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netns"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/containernetworking/plugins/pkg/ns"
@@ -424,7 +425,7 @@ func (eem *eniEndpointAllocator) cleanExpiredCEP(logEntry *logrus.Entry, ctx con
 		}
 		eni, err := eem.eniClient.Get(eniName)
 		if err != nil {
-			logEntry.WithError(err).Error("failed to get ENI(%s)", eniName)
+			logEntry.WithError(err).Errorf("failed to get ENI(%s)", eniName)
 			continue
 		}
 
@@ -435,18 +436,13 @@ func (eem *eniEndpointAllocator) cleanExpiredCEP(logEntry *logrus.Entry, ctx con
 		})
 		mac := eni.Spec.ENI.MacAddress
 		if _, err := link.FindENILinkByMac(mac); err != nil {
-
-			containerNs, err := ns.GetNS(expired.Status.ExternalIdentifiers.Netns)
-
-			if err == nil {
-				err = containerNs.Do(func(_ ns.NetNS) error {
-					dev, err := link.FindENILinkByMac(mac)
-					if err != nil {
-						return fmt.Errorf("failed to find dev: %v", err)
-					}
-					return link.MoveAndRenameLink(dev, eem.defaultNs, dev.Attrs().Alias)
-				})
-			}
+			err := netns.WithContainerNetns(expired.Status.ExternalIdentifiers.Netns, func(nn ns.NetNS) error {
+				dev, err := link.FindENILinkByMac(mac)
+				if err != nil {
+					return fmt.Errorf("failed to find dev: %v", err)
+				}
+				return link.MoveAndRenameLink(dev, eem.defaultNs, dev.Attrs().Alias)
+			})
 			if err != nil {
 				gcLog.WithError(err).Warnf("failed to move link to init netns")
 			}

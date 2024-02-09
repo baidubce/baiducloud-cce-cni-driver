@@ -114,7 +114,7 @@ func (n *Node) ToNetResourceSet() *ccev2.NetResourceSet {
 			Labels:      n.Labels,
 			Annotations: annotations,
 		},
-		Spec: ccev2.NodeSpec{
+		Spec: ccev2.NetResourceSpec{
 			Addresses: ipAddrs,
 			IPAM: ipamTypes.IPAMSpec{
 				PodCIDRs: podCIDRs,

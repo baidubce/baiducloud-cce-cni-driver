@@ -18,101 +18,12 @@ package netns
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+	"strconv"
+	"syscall"
 
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/vishvananda/netlink"
 )
-
-// RemoveIfFromNetNSIfExists removes the given interface from the given
-// network namespace.
-//
-// If the interface does not exist, no error will be returned.
-func RemoveIfFromNetNSIfExists(netNS ns.NetNS, ifName string) error {
-	return netNS.Do(func(_ ns.NetNS) error {
-		l, err := netlink.LinkByName(ifName)
-		if err != nil {
-			if strings.Contains(err.Error(), "Link not found") {
-				return nil
-			}
-			return err
-		}
-		return netlink.LinkDel(l)
-	})
-}
-
-// RemoveIfFromNetNSWithNameIfBothExist removes the given interface from
-// the given network namespace identified by its name.
-//
-// If either the interface or the namespace do not exist, no error will
-// be returned.
-func RemoveIfFromNetNSWithNameIfBothExist(netNSName, ifName string) error {
-	netNS, err := ns.GetNS(netNSPath(netNSName))
-	if err != nil {
-		if _, ok := err.(ns.NSPathNotExistErr); ok {
-			return nil
-		}
-		return err
-	}
-	return RemoveIfFromNetNSIfExists(netNS, ifName)
-}
-
-// ReplaceNetNSWithName creates a network namespace with the given name.
-// If such netns already exists from a previous run, it will be removed
-// and then re-created to avoid any previous state of the netns.
-//
-// FIXME: replace "ip-netns" invocations with native Go code
-func ReplaceNetNSWithName(netNSName string) (ns.NetNS, error) {
-	path := netNSPath(netNSName)
-
-	if err := ns.IsNSorErr(path); err == nil {
-		if err := exec.Command("ip", "netns", "del", netNSName).Run(); err != nil {
-			return nil, fmt.Errorf("Unable to delete named netns %s: %s", netNSName, err)
-		}
-	}
-
-	if err := exec.Command("ip", "netns", "add", netNSName).Run(); err != nil {
-		return nil, fmt.Errorf("Unable to create named netns %s: %s", netNSName, err)
-	}
-
-	ns, err := ns.GetNS(path)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to open netns %s: %s", path, err)
-	}
-
-	return ns, nil
-}
-
-// RemoveNetNSWithName removes the given named network namespace.
-//
-// FIXME: replace "ip-netns" invocations with native Go code
-func RemoveNetNSWithName(netNSName string) error {
-	if out, err := exec.Command("ip", "netns", "del", netNSName).CombinedOutput(); err != nil {
-		return fmt.Errorf("Unable to delete named netns %s: %s %s", netNSName, out, err)
-	}
-
-	return nil
-}
-
-// ListNamedNetNSWithPrefix returns list of named network namespaces which name
-// starts with the given prefix.
-func ListNamedNetNSWithPrefix(prefix string) ([]string, error) {
-	entries, err := os.ReadDir(netNSRootDir())
-	if err != nil {
-		return nil, err
-	}
-
-	ns := make([]string, 0)
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
-			ns = append(ns, e.Name())
-		}
-	}
-
-	return ns, nil
-}
 
 func netNSPath(name string) string {
 	return filepath.Join(netNSRootDir(), name)
@@ -120,4 +31,74 @@ func netNSPath(name string) string {
 
 func netNSRootDir() string {
 	return filepath.Join("/", "var", "run", "netns")
+}
+
+// Returns an object representing the namespace referred to by @path
+func GetContainerNS(nspath string) (ns.NetNS, error) {
+	path, err := GetProcNSPath(nspath)
+	if err != nil {
+		return nil, err
+	}
+	return ns.GetNS(path)
+}
+
+func GetProcNSPath(nspath string) (string, error) {
+	var (
+		err error
+	)
+
+	targetStat, err := getStat(nspath)
+	if err != nil {
+		return "", fmt.Errorf("failed to Statfs %q: %v", nspath, err)
+	}
+
+	// scan /proc for network namespace inode
+	files, err := os.ReadDir("/proc")
+	if err != nil {
+		return "", fmt.Errorf("failed to read /proc: %v", err)
+	}
+	for _, file := range files {
+		// ignored non-directory files
+		if !file.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(file.Name()); err != nil {
+			continue
+		}
+
+		// get /proc/<pid>/ns/net inode
+		netnsPath := filepath.Join("/proc", file.Name(), "ns/net")
+		stat, err := getStat(netnsPath)
+		if err != nil {
+			continue
+		}
+		if stat.Dev == targetStat.Dev && stat.Ino == targetStat.Ino {
+			return netnsPath, nil
+		}
+	}
+	return nspath, fmt.Errorf("failed to find proc network namespace path from %q", nspath)
+}
+
+func getStat(path string) (*syscall.Stat_t, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var stat syscall.Stat_t
+	err = syscall.Fstat(int(file.Fd()), &stat)
+	if err != nil {
+		return nil, err
+	}
+
+	return &stat, nil
+}
+
+func WithContainerNetns(nspath string, toRun func(ns.NetNS) error) error {
+	path, err := GetProcNSPath(nspath)
+	if err != nil {
+		return err
+	}
+	return ns.WithNetNSPath(path, toRun)
 }

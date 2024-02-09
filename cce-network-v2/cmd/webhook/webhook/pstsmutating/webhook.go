@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	unversionedvalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
@@ -25,6 +26,9 @@ var (
 	// HandlerMap contains admission webhook handlers
 	HandlerMap = map[string]admission.Handler{
 		"mutating-psts": &MutatingPSTSHandler{},
+		"mutating-cluster-psts": &mutatingCPSTSHandler{
+			MutatingPSTSHandler: &MutatingPSTSHandler{},
+		},
 	}
 
 	log = logging.NewSubysLogger("pstsmutating-webhook")
@@ -59,7 +63,10 @@ func (h *MutatingPSTSHandler) Handle(ctx context.Context, req admission.Request)
 	}
 
 	psts := obj.DeepCopy()
+
+	psts.Spec.Name = obj.Name
 	h.defaultPstsSpec(&psts.Spec)
+
 	allErrs := h.validatePstsSpec(&psts.Spec, field.NewPath("spec"))
 	err = allErrs.ToAggregate()
 	if err != nil {
@@ -86,6 +93,14 @@ func (h *MutatingPSTSHandler) defaultPstsSpec(spec *ccev2.PodSubnetTopologySprea
 			EnableReuseIPAddress: false,
 			ReleaseStrategy:      ccev2.ReleaseStrategyTTL,
 		}
+	}
+	if spec.Strategy.Type == ccev2.IPAllocTypeElastic {
+		if spec.Strategy.ReleaseStrategy == "" {
+			spec.Strategy.ReleaseStrategy = ccev2.ReleaseStrategyTTL
+		}
+	}
+	if spec.Strategy.ReleaseStrategy == ccev2.ReleaseStrategyTTL {
+		spec.Strategy.TTL = &metav1.Duration{Duration: time.Hour * 24 * 7}
 	}
 }
 

@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 
 	. "gopkg.in/check.v1"
 
@@ -54,7 +56,7 @@ func fakeIPv6AllocCIDRIP(fakeAddressing types.NodeAddressing) net.IP {
 type testConfiguration struct{}
 
 func (t *testConfiguration) IPv4Enabled() bool                        { return true }
-func (t *testConfiguration) IPv6Enabled() bool                        { return true }
+func (t *testConfiguration) IPv6Enabled() bool                        { return false }
 func (t *testConfiguration) HealthCheckingEnabled() bool              { return true }
 func (t *testConfiguration) UnreachableRoutesEnabled() bool           { return false }
 func (t *testConfiguration) IPAMMode() string                         { return ipamOption.IPAMClusterPool }
@@ -93,6 +95,27 @@ func (s *IPAMSuite) TestLock(c *C) {
 
 	err = ipam.IPv4Allocator.Release(epipv4.IP())
 	c.Assert(err, IsNil)
+}
+
+func BenchmarkIPAMRun(b *testing.B) {
+	fakeAddressing := linux.NewNodeAddressing()
+	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	// Since the IPs we have allocated to the endpoints might or might not
+	// be in the allocrange specified in cce, we need to specify them
+	// manually on the endpoint based on the alloc range.
+	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
+	nextIP(ipv4)
+	epipv4, _ := addressing.NewCCEIPv4(ipv4.String())
+
+	for i := 0; i < b.N; i++ {
+		// Forcefully release possible allocated IPs
+		ipam.IPv4Allocator.Release(epipv4.IP())
+
+		// Let's allocate the IP first so we can see the tests failing
+		ipam.IPv4Allocator.Allocate(epipv4.IP(), "test")
+
+		ipam.IPv4Allocator.Release(epipv4.IP())
+	}
 }
 
 func (s *IPAMSuite) TestBlackList(c *C) {
@@ -144,4 +167,20 @@ func (s *IPAMSuite) TestOwnerRelease(c *C) {
 	// 2nd release by owner, must now fail
 	err = ipam.ReleaseIPString("default/test")
 	c.Assert(err, Not(IsNil))
+}
+
+func BenchmarkCNIPluginNoAPIServer(b *testing.B) {
+	cidrs, _ := ip.ParseCIDRs([]string{"10.244.0.0/16"})
+	node.SetIPv4AllocRange(&cidr.CIDR{IPNet: cidrs[0]})
+
+	fakeAddressing := linux.NewNodeAddressing()
+	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+
+	for i := 0; i < b.N; i++ {
+		ipv4, _, _ := ipam.AllocateNext("", "foo")
+		// IPv4 address must be in use
+		ipam.AllocateIP(ipv4.IP, "foo")
+		ipam.ReleaseIP(ipv4.IP)
+	}
+
 }

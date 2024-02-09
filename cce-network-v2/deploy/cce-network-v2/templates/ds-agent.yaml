@@ -60,6 +60,8 @@ spec:
               name: log
             - mountPath: /var/run/cce-network-v2
               name: socket-dir
+            - mountPath: /var/run/netns
+              name: netns-dir
             - mountPath: /opt/cni/bin
               name: cni-bin-dir
             - mountPath: /etc/cni/net.d
@@ -71,10 +73,10 @@ spec:
               name: sys
             - mountPath: /usr-host
               name: usr-host
+            - mountPath: /etc-host
+              name: etc-host
             - mountPath: /lib/modules
-              name: lib-modules 
-            - mountPath: /etc/sysconfig
-              name: sysconfig 
+              name: lib-modules
             - mountPath: /etc/cce/cni-config-template
               readOnly: true
               name: cni-config-template  
@@ -119,6 +121,10 @@ spec:
             type: DirectoryOrCreate
           name: socket-dir
         - hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate
+          name: netns-dir
+        - hostPath:
             path: /lib/modules/
             type: ""
           name: lib-modules
@@ -129,11 +135,11 @@ spec:
         - hostPath:
             path: /sys
             type: ""
-          name: sys   
+          name: sys     
         - hostPath:
-            path: /etc/sysconfig
+            path: /etc
             type: ""
-          name: sysconfig    
+          name: etc-host  
         - configMap:
             defaultMode: 420
             items:

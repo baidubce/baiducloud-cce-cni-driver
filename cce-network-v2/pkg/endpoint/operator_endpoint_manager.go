@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 
@@ -134,11 +133,10 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 	}
 
 	var (
-		ctx, cancel = context.WithTimeout(context.Background(), operatorOption.Config.FixedIPTimeout)
-		start       = time.Now()
-		err         error
-		apiError    error
-		logEntry    = managerLog.WithFields(logrus.Fields{
+		ctx      = context.TODO()
+		start    = time.Now()
+		err      error
+		logEntry = managerLog.WithFields(logrus.Fields{
 			"namespace": resource.Namespace,
 			"name":      resource.Name,
 			"event":     "update",
@@ -146,23 +144,14 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 
 		newNodeName = resource.Spec.Network.IPAllocation.NodeIP
 
-		newObj    = resource.DeepCopy()
-		newStatus = &newObj.Status
-		returnObj *ccev2.CCEEndpoint
+		newObj = resource.DeepCopy()
 	)
 
 	defer func() {
-		if apiError != nil {
-			logEntry.WithError(apiError).Errorf("update cep to apiserver failed")
-			if err == nil {
-				err = apiError
-			}
+		if err == nil {
+			manager.localPool.addEndpointAddress(newObj)
 		}
-		if err != nil {
-			logEntry.WithError(err).Errorf("handler cep update event failed")
-		}
-		manager.handlerUpdateResult(ctx, start, logEntry, err, newObj, resource)
-		cancel()
+		manager.recordEvent(metrics.LabelEventMethodUpdate, start, err, newObj)
 	}()
 
 	// reuse ip when pod rescheduler or recreate
@@ -174,8 +163,9 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 		return nil
 	}
 
-	logEntry.Info("received to update delegate cep")
+	logEntry.Debug("received to update delegate cep")
 
+	var newStatus = &newObj.Status
 	if newStatus.Networking == nil {
 		newStatus.Networking = &ccev2.EndpointNetworking{
 			NodeIP: newNodeName,
@@ -186,108 +176,31 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 	} else if IsFixedIPEndpoint(resource) {
 		err = manager.fixedIPProvider.AllocateIP(ctx, logEntry, newObj)
 	}
-
-	if err != nil || newStatus.Networking == nil || len(newStatus.Networking.Addressing) == 0 {
-		AppendEndpointStatus(newStatus, models.EndpointStateInvalid, models.EndpointStatusChangeCodeFailed)
-		goto update
+	if err != nil {
+		return err
 	}
 
 	if newStatus.State != string(models.EndpointStatePodDeleted) {
 		AppendEndpointStatus(newStatus, models.EndpointStateIPAllocated, models.EndpointStatusChangeCodeOk)
 	}
 
+	if newStatus.Networking == nil || len(newStatus.Networking.Addressing) == 0 {
+		AppendEndpointStatus(newStatus, models.EndpointStateInvalid, models.EndpointStatusChangeCodeFailed)
+		goto update
+	}
 	newStatus.Networking.IPs = newStatus.Networking.Addressing.ToIPsString()
 	newStatus.ExternalIdentifiers = resource.Spec.ExternalIdentifiers
 	newObj.Status = *newStatus
 
 update:
 	// update to k8s apiserver
-	// Note that if writing to apiserver is unsuccessful, it may lead to local IP leakage
-	apiError = wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(context.Context) (bool, error) {
-		// get the latest cep
-		returnObj, apiError = manager.k8sAPI.Lister().CCEEndpoints(newObj.Namespace).Get(newObj.Name)
-		if apiError != nil {
-			return false, fmt.Errorf("get cep %s/%s failed: %v", newObj.Namespace, newObj.Name, apiError)
-		}
-		returnObj = returnObj.DeepCopy()
-
-		// Force the latest state to be written to the object
-		returnObj.Status = *newStatus
-		returnObj, apiError = manager.k8sAPI.UpdateStatus(returnObj)
-		// retry if conflict
-		if errors.IsConflict(apiError) || errors.IsResourceExpired(apiError) {
-			return false, nil
-		}
-		if apiError != nil {
-			logEntry.WithError(apiError).Errorf("update cep failed")
-			return false, apiError
-		}
-
-		return true, apiError
-	})
-	if apiError != nil {
-		logEntry.WithError(apiError).Errorf("update cep failed")
-		return apiError
+	newObj, err = manager.k8sAPI.UpdateStatus(newObj)
+	if err != nil {
+		logEntry.WithError(err).Errorf("update cep failed")
+		return err
 	}
 	logEntry.Infof("success to update cep")
-	newObj = returnObj
-	return apiError
-}
-
-// handlerUpdateResult 是EndpointManager结构体的一个方法，用于处理更新结果的回调函数
-func (manager *EndpointManager) handlerUpdateResult(ctx context.Context, start time.Time, logEntry *logrus.Entry, err error, newObj, oldObj *ccev2.CCEEndpoint) {
-	// case 1: successfully assigned IP, and the new and old IPs are different
-	// The remote IP has been released, so the local IP is directly released
-	if err == nil {
-		manager.localPool.addEndpointAddress(newObj)
-
-		if oldObj.Status.Networking != nil && len(oldObj.Status.Networking.Addressing) > 0 {
-			var oldIPs = map[string]*ccev2.AddressPair{}
-			for i := range oldObj.Status.Networking.Addressing {
-				oldIPs[oldObj.Status.Networking.Addressing[i].IP] = oldObj.Status.Networking.Addressing[i]
-			}
-			for _, existingAddr := range newObj.Status.Networking.Addressing {
-				if _, ok := oldIPs[existingAddr.IP]; ok {
-					delete(oldIPs, existingAddr.IP)
-				}
-			}
-			for _, oldAddr := range oldIPs {
-				manager.localPool.releaseLocalIPs(oldAddr)
-			}
-		}
-	} else {
-		logEntry.WithError(err).Errorf("failed to handle cep update, try to release the allocated IPs")
-		// case 2: failed to assign the new IP, just release the new IPs
-		if oldObj.Status.Networking == nil || len(oldObj.Status.Networking.Addressing) == 0 {
-			if oldObj.Status.Networking == nil || len(oldObj.Status.Networking.Addressing) == 0 {
-				logEntry.Info("cep is not allocated, no need to release the IP")
-				return
-			}
-			operation, err := manager.directIPAllocator.NodeEndpoint(newObj)
-			if err != nil {
-				logEntry.Errorf("can not gc the allocated failture, failed to get node endpoint %v", err)
-			}
-			action := &DirectIPAction{
-				NodeName:   newObj.Spec.Network.IPAllocation.NodeIP,
-				Owner:      newObj.Namespace + "/" + newObj.Name,
-				Addressing: newObj.Status.Networking.Addressing,
-			}
-			err = operation.DeleteIP(ctx, action)
-			if err != nil {
-				logEntry.WithField("addrs", logfields.Repr(newObj.Status.Networking.Addressing)).
-					WithError(err).
-					Errorf("release the allocated IPs failed")
-			}
-
-			logEntry.WithField("addrs", logfields.Repr(newObj.Status.Networking.Addressing)).Info("release the allocated IPs success")
-			if newObj.Status.Networking != nil && len(newObj.Status.Networking.Addressing) > 0 {
-				for _, newAddr := range newObj.Status.Networking.Addressing {
-					manager.localPool.releaseLocalIPs(newAddr)
-				}
-			}
-		}
-	}
-	manager.recordEvent(metrics.LabelEventMethodUpdate, start, err, newObj)
+	return err
 }
 
 // Delete removes the endpoint from the endpointMap
@@ -371,7 +284,7 @@ func (manager *EndpointManager) Resync(ctx context.Context) error {
 }
 
 // gcLocalFixedEndpointTTL delete fixed ip endpoint when ttl is expired
-func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
+func (e *EndpointManager) gcLocalFixedEndpointTTL() {
 	var (
 		logEntry = managerLog.WithFields(logrus.Fields{
 			logfields.LogSubsys: "EndpointManager",
@@ -380,7 +293,7 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 		epToDelete []*ccev2.CCEEndpoint
 	)
 	// for each all endpoints to check endpoint ttl
-	ceps, err := manager.k8sAPI.Lister().CCEEndpoints(metav1.NamespaceAll).List(labels.Everything())
+	ceps, err := e.k8sAPI.Lister().CCEEndpoints(metav1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		logEntry.WithError(err).Error("failed to get ceps")
 		return
@@ -395,7 +308,11 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL {
 			continue
 		}
-
+		// if endpoint is not reused ip mode, skip it
+		if cep.Spec.Network.IPAllocation.Type == ccev2.IPAllocTypeElastic &&
+			cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted == nil {
+			continue
+		}
 		// if endpoint is not fixed ip mode, skip it
 		if cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeElastic &&
 			cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeFixed {
@@ -409,21 +326,13 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 		})
 		// repair endpoint status for endpoint is 'deleted' while pod is 'running'
 		// BUG: may cause by operator and agent update endpoint currently
-		if manager.repairEPState(cep, log) {
+		if e.repairEPState(cep, log) {
 			continue
 		}
 
-		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL ||
-			cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeElastic {
+		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL {
 			continue
 		}
-
-		// if endpoint is not reused ip mode, skip it
-		if cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted == nil {
-			expireDuration := int64(operatorOption.Config.FixedIPTTL.Seconds())
-			cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &expireDuration
-		}
-
 		if cep.Status.State == string(models.EndpointStatePodDeleted) {
 			if len(cep.Status.Log) == 0 {
 				log.Warningf("gc fixed ip failed, no controller log in endpoint status")
@@ -452,7 +361,7 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 
 	// delete ip in cloud provider and endpoint in k8s
 	for _, cep := range epToDelete {
-		err := manager.k8sAPI.Delete(cep.Namespace, cep.Name)
+		err := e.k8sAPI.Delete(cep.Namespace, cep.Name)
 		logEntry.WithFields(logrus.Fields{
 			"namespace": cep.Namespace,
 			"name":      cep.Name,
@@ -462,7 +371,7 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 }
 
 // repairEPState repair endpoint state
-func (manager *EndpointManager) repairEPState(old *ccev2.CCEEndpoint, log *logrus.Entry) bool {
+func (e *EndpointManager) repairEPState(old *ccev2.CCEEndpoint, log *logrus.Entry) bool {
 	log = log.WithFields(logrus.Fields{
 		"step": "repair",
 	})
@@ -495,17 +404,17 @@ func (manager *EndpointManager) repairEPState(old *ccev2.CCEEndpoint, log *logru
 		if !AppendEndpointStatus(&newE.Status, newStatus, models.EndpointStatusChangeCodeOk) {
 			return false
 		}
-		_, err := manager.k8sAPI.Update(newE)
+		_, err := e.k8sAPI.Update(newE)
 		log.WithError(err).Info("try to repair fixed endpoint")
 	}
 	return needUpdate
 }
 
-func (manager *EndpointManager) recordEvent(op string, start time.Time, err error, obj *ccev2.CCEEndpoint) {
+func (e *EndpointManager) recordEvent(op string, start time.Time, err error, obj *ccev2.CCEEndpoint) {
 	errstr := metrics.LabelValueOutcomeSuccess
 	if err != nil {
 		errstr = metrics.LabelError
-		manager.eventRecorder.Eventf(obj, corev1.EventTypeWarning, "HandlerCEPFailed", "failed to handler cep %s: %v", op, err.Error())
+		e.eventRecorder.Eventf(obj, corev1.EventTypeWarning, "HandlerCEPFailed", "failed to handler cep %s: %v", op, err.Error())
 	}
 	operatorMetrics.ControllerHandlerDurationMilliseconds.WithLabelValues(operatorOption.Config.CCEClusterID, operatorName, op, errstr).Observe(float64(time.Since(start).Milliseconds()))
 }

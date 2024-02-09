@@ -16,7 +16,6 @@ const (
 func StartWatchers(stopCh <-chan struct{}) {
 	k8s.WatcherClient().Informers.Core().V1().Pods().Informer()
 	k8s.WatcherClient().Informers.Core().V1().Nodes().Informer()
-	k8s.WatcherClient().Informers.Core().V1().Namespaces().Informer()
 
 	initNodePodStore()
 
@@ -27,7 +26,6 @@ func StartWatchers(stopCh <-chan struct{}) {
 
 	k8s.CCEClient().Informers.Cce().V1().Subnets().Informer()
 	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
-	k8s.CCEClient().Informers.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer()
 
 	k8s.WatcherClient().Informers.Start(stopCh)
 	k8s.CCEClient().Informers.Start(stopCh)

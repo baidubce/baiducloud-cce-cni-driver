@@ -23,8 +23,6 @@ import (
 	fakeccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v1/fake"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2"
 	fakeccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2/fake"
-	ccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2alpha1"
-	fakeccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2alpha1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
@@ -85,11 +83,6 @@ var (
 // CceV2 retrieves the CceV2Client
 func (c *Clientset) CceV2() ccev2.CceV2Interface {
 	return &fakeccev2.FakeCceV2{Fake: &c.Fake}
-}
-
-// CceV2alpha1 retrieves the CceV2alpha1Client
-func (c *Clientset) CceV2alpha1() ccev2alpha1.CceV2alpha1Interface {
-	return &fakeccev2alpha1.FakeCceV2alpha1{Fake: &c.Fake}
 }
 
 // CceV1 retrieves the CceV1Client

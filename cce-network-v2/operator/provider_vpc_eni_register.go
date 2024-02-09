@@ -34,10 +34,10 @@ func init() {
 	subnetSyncerProviders[ipamOption.IPAMVpcEni] = &bcesync.VPCSubnetSyncher{}
 	eniSyncerProviders[ipamOption.IPAMVpcEni] = &bcesync.VPCENISyncer{}
 
-	registerVpcEniFlags()
+	registerFlags()
 }
 
-func registerVpcEniFlags() {
+func registerFlags() {
 	flags := rootCmd.Flags()
 
 	flags.String(operatorOption.BCECloudAccessKey, "", "BCE OpenApi AccessKeyID.")
@@ -58,14 +58,17 @@ func registerVpcEniFlags() {
 	flags.String(operatorOption.BCECloudVPCID, "", "vpc id")
 	option.BindEnv(operatorOption.BCECloudVPCID)
 
-	flags.Duration(option.ResourceResyncInterval, operatorOption.DefaultResourceResyncInterval, "synchronization cycle of vpc resources, such as subnet and ENI")
-	option.BindEnv(option.ResourceResyncInterval)
+	flags.Duration(operatorOption.ResourceResyncInterval, operatorOption.DefaultResourceResyncInterval, "synchronization cycle of vpc resources, such as subnet and ENI")
+	option.BindEnv(operatorOption.ResourceResyncInterval)
 
 	flags.String(operatorOption.CCEClusterID, "", "cluster id defined in CCE")
 	option.BindEnv(operatorOption.CCEClusterID)
 
 	flags.Duration(operatorOption.ResourceENIResyncInterval, 60*time.Second, "Interval to resync eni resources")
 	option.BindEnv(operatorOption.ResourceENIResyncInterval)
+
+	flags.Int(operatorOption.BCECustomerMaxENI, 0, "max eni number for customer")
+	option.BindEnv(operatorOption.BCECustomerMaxENI)
 
 	flags.Int(operatorOption.BCECustomerMaxIP, 0, "max ip number of eni for customer")
 	option.BindEnv(operatorOption.BCECustomerMaxIP)

@@ -243,18 +243,6 @@ func initializeFlags() {
 	flags.String(option.IPAM, ipamOption.IPAMClusterPool, "Backend to use for IPAM")
 	option.BindEnv(option.IPAM)
 
-	flags.Int(option.IPPoolMinAllocateIPs, 2,
-		"MinAllocate is the minimum number of IPs that must be allocated when the node is first bootstrapped.")
-	option.BindEnv(option.IPPoolMinAllocateIPs)
-
-	flags.Int(option.IPPoolPreAllocate, 2,
-		"PreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec. ")
-	option.BindEnv(option.IPPoolPreAllocate)
-
-	flags.Int(option.IPPoolMaxAboveWatermark, 2,
-		"MaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark.")
-	option.BindEnv(option.IPPoolMaxAboveWatermark)
-
 	flags.String(option.IPv4Range, AutoCIDR, "Per-node IPv4 endpoint prefix, e.g. 10.16.0.0/16")
 	option.BindEnv(option.IPv4Range)
 
@@ -427,16 +415,8 @@ func initializeFlags() {
 	flags.String(option.WriteCNIConfigurationWhenReady, "", fmt.Sprintf("Write the CNI configuration as specified via --%s to path when agent is ready", option.ReadCNIConfiguration))
 	option.BindEnv(option.WriteCNIConfigurationWhenReady)
 
-	flags.Bool(option.OverwriteCNIConfigurationWhenStart, true, "Overwrite the CNI configuration when agent starts")
-	option.BindEnv(option.OverwriteCNIConfigurationWhenStart)
-
 	flags.Duration(option.K8sHeartbeatTimeout, 30*time.Second, "Configures the timeout for api-server heartbeat, set to 0 to disable")
 	option.BindEnv(option.K8sHeartbeatTimeout)
-
-	flags.Float32(option.K8sClientQPSLimit, defaults.K8sClientQPSLimit, "Queries per second limit for the K8s client")
-	option.BindEnv(option.K8sClientQPSLimit)
-	flags.Int(option.K8sClientBurst, defaults.K8sClientBurst, "Burst value allowed for the K8s client")
-	option.BindEnv(option.K8sClientBurst)
 
 	flags.String(option.LocalRouterIPv4, "", "Link-local IPv4 used for CCE's router devices")
 	option.BindEnv(option.LocalRouterIPv4)
@@ -491,15 +471,6 @@ func initializeFlags() {
 	flags.StringSlice(option.ENIEnterpriseSecurityGroupIds, []string{}, "enterprise security group ids")
 	option.BindEnv(option.ENIEnterpriseSecurityGroupIds)
 
-	flags.Bool(option.EnableBandwidthManager, true, "enable bandwidth manager")
-	option.BindEnv(option.EnableBandwidthManager)
-
-	flags.Bool(option.EnableEgressPriority, true, "enable engress priority")
-	option.BindEnv(option.EnableEgressPriority)
-
-	flags.Bool(option.EnableEgressPriorityDSCP, false, "enable engress priority by dscp")
-	option.BindEnv(option.EnableEgressPriorityDSCP)
-
 	viper.BindPFlags(flags)
 }
 
@@ -524,7 +495,7 @@ func initEnv(cmd *cobra.Command) {
 	// Configure k8s as soon as possible so that k8s.IsEnabled() has the right
 	// behavior.
 	bootstrapStats.k8sInit.Start()
-	k8s.Configure(option.Config.K8sAPIServer, option.Config.K8sKubeConfigPath, float32(option.Config.K8sClientQPSLimit), option.Config.K8sClientBurst)
+	k8s.Configure(option.Config.K8sAPIServer, option.Config.K8sKubeConfigPath, defaults.K8sClientQPSLimit, defaults.K8sClientBurst)
 	bootstrapStats.k8sInit.End(true)
 
 	for _, grp := range option.Config.DebugVerbose {
@@ -678,23 +649,14 @@ func runDaemon() {
 	log.WithField("bootstrapTime", time.Since(bootstrapTimestamp)).
 		Info("Daemon initialization completed")
 
-	firstWriteCNIConfig := false
-	if option.Config.OverwriteCNIConfigurationWhenStart {
-		firstWriteCNIConfig = true
-	}
 	if option.Config.WriteCNIConfigurationWhenReady != "" {
 		d.controllers.UpdateController(cniUpdateControllerName, controller.ControllerParams{
 			RunInterval: option.Config.ResourceResyncInterval,
 			DoFunc: func(ctx context.Context) error {
-				// Overwrite the CNI configuration when agent starts, so we should skip read config file which has been existed.
-				if !firstWriteCNIConfig {
-					_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
-					if err == nil {
-						return nil
-					}
+				_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
+				if err == nil {
+					return nil
 				}
-				firstWriteCNIConfig = false
-
 				input, err := os.ReadFile(option.Config.ReadCNIConfiguration)
 				if err != nil {
 					log.WithError(err).Fatal("Unable to read CNI configuration file")
@@ -770,6 +732,5 @@ func (d *Daemon) instantiateAPI() *restapi.CceAPIAPI {
 
 	// endpoints
 	restAPI.EndpointGetEndpointExtpluginStatusHandler = NewGetEndpointExtpluginStatusHandler(d)
-	restAPI.EndpointPutEndpointProbeHandler = NewPutEndpointProbeHandler(d)
 	return restAPI
 }

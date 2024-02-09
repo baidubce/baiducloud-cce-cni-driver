@@ -104,11 +104,11 @@ extplugins: {}
 # cce守护进程配置
 ccedConfig:
   # 开启debug模式(会多打日志)
-  debug: false
+  debug: true
   # 在非k8s环境运行使用
   # k8s-kubeconfig-path: /run/kubeconfig
-  k8s-client-burst: 100
-  k8s-client-qps: 50
+  k8s-client-burst: 10
+  k8s-client-qps: 5
   k8s-api-discovery: false
   leader-election-lease-duration: 60s
   leader-election-renew-deadline: 30s
@@ -140,7 +140,6 @@ ccedConfig:
   # cni 配置，从指定文件读取，写入到另一个路径
   read-cni-conf: ""
   write-cni-conf-when-ready: ""
-  overwrite-cni-conf: true
 
 
   # ipam 模式. privatecloudbase: 私有云底座;vpc-eni: BCE VPC ENI
@@ -162,13 +161,10 @@ ccedConfig:
   cce-cluster-id: ""
   # vpc 资源同步周期
   resource-resync-interval: 20s
-  # ipam 并发工作协程数
-  parallel-alloc-workers: 500
-  # 资源重新同步的并发协程数
-  resource-resync-workers: 64
 
   # operator BCE VPC 配置
   # vpc id
+
   bce-cloud-vpc-id: "" 
   bce-cloud-access-key: ""
   bce-cloud-secure-key: ""
@@ -188,23 +184,23 @@ ccedConfig:
   eni-enterprise-security-group-ids: ""
   eni-pre-allocate-num: 1
   eni-route-table-offset: 127
-
   # IP池设置
-  ippool-min-allocate-ips: 2
-  # 每个节点缓存的IP数量
-  ippool-pre-allocate-ips: 2
-  ippool-max-above-watermark: 2
+  ippool:
+    enabled: true
+    minAllocate: 2
+    preAllocate: 2
+    maxAboveWatermark: 2
 
   # api 限流配置
-  default-api-burst: 5
-  default-api-qps: 5
+  default-api-burst: 1
+  default-api-qps: 1
   default-api-timeout: 30s
   api-rate-limit:
     # bce api 限流
     bcecloud/apis/v1/BatchAddPrivateIP: "rate-limit:5/1s,rate-burst:10,max-wait-duration:15s,parallel-requests:5,log:true"
     bcecloud/apis/v1/BatchDeletePrivateIP: "rate-limit:5/1s,rate-burst:10,max-wait-duration:15s,parallel-requests:5,log:true"
-    bcecloud/apis/v1/AttachENI: "rate-limit:5/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:5,log:true"
-    bcecloud/apis/v1/CreateENI: "rate-limit:5/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:5,log:true"
-    bcecloud/apis/v1/DescribeSubnet: "rate-limit:5/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:5"
+    bcecloud/apis/v1/AttachENI: "rate-limit:1/1s,rate-burst:2,max-wait-duration:30s,parallel-requests:1,log:true"
+    bcecloud/apis/v1/CreateENI: "rate-limit:1/1s,rate-burst:2,max-wait-duration:30s,parallel-requests:1,log:true"
+    bcecloud/apis/v1/DescribeSubnet: "rate-limit:3/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:3"
     bcecloud/apis/v1/StatENI: "rate-limit:10/1s,rate-burst:15,max-wait-duration:30s,parallel-requests:10"
     # cni 接口限流

@@ -33,15 +33,6 @@ host-local IPAM插件可用于为容器分配IP地址。
 	},
 	"dns": {
 		"nameservers": [ "10.1.1.1", "8.8.8.8" ]
-	},
-	"capabilities": {
-		"bandwidth": {
-			"enable": true,
-			"mode": "tc"
-		},
-		"bpf-netns-allerate":{
-			"enable": true
-		}
 	}
 }
 ```

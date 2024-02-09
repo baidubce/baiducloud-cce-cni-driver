@@ -36,10 +36,17 @@ import (
 func GetEndpointCrossCache(ctx context.Context, cceEndpointClient *watchers.CCEEndpointClient, namespace string, name string) (*ccev2.CCEEndpoint, error) {
 	oldEP, err := cceEndpointClient.Get(namespace, name)
 
-	if kerrors.IsNotFound(err) {
-		return nil, nil
+	if err != nil {
+		oldEP, err = cceEndpointClient.CCEEndpoints(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if kerrors.IsNotFound(err) {
+				oldEP = nil
+			} else {
+				return nil, fmt.Errorf("get endpoint object error %w", err)
+			}
+		}
 	}
-	return oldEP, err
+	return oldEP, nil
 }
 
 // NewEndpointTemplate create a Elastic CCE Endpoint
@@ -48,10 +55,9 @@ func NewEndpointTemplate(containerID, netnsPath string, pod *corev1.Pod) *ccev2.
 	name := pod.Name
 	newEP := &ccev2.CCEEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   namespace,
-			Name:        name,
-			Labels:      pod.Labels,
-			Annotations: pod.Annotations,
+			Namespace: namespace,
+			Name:      name,
+			Labels:    pod.Labels,
 		},
 		Spec: ccev2.EndpointSpec{
 			ExternalIdentifiers: &models.EndpointIdentifiers{
@@ -77,10 +83,6 @@ func NewEndpointTemplate(containerID, netnsPath string, pod *corev1.Pod) *ccev2.
 		newEP.Labels = make(map[string]string)
 	}
 	newEP.Labels[k8s.LabelNodeName] = nodeTypes.GetName()
-
-	if newEP.Annotations == nil {
-		newEP.Annotations = make(map[string]string)
-	}
 	return newEP
 }
 
@@ -134,7 +136,7 @@ func DeleteEndpointAndWait(ctx context.Context, cceEndpointClient *watchers.CCEE
 		return nil
 	}
 	err = cceEndpointClient.CCEEndpoints(oldEP.Namespace).Delete(ctx, oldEP.Name, metav1.DeleteOptions{})
-	if err != nil && !kerrors.IsNotFound(err) {
+	if err != nil {
 		return fmt.Errorf("delete endpoint error: %w", err)
 	}
 	err = wait.PollImmediateUntilWithContext(ctx, time.Second/2, func(context.Context) (done bool, err error) {

@@ -52,26 +52,6 @@ type FakeBceCloud struct {
 	bbcConfig *apiConfig
 }
 
-// BCCBatchAddIP implements cloud.Interface.
-func (*FakeBceCloud) BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs) (*bccapi.BatchAddIpResponse, error) {
-	panic("unimplemented")
-}
-
-// BCCBatchDelIP implements cloud.Interface.
-func (*FakeBceCloud) BCCBatchDelIP(ctx context.Context, args *bccapi.BatchDelIpArgs) error {
-	panic("unimplemented")
-}
-
-// ListBCCInstanceEni implements cloud.Interface.
-func (*FakeBceCloud) ListBCCInstanceEni(ctx context.Context, instanceID string) ([]bccapi.Eni, error) {
-	panic("unimplemented")
-}
-
-// GetENIQuota implements cloud.Interface.
-func (*FakeBceCloud) GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQuoteInfo, error) {
-	panic("unimplemented")
-}
-
 // BindENIPublicIP implements cloud.Interface
 func (*FakeBceCloud) BindENIPublicIP(ctx context.Context, privateIP string, publicIP string, eniID string) error {
 	panic("unimplemented")

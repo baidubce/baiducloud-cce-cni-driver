@@ -70,11 +70,6 @@ const (
 	GetHPCEniID                = "bcecloud/apis/v1/GetHPCEniID"
 	BatchDeleteHpcEniPrivateIP = "bcecloud/apis/v1/BatchDeleteHpcEniPrivateIP"
 	BatchAddHpcEniPrivateIP    = "bcecloud/apis/v1/BatchAddHpcEniPrivateIP"
-
-	// BCC primary interface API
-	BCCListENIs   = "bcecloud/bcc/apis/v2/eni/{instanceID}"
-	BCCBatchAddIP = "bcecloud/bcc/apis/v2/instance/batchAddIp"
-	BCCBatchDelIP = "bcecloud/bcc/apis/v2/instance/batchDelIp"
 )
 
 var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
@@ -126,29 +121,6 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 		RateLimit:        1,
 		RateBurst:        1,
 		ParallelRequests: 1,
-		MaxWaitDuration:  30 * time.Second,
-		Log:              false,
-	},
-
-	// for bcc eni
-	BCCListENIs: {
-		RateLimit:        5,
-		RateBurst:        5,
-		ParallelRequests: 5,
-		MaxWaitDuration:  30 * time.Second,
-		Log:              false,
-	},
-	BCCBatchAddIP: {
-		RateLimit:        5,
-		RateBurst:        5,
-		ParallelRequests: 5,
-		MaxWaitDuration:  30 * time.Second,
-		Log:              false,
-	},
-	BCCBatchDelIP: {
-		RateLimit:        5,
-		RateBurst:        5,
-		ParallelRequests: 5,
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
 	},
@@ -209,39 +181,6 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 type flowControlClient struct {
 	client  Interface
 	limiter rate.ServiceLimiterManager
-}
-
-// BCCBatchAddIP implements Interface.
-func (fc *flowControlClient) BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs) (*bccapi.BatchAddIpResponse, error) {
-	req, err := fc.limiter.Wait(ctx, BCCBatchAddIP)
-	if err != nil {
-		return nil, err
-	}
-	ret, err := fc.client.BCCBatchAddIP(ctx, args)
-	req.Error(err)
-	return ret, err
-}
-
-// BCCBatchDelIP implements Interface.
-func (fc *flowControlClient) BCCBatchDelIP(ctx context.Context, args *bccapi.BatchDelIpArgs) error {
-	req, err := fc.limiter.Wait(ctx, BCCBatchDelIP)
-	if err != nil {
-		return err
-	}
-	err = fc.client.BCCBatchDelIP(ctx, args)
-	req.Error(err)
-	return err
-}
-
-// ListBCCInstanceEni implements Interface.
-func (fc *flowControlClient) ListBCCInstanceEni(ctx context.Context, instanceID string) ([]bccapi.Eni, error) {
-	req, err := fc.limiter.Wait(ctx, BCCListENIs)
-	if err != nil {
-		return nil, err
-	}
-	ret, err := fc.client.ListBCCInstanceEni(ctx, instanceID)
-	req.Error(err)
-	return ret, err
 }
 
 // NewFlowControlClient returns a client with flow control.
@@ -613,17 +552,6 @@ func (fc *flowControlClient) StatENI(ctx context.Context, eniID string) (*eni.En
 		return nil, err
 	}
 	ret, err := fc.client.StatENI(ctx, eniID)
-	req.Error(err)
-	return ret, err
-}
-
-// GetENIQuota implements Interface.
-func (fc *flowControlClient) GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQuoteInfo, error) {
-	req, err := fc.limiter.Wait(ctx, StatENI)
-	if err != nil {
-		return nil, err
-	}
-	ret, err := fc.client.GetENIQuota(ctx, instanceID)
 	req.Error(err)
 	return ret, err
 }

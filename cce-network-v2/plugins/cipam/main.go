@@ -26,8 +26,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netns"
-	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	gops "github.com/google/gops/agent"
 	"github.com/google/uuid"
@@ -96,14 +94,8 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 	result := &current.Result{CNIVersion: current.ImplementedSpecVersion}
 	result.Interfaces = []*current.Interface{{Name: args.IfName, Sandbox: args.Netns}}
 
-	nns, err := ns.GetNS(args.Netns)
-	nns.Path()
-	ns, err := netns.GetProcNSPath(args.Netns)
-	if err != nil {
-		ns = args.Netns
-	}
 	var releaseIPsFunc func(context.Context)
-	ipam, releaseIPsFunc, err = allocateIPsWithCCEAgent(c, cniArgs, args.ContainerID, ns)
+	ipam, releaseIPsFunc, err = allocateIPsWithCCEAgent(c, cniArgs, args.ContainerID, args.Netns)
 
 	// release addresses on failure
 	defer func() {
@@ -198,7 +190,7 @@ func allocateIPsWithCCEAgent(client *client.Client, cniArgs plugintypes.ArgsSpec
 	}
 
 	if ipam.Address == nil {
-		return nil, nil, fmt.Errorf("invalid IPAM response, missing addressing")
+		return nil, nil, fmt.Errorf("Invalid IPAM response, missing addressing")
 	}
 
 	releaseFunc := func(context.Context) {

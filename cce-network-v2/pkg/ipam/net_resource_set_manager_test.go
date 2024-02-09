@@ -244,14 +244,14 @@ func (k *k8sMock) Lister() listerv2.NetResourceSetLister {
 func newNetResourceSet(node string, preAllocate, minAllocate, used int) *v2.NetResourceSet {
 	cn := &v2.NetResourceSet{
 		ObjectMeta: metav1.ObjectMeta{Name: node, Namespace: "default"},
-		Spec: v2.NetResourceSpec{
+		Spec: v2.NodeSpec{
 			IPAM: ipamTypes.IPAMSpec{
 				Pool:        ipamTypes.AllocationMap{},
 				PreAllocate: preAllocate,
 				MinAllocate: minAllocate,
 			},
 		},
-		Status: v2.NetResourceStatus{
+		Status: v2.NodeStatus{
 			IPAM: ipamTypes.IPAMStatus{
 				Used:       ipamTypes.AllocationMap{},
 				ReleaseIPs: map[string]ipamTypes.IPReleaseStatus{},

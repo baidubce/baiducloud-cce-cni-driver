@@ -3,7 +3,7 @@
 
 include ../Makefile.defs
 
-TARGETS := enim exclusive-device sbr-eip cipam cptp endpoint-probe
+TARGETS := enim exclusive-device sbr-eip cipam cptp
 
 .PHONY: all $(TARGETS) clean install
 
@@ -19,7 +19,7 @@ $(TARGET):
 
 clean:
 	@$(ECHO_CLEAN)
-	$(foreach target,$(TARGETS), $(QUIET)rm -f $(PWD)/output/bin/plugins/$(target))
+	$(QUIET)rm -f $(TARGETS)
 	$(GO) clean $(GOCLEAN)
 
 install:

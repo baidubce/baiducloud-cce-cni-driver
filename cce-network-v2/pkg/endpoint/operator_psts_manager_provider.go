@@ -23,7 +23,6 @@ import (
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/pststrategy"
 	"github.com/sirupsen/logrus"
 )
 
@@ -65,8 +64,6 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		}
 	)
 	log = log.WithField("psts", resource.Spec.Network.IPAllocation.PSTSName).WithField("endpoint", owner)
-	log.Info("start allocate ip from psts")
-
 	psts, err := provider.pstsLister.PodSubnetTopologySpreads(resource.Namespace).Get(resource.Spec.Network.IPAllocation.PSTSName)
 	if err != nil {
 		log.Errorf("failed to get psts: %v", err)
@@ -84,7 +81,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		if err != nil {
 			return err
 		}
-		if pststrategy.EnableReuseIPPSTS(psts) {
+		if psts.Spec.Strategy != nil && psts.Spec.Strategy.EnableReuseIPAddress {
 			// allocate ip from local pool
 			localAllocator := &localAllocator{
 				localPool: provider.localPool,
@@ -99,7 +96,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 			}
 			releaseIPFuncs = append(releaseIPFuncs, release...)
 			log = log.WithField("ipv4", logfields.Repr(ipv4Address)).WithField("ipv6", logfields.Repr(ipv6Address))
-			log.WithField("step", "allocate local ip").Info("allocate local ip success")
+			log.WithField("step", "allocate local ip").Debug("allocate local ip success")
 
 			if ipv4Address != nil {
 				action.Addressing = append(action.Addressing, ipv4Address)
@@ -125,19 +122,17 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 			}
 		}
 	}()
-	log = log.WithField("step", "allocate remote psts ip").
+	log = log.WithField("step", "allocate remote ip").
 		WithField("action", logfields.Repr(action))
-
 	err = operation.AllocateIP(ctx, action)
+
 	if err != nil {
-		log.WithError(err).Errorf("failed to allocate psts ip")
+		log.Errorf("failed to allocate ip: %v", err)
 		return err
 	}
-
-	log.Info("allocate remote psts ip success")
+	log.Debug("allocate remote ip success")
 
 	status.Networking.Addressing = action.Addressing
-	status.NodeSelectorRequirement = action.NodeSelectorRequirement
 	return nil
 }
 

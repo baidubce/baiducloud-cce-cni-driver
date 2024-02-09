@@ -19,8 +19,8 @@ package v2
 
 type CCEEndpointExpansion interface{}
 
-type ENIExpansion interface{}
-
 type NetResourceSetExpansion interface{}
+
+type ENIExpansion interface{}
 
 type PodSubnetTopologySpreadExpansion interface{}

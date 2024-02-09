@@ -27,13 +27,13 @@ import (
 // these are implemented by e.g. pkg/ipam/allocator/{aws,azure}.
 type AllocatorProvider interface {
 	Init(ctx context.Context) error
-	Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (NetResourceSetEventHandler, error)
+	Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (NodeEventHandler, error)
 }
 
-// NetResourceSetEventHandler should implement the behavior to handle NetResourceSet
-type NetResourceSetEventHandler interface {
+// NodeEventHandler should implement the behavior to handle NetResourceSet
+type NodeEventHandler interface {
 	Create(resource *v2.NetResourceSet) error
 	Update(resource *v2.NetResourceSet) error
-	Delete(netResourceSetName string) error
+	Delete(nodeName string) error
 	Resync(context.Context, time.Time)
 }

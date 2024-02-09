@@ -61,10 +61,6 @@ const (
 	LabelAvailableZone = "cce.baidubce.com/available-zone"
 	LabelRegion        = "topology.kubernetes.io/region"
 	LabelZone          = "topology.kubernetes.io/zone"
-
-	// LabelOwnerByReference this label is used to mark the owner of the resource.
-	// for example, if a psts is created by a cpsts, the label will be set to
-	LabelOwnerByReference = CCEPrefix + "owner-by-reference"
 )
 
 var (

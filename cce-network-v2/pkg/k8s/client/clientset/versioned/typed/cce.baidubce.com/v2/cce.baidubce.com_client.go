@@ -28,8 +28,8 @@ import (
 type CceV2Interface interface {
 	RESTClient() rest.Interface
 	CCEEndpointsGetter
-	ENIsGetter
 	NetResourceSetsGetter
+	ENIsGetter
 	PodSubnetTopologySpreadsGetter
 }
 
@@ -42,12 +42,12 @@ func (c *CceV2Client) CCEEndpoints(namespace string) CCEEndpointInterface {
 	return newCCEEndpoints(c, namespace)
 }
 
-func (c *CceV2Client) ENIs() ENIInterface {
-	return newENIs(c)
-}
-
 func (c *CceV2Client) NetResourceSets() NetResourceSetInterface {
 	return newNetResourceSets(c)
+}
+
+func (c *CceV2Client) ENIs() ENIInterface {
+	return newENIs(c)
 }
 
 func (c *CceV2Client) PodSubnetTopologySpreads(namespace string) PodSubnetTopologySpreadInterface {

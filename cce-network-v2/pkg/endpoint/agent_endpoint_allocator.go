@@ -162,7 +162,7 @@ func isSameContainerID(oldEP *ccev2.CCEEndpoint, containerID string) bool {
 
 // ADD allocates an IP for the given owner and returns the allocated IP.
 func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
-	namespace, podName, err := cache.SplitMetaNamespaceKey(owner)
+	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,7 +171,7 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		ctx, cancelFun = context.WithTimeout(logfields.NewContext(), e.c.GetFixedIPTimeout())
 		logEntry       = allocatorLog.WithFields(logrus.Fields{
 			"namespace":   namespace,
-			"name":        podName,
+			"name":        name,
 			"module":      "AllocateNext",
 			"ipv4":        logfields.Repr(ipv4Result),
 			"ipv6":        logfields.Repr(ipv6Result),
@@ -181,11 +181,11 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		psts *ccev2.PodSubnetTopologySpread
 		pod  *corev1.Pod
 	)
-	logEntry.Debug("start cni ADD")
+	logEntry.Debug("start cni add")
 
 	defer func() {
 		if err != nil {
-			logEntry.WithError(err).Error("cni ADD error")
+			logEntry.WithError(err).Error("cni add error")
 			return
 		}
 		cancelFun()
@@ -195,19 +195,19 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		if ipv6Result != nil {
 			logEntry = logEntry.WithField("ipv6", ipv6Result.IP.String())
 		}
-		logEntry.Infof("cni ADD success")
+		logEntry.Infof("cni add success")
 	}()
 
-	pod, err = e.podClient.Get(namespace, podName)
+	pod, err = e.podClient.Get(namespace, name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, podName, err)
+		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, name, err)
 	}
 
 	isFixedPod := k8s.HaveFixedIPLabel(&pod.ObjectMeta)
 	// warning: old wep use node selector,
 	// So here oldWEP from the cache may not exist,
 	// we need to retrieve it from the api-server
-	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, podName)
+	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, name)
 	if err != nil {
 		return
 	}
@@ -445,6 +445,12 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 			return nil, fmt.Errorf("psts name is not equal for reuse ip mode, old: %s, new: %s, please delete this cep object", oldEP.Spec.Network.IPAllocation.PSTSName, psts.Name)
 		}
 		return e.createReuseIPEndpoint(ctx, newEP, oldEP)
+	} else if oldEP == nil {
+		// create endpoint spec, Waiting for status updates
+		ep, err = e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("create endpoint error: %w", err)
+		}
 	} else {
 		// cross subnet, delete old endpoint
 		err = DeleteEndpointAndWait(ctx, e.cceEndpointClient, oldEP)
@@ -452,33 +458,12 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 			return nil, fmt.Errorf("wait endpoint delete error: %w", err)
 		}
 		// create endpoint spec, Waiting for status updates
-		ep, err = recreateCEP(ctx, e.cceEndpointClient, newEP)
-	}
-	return ep, err
-}
-
-func recreateCEP(ctx context.Context, cceEndpointClient *watchers.CCEEndpointClient, newEP *ccev2.CCEEndpoint) (*ccev2.CCEEndpoint, error) {
-	// create endpoint spec, Waiting for status updates
-	ep, err := cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
-	if err != nil {
-		if kerrors.IsAlreadyExists(err) {
-			goto recreate
-		} else {
+		ep, err = e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
+		if err != nil {
 			return nil, fmt.Errorf("create endpoint error: %w", err)
 		}
 	}
 	return ep, err
-
-recreate:
-	err = DeleteEndpointAndWait(ctx, cceEndpointClient, newEP)
-	if err != nil {
-		return nil, fmt.Errorf("wait endpoint delete error: %w", err)
-	}
-	ep, err = cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("create endpoint error: %w", err)
-	}
-	return ep, nil
 }
 
 // createFixedEndpoint create or update a fixed CCEEndpoint
@@ -526,7 +511,7 @@ func (e *EndpointAllocator) createDynamicEndpoint(ctx context.Context, newEP *cc
 	newEP.Status.Networking.IPs = newEP.Status.Networking.Addressing.ToIPsString()
 
 	AppendEndpointStatus(&newEP.Status, models.EndpointStateIPAllocated, models.EndpointStatusChangeCodeOk)
-	_, err := recreateCEP(ctx, e.cceEndpointClient, newEP)
+	_, err := e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
 	if err != nil {
 		if ipv4Result != nil {
 			_ = e.dynamicIPAM.ReleaseIPString(ipv4Result.IP.String())
@@ -655,7 +640,7 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		if ip != "" {
 			err = e.dynamicIPAM.ReleaseIPString(ip)
 			if err != nil {
-				logEntry.WithField("err", err).Warningf("failed to release ip %s", ip)
+				logEntry.Warningf("failed to release ip %s", ip)
 			}
 		}
 	}

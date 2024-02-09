@@ -85,7 +85,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			args: args{
 				node: &v2.NetResourceSet{
 					ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-					Spec: v2.NetResourceSpec{
+					Spec: v2.NodeSpec{
 						IPAM: ipamTypes.IPAMSpec{
 							PodCIDRs: []string{
 								"10.10.1.0/24",
@@ -93,7 +93,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 							},
 						},
 					},
-					Status: v2.NetResourceStatus{
+					Status: v2.NodeStatus{
 						IPAM: ipamTypes.IPAMStatus{
 							PodCIDRs: ipamTypes.PodCIDRMap{
 								"10.10.1.0/24": {Status: ipamTypes.PodCIDRStatusReleased},
@@ -105,7 +105,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			},
 			wantNetResourceSet: &v2.NetResourceSet{
 				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-				Spec: v2.NetResourceSpec{
+				Spec: v2.NodeSpec{
 					IPAM: ipamTypes.IPAMSpec{
 						PodCIDRs: []string{
 							"10.10.2.0/24",
@@ -113,7 +113,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 						},
 					},
 				},
-				Status: v2.NetResourceStatus{
+				Status: v2.NodeStatus{
 					IPAM: ipamTypes.IPAMStatus{
 						PodCIDRs: ipamTypes.PodCIDRMap{
 							"10.10.1.0/24": {Status: ipamTypes.PodCIDRStatusReleased},
@@ -172,12 +172,12 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			args: args{
 				node: &v2.NetResourceSet{
 					ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-					Spec: v2.NetResourceSpec{
+					Spec: v2.NodeSpec{
 						IPAM: ipamTypes.IPAMSpec{
 							PodCIDRs: []string{},
 						},
 					},
-					Status: v2.NetResourceStatus{
+					Status: v2.NodeStatus{
 						IPAM: ipamTypes.IPAMStatus{
 							PodCIDRs: ipamTypes.PodCIDRMap{
 								"fd00::/80": {Status: ipamTypes.PodCIDRStatusInUse},
@@ -189,7 +189,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			},
 			wantNetResourceSet: &v2.NetResourceSet{
 				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-				Spec: v2.NetResourceSpec{
+				Spec: v2.NodeSpec{
 					IPAM: ipamTypes.IPAMSpec{
 						PodCIDRs: []string{
 							"10.10.1.0/24",
@@ -197,7 +197,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 						},
 					},
 				},
-				Status: v2.NetResourceStatus{
+				Status: v2.NodeStatus{
 					IPAM: ipamTypes.IPAMStatus{
 						PodCIDRs: ipamTypes.PodCIDRMap{
 							"fd00::/80": {Status: ipamTypes.PodCIDRStatusInUse},
@@ -244,12 +244,12 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 				c.Assert(fields.nodesToAllocate, checker.DeepEquals, map[string]*v2.NetResourceSet{
 					"node-1": {
 						ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-						Spec: v2.NetResourceSpec{
+						Spec: v2.NodeSpec{
 							IPAM: ipamTypes.IPAMSpec{
 								PodCIDRs: []string{"10.10.1.0/24"},
 							},
 						},
-						Status: v2.NetResourceStatus{
+						Status: v2.NodeStatus{
 							IPAM: ipamTypes.IPAMStatus{
 								PodCIDRs: ipamTypes.PodCIDRMap{
 									"10.10.1.0/24": {Status: ipamTypes.PodCIDRStatusDepleted},
@@ -263,12 +263,12 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			args: args{
 				node: &v2.NetResourceSet{
 					ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-					Spec: v2.NetResourceSpec{
+					Spec: v2.NodeSpec{
 						IPAM: ipamTypes.IPAMSpec{
 							PodCIDRs: []string{"10.10.1.0/24"},
 						},
 					},
-					Status: v2.NetResourceStatus{
+					Status: v2.NodeStatus{
 						IPAM: ipamTypes.IPAMStatus{
 							PodCIDRs: ipamTypes.PodCIDRMap{
 								"10.10.1.0/24": {Status: ipamTypes.PodCIDRStatusDepleted},
@@ -280,12 +280,12 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			},
 			wantNetResourceSet: &v2.NetResourceSet{
 				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-				Spec: v2.NetResourceSpec{
+				Spec: v2.NodeSpec{
 					IPAM: ipamTypes.IPAMSpec{
 						PodCIDRs: []string{"10.10.1.0/24"},
 					},
 				},
-				Status: v2.NetResourceStatus{
+				Status: v2.NodeStatus{
 					IPAM: ipamTypes.IPAMStatus{
 						PodCIDRs: ipamTypes.PodCIDRMap{
 							"10.10.1.0/24": {Status: ipamTypes.PodCIDRStatusDepleted},
@@ -350,7 +350,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			args: args{
 				node: &v2.NetResourceSet{
 					ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-					Status: v2.NetResourceStatus{
+					Status: v2.NodeStatus{
 						IPAM: ipamTypes.IPAMStatus{
 							PodCIDRs: ipamTypes.PodCIDRMap{
 								"fd00::/80": ipamTypes.PodCIDRMapEntry{
@@ -366,14 +366,14 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_allocateNodeV2(c *C) {
 			},
 			wantNetResourceSet: &v2.NetResourceSet{
 				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
-				Spec: v2.NetResourceSpec{
+				Spec: v2.NodeSpec{
 					IPAM: ipamTypes.IPAMSpec{
 						PodCIDRs: []string{
 							"fd00::/80", "fd01::/80",
 						},
 					},
 				},
-				Status: v2.NetResourceStatus{
+				Status: v2.NodeStatus{
 					IPAM: ipamTypes.IPAMStatus{
 						PodCIDRs: ipamTypes.PodCIDRMap{
 							"fd00::/80": ipamTypes.PodCIDRMapEntry{

@@ -331,6 +331,7 @@ func (m *Manager) NodeUpdated(n nodeTypes.Node) {
 	m.mutex.Lock()
 	entry, oldNodeExists := m.nodes[nodeIdentity]
 	if oldNodeExists {
+
 		entry.mutex.Lock()
 		m.mutex.Unlock()
 		oldNode := entry.node

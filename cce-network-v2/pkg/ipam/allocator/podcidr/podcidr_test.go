@@ -243,7 +243,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 							ObjectMeta: v1.ObjectMeta{
 								Name: "node-1",
 							},
-							Spec: v2.NetResourceSpec{
+							Spec: v2.NodeSpec{
 								IPAM: ipamTypes.IPAMSpec{
 									PodCIDRs: []string{
 										"10.10.0.0/24",
@@ -298,7 +298,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 							ObjectMeta: v1.ObjectMeta{
 								Name: "node-1",
 							},
-							Status: v2.NetResourceStatus{
+							Status: v2.NodeStatus{
 								IPAM: ipamTypes.IPAMStatus{
 									OperatorStatus: ipamTypes.OperatorStatus{
 										Error: "Allocator full!",
@@ -347,7 +347,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 					ObjectMeta: v1.ObjectMeta{
 						Name: "node-1",
 					},
-					Spec: v2.NetResourceSpec{
+					Spec: v2.NodeSpec{
 						IPAM: ipamTypes.IPAMSpec{
 							PodCIDRs: []string{
 								"10.10.0.0/24",
@@ -389,7 +389,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 							ObjectMeta: v1.ObjectMeta{
 								Name: "node-1",
 							},
-							Spec: v2.NetResourceSpec{
+							Spec: v2.NodeSpec{
 								IPAM: ipamTypes.IPAMSpec{
 									PodCIDRs: []string{
 										"10.10.0.0/24",
@@ -453,7 +453,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 							ObjectMeta: v1.ObjectMeta{
 								Name: "node-1",
 							},
-							Spec: v2.NetResourceSpec{
+							Spec: v2.NodeSpec{
 								IPAM: ipamTypes.IPAMSpec{
 									PodCIDRs: []string{
 										"10.10.0.0/24",
@@ -704,7 +704,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 								Name:            "node-1",
 								ResourceVersion: "1",
 							},
-							Spec: v2.NetResourceSpec{
+							Spec: v2.NodeSpec{
 								IPAM: ipamTypes.IPAMSpec{
 									PodCIDRs: []string{
 										"10.10.0.0/24",
@@ -757,7 +757,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 								Name:            "node-1",
 								ResourceVersion: "1",
 							},
-							Status: v2.NetResourceStatus{
+							Status: v2.NodeStatus{
 								IPAM: ipamTypes.IPAMStatus{
 									OperatorStatus: ipamTypes.OperatorStatus{
 										Error: "Allocator full!",
@@ -814,7 +814,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 						Name:            "node-1",
 						ResourceVersion: "1",
 					},
-					Spec: v2.NetResourceSpec{
+					Spec: v2.NodeSpec{
 						IPAM: ipamTypes.IPAMSpec{
 							PodCIDRs: []string{
 								"10.10.0.0/24",
@@ -854,7 +854,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 								Name:            "node-1",
 								ResourceVersion: "1",
 							},
-							Spec: v2.NetResourceSpec{
+							Spec: v2.NodeSpec{
 								IPAM: ipamTypes.IPAMSpec{
 									PodCIDRs: []string{
 										"10.10.0.0/24",

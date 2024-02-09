@@ -21,12 +21,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
-
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
@@ -39,6 +33,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
@@ -139,7 +137,7 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 // CreateInterface create a new ENI
 func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	n.mutex.RLock()
-	resource := n.k8sObj
+	resource := *n.k8sObj
 	n.mutex.RUnlock()
 
 	if n.nextCreateENITime != nil && n.nextCreateENITime.After(time.Now()) {
@@ -147,7 +145,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	var (
-		eniQuota          = n.bceNode.getENIQuota()
+		limiter           = n.bceNode.calculateLimiter()
 		availableENICount = 0
 		inuseENICount     = 0
 	)
@@ -165,7 +163,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 				}
 			} else if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
 				// if the length of private ip set is greater than the MaxIPPerENI, then the ENI is in use
-				if len(e.Spec.ENI.PrivateIPSet) >= eniQuota.GetMaxIP() {
+				if len(e.Spec.ENI.PrivateIPSet) >= limiter.MaxIPPerENI {
 					inuseENICount++
 				}
 			}
@@ -173,14 +171,14 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 			return nil
 		})
 
-	if availableENICount >= eniQuota.GetMaxENI() {
+	if availableENICount >= limiter.MaxENINum {
 		msg = errUnableToDetermineLimits
 		err = fmt.Errorf(msg)
 		return
 	}
 
 	// The cache will be cleared in the function ResyncInterfacesAndIPs.
-	if n.k8sObj.Spec.ENI.PreAllocateENI <= availableENICount && len(n.creatingEni.creatingENI) > 0 {
+	if n.k8sObj.Spec.ENI.PreAllocateENI >= availableENICount && n.creatingENI != nil {
 		msg = errUnableToCreateENI
 		err = fmt.Errorf(errCrurrentlyCreatingENI)
 		return
@@ -228,7 +226,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 // createENIOnCluster The ENI object is created in the cluster and the ENI Synchronizer
 // will automatically create the ENI object from VPC.
 // The ENI object is created successfully and the node will record a status of “creating ENI”.
-func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *ccev1.Subnet) error {
+func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource ccev2.NetResourceSet, subnet *ccev1.Subnet) error {
 	eniName := CreateNameForENI(option.Config.ClusterID, n.instanceID, resource.Name)
 
 	newENI := &ccev2.ENI{
@@ -258,28 +256,28 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 			},
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
+			Type:                      ccev2.ENIForBCC,
 		},
 	}
 
 	scopedLog = scopedLog.WithField("eniName", eniName).WithField("securityGroupIDs", resource.Spec.ENI.SecurityGroups)
 	eniID, err := n.createENI(ctx, newENI, scopedLog)
 	if err != nil {
-		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "Failed to create ENI on nrs %s: %s", resource.Name, err)
 		return err
 	}
-	n.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateENISuccess", "Create new ENI %s on nrs %s success", eniID, resource.Name)
 	scopedLog = scopedLog.WithField("eniID", eniID)
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
 
-	n.creatingEni.addCreatingENI(newENI)
+	n.mutex.Lock()
+	n.creatingENI = newENI
+	n.mutex.Unlock()
 
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
-		n.creatingEni.removeCreatingENI(eniID)
 		return fmt.Errorf("failed to create ENI: %w", err)
 	}
+	scopedLog.Infof("create ENI successed")
 
 	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
 		ret, err := n.manager.enilister.Get(newENI.Name)
@@ -302,12 +300,7 @@ func CreateNameForENI(clusterID, instanceID, nodeName string) string {
 	hash := sha1.Sum([]byte(time.Now().String()))
 	suffix := hex.EncodeToString(hash[:])
 
-	// eni name length is 64
-	name := fmt.Sprintf("%s/%s/%s", clusterID, instanceID, nodeName)
-	if len(name) > 57 {
-		name = name[:57]
-	}
-	return fmt.Sprintf("%s/%s", name, suffix[:6])
+	return fmt.Sprintf("%s/%s/%s/%s", clusterID, instanceID, nodeName, suffix[:6])
 }
 
 // createENI create ENI with a given name and param

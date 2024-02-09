@@ -3,11 +3,11 @@ HOMEDIR := $(shell pwd)
 OUTDIR  := $(HOMEDIR)/output
 
 # init command params
-export GO := $(GO_1_20_BIN)/go
+export GO := $(GO_1_19_BIN)/go
 ifeq ($(GO), /go)
 	GO = go
 endif
-export GOROOT  := $(GO_1_20_HOME)
+export GOROOT  := $(GO_1_19_HOME)
 GOPATH  := $(shell $(GO) env GOPATH)
 GOPKGS  := $$($(GO) list ./...| grep "pkg" |grep -v "vendor" | grep -v "cmd" |grep -v "test" | grep -v 'api' |grep -v "generated" | grep -v 'pkg/bce' | grep -v config | grep -v metric | grep -v rpc | grep -v version | grep -v wrapper | grep -v util)
 GOGCFLAGS := -gcflags=all="-trimpath=$(GOPATH)" -asmflags=all="-trimpath=$(GOPATH)"

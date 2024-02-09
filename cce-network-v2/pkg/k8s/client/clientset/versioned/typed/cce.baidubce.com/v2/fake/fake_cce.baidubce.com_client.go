@@ -31,12 +31,12 @@ func (c *FakeCceV2) CCEEndpoints(namespace string) v2.CCEEndpointInterface {
 	return &FakeCCEEndpoints{c, namespace}
 }
 
-func (c *FakeCceV2) ENIs() v2.ENIInterface {
-	return &FakeENIs{c}
-}
-
 func (c *FakeCceV2) NetResourceSets() v2.NetResourceSetInterface {
 	return &FakeNetResourceSets{c}
+}
+
+func (c *FakeCceV2) ENIs() v2.ENIInterface {
+	return &FakeENIs{c}
 }
 
 func (c *FakeCceV2) PodSubnetTopologySpreads(namespace string) v2.PodSubnetTopologySpreadInterface {

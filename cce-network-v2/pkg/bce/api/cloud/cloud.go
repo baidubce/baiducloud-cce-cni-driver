@@ -17,6 +17,7 @@ package cloud
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -50,6 +51,7 @@ func newBCEClientConfig(ctx context.Context,
 ) *bce.BceClientConfiguration {
 	endpoint, exist := os.LookupEnv(endpointEnv)
 	if !exist || endpoint == "" {
+		fmt.Printf("Env %v not set, using bce predefined endpoint config\n", endpointEnv)
 		endpoint = preDefinedEndpoints[region]
 	}
 
@@ -376,17 +378,7 @@ func (c *Client) StatENI(ctx context.Context, eniID string) (*eni.Eni, error) {
 	t := time.Now()
 	resp, err := c.eniClient.GetEniDetail(eniID)
 	exportMetric("StatENI", t, err)
-	return resp, err
-}
-
-// GetENIQuota implements Interface.
-func (c *Client) GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQuoteInfo, error) {
-	t := time.Now()
-	resp, err := c.eniClient.GetEniQuota(&eni.EniQuoteArgs{
-		InstanceId: instanceID,
-	})
-	exportMetric("GET /v1/eni/quota", t, err)
-	return resp, err
+	return resp, nil
 }
 
 func (c *Client) ListRouteTable(ctx context.Context, vpcID, routeTableID string) ([]vpc.RouteRule, error) {
@@ -530,31 +522,4 @@ func (c *Client) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatch
 	resp, err := c.hpcClient.BatchAddPrivateIPByHpc(args)
 	exportMetricAndLog(ctx, "BatchAddHpcEniPrivateIP", t, err)
 	return resp, err
-}
-
-// BCCBatchAddIP implements Interface.
-func (c *Client) BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs) (*bccapi.BatchAddIpResponse, error) {
-	t := time.Now()
-	resp, err := c.bccClient.BatchAddIP(args)
-	exportMetricAndLog(ctx, BCCBatchAddIP, t, err)
-	return resp, err
-}
-
-// BCCBatchDelIP implements Interface.
-func (c *Client) BCCBatchDelIP(ctx context.Context, args *bccapi.BatchDelIpArgs) error {
-	t := time.Now()
-	err := c.bccClient.BatchDelIP(args)
-	exportMetricAndLog(ctx, BCCBatchDelIP, t, err)
-	return err
-}
-
-// ListBCCInstanceEni implements Interface.
-func (c *Client) ListBCCInstanceEni(ctx context.Context, instanceID string) ([]bccapi.Eni, error) {
-	t := time.Now()
-	resp, err := c.bccClient.ListInstanceEnis(instanceID)
-	exportMetricAndLog(ctx, BCCListENIs, t, err)
-	if err != nil {
-		return nil, err
-	}
-	return resp.EniList, err
 }

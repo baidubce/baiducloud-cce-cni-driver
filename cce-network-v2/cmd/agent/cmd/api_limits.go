@@ -28,7 +28,6 @@ const (
 	apiRequestDeleteIPAMIP       = "cni/ipam/deleteIP"
 	apiRequestPostIPAMIP         = "cni/ipam/postIP"
 	apiRequestGetExtPluginStatus = "cni/endpoint/getExtPluginStatus"
-	apiRequestPutEndpointProbe   = "cni/endpoint/probe"
 )
 
 var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
@@ -77,11 +76,5 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 		RateBurst:        10,
 		ParallelRequests: 10,
 		MaxWaitDuration:  30 * time.Second,
-	},
-	apiRequestPutEndpointProbe: {
-		RateLimit:        100,
-		RateBurst:        100,
-		ParallelRequests: 100,
-		MaxWaitDuration:  200 * time.Second,
 	},
 }

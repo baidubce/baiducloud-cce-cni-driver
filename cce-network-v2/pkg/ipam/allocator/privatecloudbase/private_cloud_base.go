@@ -43,7 +43,7 @@ func (a *AllocatorPrivateCloudBase) Init(ctx context.Context) error {
 // Start kicks off ENI allocation, the initial connection to Private Cloud Base
 // APIs is done in a blocking manner. Provided this is successful, a controller is
 // started to manage allocation based on NetResourceSet custom resources
-func (a *AllocatorPrivateCloudBase) Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (allocator.NetResourceSetEventHandler, error) {
+func (a *AllocatorPrivateCloudBase) Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (allocator.NodeEventHandler, error) {
 	var iMetrics ipam.MetricsAPI
 
 	log.Info("Starting PrivateCloudBase allocator...")

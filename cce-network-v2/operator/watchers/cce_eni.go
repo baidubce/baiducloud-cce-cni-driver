@@ -18,7 +18,6 @@ package watchers
 import (
 	"context"
 
-	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	ccev2lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
@@ -42,7 +41,7 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 
 	enisLister := k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
 
-	var eniSyncHandler = func(key string) error {
+	var endpointManagerSyncHandler = func(key string) error {
 		obj, err := enisLister.Get(key)
 
 		// Delete handling
@@ -57,9 +56,9 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 	}
 
 	resyncPeriod := eniManager.ResyncENI(ctx)
-	controller := cm.NewResyncController("cce-eni-controller", int(operatorOption.Config.ResourceResyncWorkers),
+	controller := cm.NewResyncController("cce-eni-controller", 1,
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(),
-		eniSyncHandler)
+		endpointManagerSyncHandler)
 	controller.RunWithResync(resyncPeriod)
 	return nil
 }

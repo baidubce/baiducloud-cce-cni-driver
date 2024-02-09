@@ -208,23 +208,6 @@ func (in *IPAMStatus) DeepEqual(other *IPAMStatus) bool {
 		}
 	}
 
-	if ((in.AvailableSubnetIDs != nil) && (other.AvailableSubnetIDs != nil)) || ((in.AvailableSubnetIDs == nil) != (other.AvailableSubnetIDs == nil)) {
-		in, other := &in.AvailableSubnetIDs, &other.AvailableSubnetIDs
-		if other == nil {
-			return false
-		}
-
-		if len(*in) != len(*other) {
-			return false
-		} else {
-			for i, inElement := range *in {
-				if inElement != (*other)[i] {
-					return false
-				}
-			}
-		}
-	}
-
 	return true
 }
 

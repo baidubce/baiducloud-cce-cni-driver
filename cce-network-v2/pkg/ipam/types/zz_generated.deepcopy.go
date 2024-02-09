@@ -125,11 +125,6 @@ func (in *IPAMStatus) DeepCopyInto(out *IPAMStatus) {
 			(*out)[key] = val
 		}
 	}
-	if in.AvailableSubnetIDs != nil {
-		in, out := &in.AvailableSubnetIDs, &out.AvailableSubnetIDs
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	return
 }
 

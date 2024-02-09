@@ -26,11 +26,9 @@ func (s *ENIStatus) AppendVPCStatus(vpcStatus VPCENIStatus) {
 		s.VPCStatus = vpcStatus
 
 		change := ENIStatusChange{
-			StatusChange: StatusChange{
-				Code: "ok",
-				Time: metav1.Now(),
-			},
+			Code:      "ok",
 			VPCStatus: vpcStatus,
+			Time:      metav1.Now(),
 		}
 
 		if len(s.VPCStatusChangeLog) < 20 {
@@ -47,11 +45,9 @@ func (s *ENIStatus) AppendCCEStatus(cceStatus CCEENIStatus) {
 		s.CCEStatus = cceStatus
 
 		change := ENIStatusChange{
-			StatusChange: StatusChange{
-				Code: "ok",
-				Time: metav1.Now(),
-			},
+			Code:         "ok",
 			CCEENIStatus: cceStatus,
+			Time:         metav1.Now(),
 		}
 
 		if len(s.CCEStatusChangeLog) < 20 {
@@ -67,11 +63,9 @@ func (s *ENIStatus) AppendCCEENIStatus(status CCEENIStatus) {
 	if s.CCEStatus != status {
 		s.CCEStatus = status
 		change := ENIStatusChange{
-			StatusChange: StatusChange{
-				Code: "ok",
-				Time: metav1.Now(),
-			},
+			Code:         "ok",
 			CCEENIStatus: status,
+			Time:         metav1.Now(),
 		}
 
 		if len(s.CCEStatusChangeLog) < 20 {

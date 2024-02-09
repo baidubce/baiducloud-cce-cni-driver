@@ -22,13 +22,10 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	cnitypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
@@ -73,7 +70,6 @@ type NodeDiscovery struct {
 	k8sNodeGetter         k8sNodeGetter
 	localNodeLock         lock.Mutex
 	localNode             nodeTypes.Node
-	eventRecorder         record.EventRecorder
 }
 
 func enableLocalNodeRoute() bool {
@@ -101,11 +97,10 @@ func NewNodeDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 		Registered:            make(chan struct{}),
 		localStateInitialized: make(chan struct{}),
 		NetConf:               netConf,
-		eventRecorder:         k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: nodeDiscoverySubsys}),
 	}
 }
 
-// StartDiscovery start configures the local node and starts node discovery. This is called on
+// start configures the local node and starts node discovery. This is called on
 // agent startup to configure the local node based on the configuration options
 // passed to the agent. nodeName is the name to be used in the local agent.
 func (n *NodeDiscovery) StartDiscovery() {
@@ -208,16 +203,6 @@ func (n *NodeDiscovery) fillLocalNode() {
 }
 
 func (n *NodeDiscovery) updateLocalNode() {
-	// we should init the os distribution before we do anything
-	release, err := os.NewOSDistribution()
-	if err != nil {
-		log.WithError(err).Fatal("Unable to detect OS distribution")
-	}
-	err = release.HostOS().DisableMacPersistant()
-	if err != nil {
-		log.WithError(err).Fatal("Unable to disable mac persist")
-	}
-
 	if k8s.IsEnabled() {
 		// CRD IPAM endpoint restoration depends on the completion of this
 		// to avoid custom resource update conflicts.
@@ -394,7 +379,6 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 
 	instanceID, err := agent.GetInstanceID()
 	if err != nil || instanceID == "" {
-		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError01", "failed to get instance id: %v", err)
 		log.WithError(err).Fatal("get instance id fail")
 	}
 	nodeResource.Spec.InstanceID = instanceID
@@ -407,11 +391,9 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			nodeResource.Spec.IPAM.PodCIDRReleaseThreshold = c.IPAM.PodCIDRReleaseThreshold
 		}
 	case ipamOption.IPAMVpcEni:
-		// only generate eni spec when it is not set
 		if nodeResource.Spec.ENI == nil {
 			eni, err := agent.GenerateENISpec()
 			if err != nil {
-				n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError02", "generate eni metadata error: %v", err)
 				log.WithError(err).Fatal("generate ENI spec fail")
 			}
 			nodeResource.Spec.ENI = eni
@@ -427,33 +409,37 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			}
 		}
 
-		// reset eni spec when it is restart
-		if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
-			if option.Config.IPPoolMinAllocateIPs != 0 {
-				nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
+		if c := n.NetConf; c != nil {
+			if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+				if c.IPAM.MinAllocate != 0 {
+					nodeResource.Spec.IPAM.MinAllocate = c.IPAM.MinAllocate
+				}
+				if c.IPAM.PreAllocate != 0 {
+					nodeResource.Spec.IPAM.PreAllocate = c.IPAM.PreAllocate
+				}
+				if c.IPAM.MaxAboveWatermark != 0 {
+					nodeResource.Spec.IPAM.MaxAboveWatermark = c.IPAM.MaxAboveWatermark
+				}
 			}
-			if option.Config.IPPoolPreAllocate != 0 {
-				nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
-			}
-			if option.Config.IPPoolMaxAboveWatermark != 0 {
-				nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
-			}
-			if option.Config.ENI.RouteTableOffset > 0 {
-				nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
+			if c.IPAM.ENI != nil {
+				if c.IPAM.ENI.RouteTableOffset > 0 {
+					nodeResource.Spec.ENI.RouteTableOffset = c.IPAM.ENI.RouteTableOffset
+				}
+				if len(c.IPAM.ENI.SecurityGroups) > 0 {
+					nodeResource.Spec.ENI.SecurityGroups = c.IPAM.ENI.SecurityGroups
+				}
+				if c.IPAM.ENI.DeleteOnTermination != nil {
+					nodeResource.Spec.ENI.DeleteOnTermination = c.IPAM.ENI.DeleteOnTermination
+				}
+				if c.IPAM.ENI.UsePrimaryAddress != nil {
+					nodeResource.Spec.ENI.UsePrimaryAddress = c.IPAM.ENI.UsePrimaryAddress
+				}
 			}
 		}
 
-		if len(option.Config.ENI.SecurityGroups) > 0 {
-			// update sunet and security group ids
-			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
-		}
-		if option.Config.ENI.DeleteOnTermination != nil {
-			nodeResource.Spec.ENI.DeleteOnTermination = option.Config.ENI.DeleteOnTermination
-		}
-		if option.Config.ENI.UsePrimaryAddress != nil {
-			nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
-		}
+		// update sunet and security group ids
 		nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
+		nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
 	case ipamOption.IPAMPrivateCloudBase:
 		if c := n.NetConf; c != nil {
 			if c.IPAM.MinAllocate != 0 {

@@ -133,14 +133,6 @@ type ENIStatus struct {
 
 // ENIStatusChange history of ENIStatus. This is used to track changes
 type ENIStatusChange struct {
-	StatusChange `json:",inline"`
-
-	// state
-	CCEENIStatus CCEENIStatus `json:"CCEStatus,omitempty"`
-	VPCStatus    VPCENIStatus `json:"VPCStatus,omitempty"`
-}
-
-type StatusChange struct {
 	// +kubebuilder:validation:Enum=ok;failed
 
 	// Code indicate type of status change
@@ -149,6 +141,10 @@ type StatusChange struct {
 
 	// Status message
 	Message string `json:"message,omitempty"`
+
+	// state
+	CCEENIStatus CCEENIStatus `json:"CCEStatus,omitempty"`
+	VPCStatus    VPCENIStatus `json:"VPCStatus,omitempty"`
 
 	Time metav1.Time `json:"time,omitempty"`
 }
@@ -212,13 +208,8 @@ type ENIUseMode string
 const (
 	// ENIUseModeSecondaryIP Pod IP is the secondary IP of ENI
 	ENIUseModeSecondaryIP ENIUseMode = "Secondary"
-
 	// ENIUseModePrimaryIP Pod IP is the primamry IP of ENI
 	ENIUseModePrimaryIP ENIUseMode = "Primary"
-
-	// ENIUseModePrimaryWithSecondaryIP Pod IP is the primary interface with secondary IP
-	// this mode is only used for ebc
-	ENIUseModePrimaryWithSecondaryIP ENIUseMode = "PrimaryWithSecondaryIP"
 )
 
 type ObjectReference struct {
@@ -233,5 +224,4 @@ const (
 	ENIDefaultBCC ENIType = ""
 	ENIForBCC     ENIType = "bcc"
 	ENIForBBC     ENIType = "bbc"
-	ENIForEBC     ENIType = "ebc"
 )

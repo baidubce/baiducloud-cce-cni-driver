@@ -21,7 +21,6 @@ import (
 	"sort"
 	"time"
 
-	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	listerv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 
 	"github.com/sirupsen/logrus"
@@ -223,7 +222,7 @@ func (n *NetResourceSetManager) Start(ctx context.Context) error {
 		mngr := controller.NewManager()
 		mngr.UpdateController("ipam-node-interval-refresh",
 			controller.ControllerParams{
-				RunInterval: operatorOption.Config.ResourceResyncInterval,
+				RunInterval: 30 * time.Second,
 				DoFunc: func(ctx context.Context) error {
 					if syncTime, ok := n.instancesAPIResync(ctx); ok {
 						n.Resync(ctx, syncTime)
@@ -271,15 +270,17 @@ func (n *NetResourceSetManager) Create(resource *v2.NetResourceSet) error {
 // Update is called whenever a NetResourceSet resource has been updated in the
 // Kubernetes apiserver
 func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
+	var nodeSynced = true
 	n.mutex.Lock()
-	netResource, ok := n.netResources[resource.Name]
-	n.mutex.Unlock()
-
+	node, ok := n.netResources[resource.Name]
 	defer func() {
-		netResource.UpdatedResource(resource)
+		n.mutex.Unlock()
+		if nodeSynced {
+			nodeSynced = node.UpdatedResource(resource)
+		}
 	}()
 	if !ok {
-		netResource = &NetResource{
+		node = &NetResource{
 			name:                resource.Name,
 			manager:             n,
 			ipsMarkedForRelease: make(map[string]time.Time),
@@ -287,55 +288,51 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 			logLimiter:          logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
 		}
 
-		netResource.ops = n.instancesAPI.CreateNetResource(resource, netResource)
+		node.ops = n.instancesAPI.CreateNetResource(resource, node)
 
 		poolMaintainer, err := trigger.NewTrigger(trigger.Parameters{
 			Name:            fmt.Sprintf("ipam-pool-maintainer-%s", resource.Name),
 			MinInterval:     10 * time.Millisecond,
 			MetricsObserver: n.metricsAPI.PoolMaintainerTrigger(),
 			TriggerFunc: func(reasons []string) {
-				if err := netResource.MaintainIPPool(context.TODO()); err != nil {
-					netResource.logger().WithError(err).Warning("Unable to maintain ip pool of node")
+				if err := node.MaintainIPPool(context.TODO()); err != nil {
+					node.logger().WithError(err).Warning("Unable to maintain ip pool of node")
 				}
 			},
 		})
 		if err != nil {
-			netResource.logger().WithError(err).Error("Unable to create pool-maintainer trigger")
+			node.logger().WithError(err).Error("Unable to create pool-maintainer trigger")
 			return err
 		}
 
 		retry, err := trigger.NewTrigger(trigger.Parameters{
 			Name:        fmt.Sprintf("ipam-pool-maintainer-%s-retry", resource.Name),
-			MinInterval: 5 * time.Second, // large minimal interval to not retry too often
+			MinInterval: 30 * time.Second, // large minimal interval to not retry too often
 			TriggerFunc: func(reasons []string) { poolMaintainer.Trigger() },
 		})
 		if err != nil {
-			netResource.logger().WithError(err).Error("Unable to create pool-maintainer-retry trigger")
+			node.logger().WithError(err).Error("Unable to create pool-maintainer-retry trigger")
 			return err
 		}
-		netResource.retry = retry
+		node.retry = retry
 
 		k8sSync, err := trigger.NewTrigger(trigger.Parameters{
 			Name:            fmt.Sprintf("ipam-node-k8s-sync-%s", resource.Name),
 			MinInterval:     10 * time.Millisecond,
 			MetricsObserver: n.metricsAPI.K8sSyncTrigger(),
 			TriggerFunc: func(reasons []string) {
-				netResource.syncToAPIServer()
+				node.syncToAPIServer()
 			},
 		})
 		if err != nil {
 			poolMaintainer.Shutdown()
-			netResource.logger().WithError(err).Error("Unable to create k8s-sync trigger")
+			node.logger().WithError(err).Error("Unable to create k8s-sync trigger")
 			return err
 		}
 
-		netResource.poolMaintainer = poolMaintainer
-		netResource.k8sSync = k8sSync
-
-		n.mutex.Lock()
-		n.netResources[netResource.name] = netResource
-		n.mutex.Unlock()
-
+		node.poolMaintainer = poolMaintainer
+		node.k8sSync = k8sSync
+		n.netResources[node.name] = node
 		log.WithField(fieldName, resource.Name).Info("Discovered new NetResourceSet custom resource")
 	}
 

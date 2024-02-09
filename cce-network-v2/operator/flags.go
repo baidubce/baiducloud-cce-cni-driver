@@ -266,19 +266,11 @@ func init() {
 
 	flags.Duration(operatorOption.FixedIPTTL, operatorOption.FixedIPTTLDefault, "ttl for fixed endpoints when pod deleted, 0 means don't gc")
 	option.BindEnv(operatorOption.FixedIPTTL)
-
-	flags.Duration(pkgOption.FixedIPTimeout, defaults.CCEEndpointGCInterval, "Timeout for waiting for the fixed IP assignment to succeed")
-	option.BindEnv(pkgOption.FixedIPTimeout)
-
 	flags.Bool(operatorOption.EnableRemoteFixedIPGC, true, "gc remote fixed ip when endpoint have been deleted")
 	option.BindEnv(operatorOption.EnableRemoteFixedIPGC)
 
 	flags.Int(operatorOption.PSTSSubnetReversedIPNum, 1, "the number of reversed IP in subnet, this flag is useful for psts mode")
 	option.BindEnv(operatorOption.PSTSSubnetReversedIPNum)
 
-	flags.Int64(operatorOption.ResourceResyncWorkers, defaults.DefaultResourceResyncWorkers, "Number of workers to process resource event")
-	option.BindEnv(operatorOption.ResourceResyncWorkers)
-
-	flags.Int(operatorOption.ExcessIPReleaseDelay, 180, "controls how long operator would wait before an IP previously marked as excess is released. default is 180 seconds")
 	viper.BindPFlags(flags)
 }

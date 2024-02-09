@@ -17,16 +17,11 @@ package ip
 
 import (
 	"net"
-
-	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 )
 
 var (
 	_, IPv4ZeroCIDR, _ = net.ParseCIDR("0.0.0.0/0")
 	_, IPv6ZeroCIDR, _ = net.ParseCIDR("::/0")
-
-	IPv4Mask32  = net.CIDRMask(32, 32)
-	IPv6Mask128 = net.CIDRMask(128, 128)
 )
 
 // ParseCIDRs fetches all CIDRs referred to by the specified slice and returns
@@ -51,15 +46,4 @@ func ParseCIDRs(cidrs []string) (valid []*net.IPNet, invalid []string) {
 		}
 	}
 	return valid, invalid
-}
-
-func ConvertIPPairToIPNet(addrPair *ccev2.AddressPair) *net.IPNet {
-	ipnet := &net.IPNet{
-		IP:   net.ParseIP(addrPair.IP),
-		Mask: IPv4Mask32,
-	}
-	if ipnet.IP.To4() == nil {
-		ipnet.Mask = IPv6Mask128
-	}
-	return ipnet
 }

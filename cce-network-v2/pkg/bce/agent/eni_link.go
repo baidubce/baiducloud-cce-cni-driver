@@ -13,7 +13,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/sysctl"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -47,13 +46,11 @@ type eniLink struct {
 
 	ipv4Gateway string
 	ipv6Gateway string
-
-	release *os.OSRelease
 }
 
 // newENILink create a new link config from ccev2 ENI mac
 // this method will rename link to cce-eni-{index}
-func newENILink(eni *ccev2.ENI, release *os.OSRelease) (*eniLink, error) {
+func newENILink(eni *ccev2.ENI) (*eniLink, error) {
 	var ec = &eniLink{}
 
 	ec.macAddr = eni.Spec.ENI.MacAddress
@@ -73,7 +70,6 @@ func newENILink(eni *ccev2.ENI, release *os.OSRelease) (*eniLink, error) {
 		"linkIndex": ec.linkIndex,
 		"linkName":  ec.linkName,
 	})
-	ec.release = release
 	return ec, nil
 }
 
@@ -107,7 +103,7 @@ func (ec *eniLink) rename(isPrimary bool) error {
 			}
 		}
 
-		err = ec.release.HostOS().DisableDHCPv6(eniName)
+		err = ec.generateIfcfg(eniName)
 		if err != nil {
 			return err
 		}
@@ -147,6 +143,12 @@ func (ec *eniLink) rename(isPrimary bool) error {
 func (ec *eniLink) ensureLinkConfig() (err error) {
 	// 1. set link up
 	err = ec.ensureLinkUp()
+	if err != nil {
+		return err
+	}
+
+	// 2. disable dad
+	err = ec.disableDad()
 	if err != nil {
 		return err
 	}
@@ -293,30 +295,10 @@ func (ec *eniLink) ensureFromPrimaryRoute() (err error) {
 	return nil
 }
 
-func (ec *eniLink) ensureENINeigh() error {
-	// set proxy neigh
-	err := ensureENIArpProxy(ec.log, ec.macAddr)
-	if err != nil {
-		ec.log.WithError(err).Error("set arp proxy falied")
-		return err
-	}
-	err = ensureENINDPProxy(ec.log, ec.eni)
-	if err != nil {
-		ec.log.WithError(err).Error("set ndp proxy falied")
-		return err
-	}
-	// 2. disable dad
-	return ec.disableDad()
-}
-
 func EnsureRoute(log *logrus.Entry, eniLink netlink.Link, family int, rtTable int, routeDst *net.IPNet) (string, error) {
 	addrs, err := netlink.AddrList(eniLink, family)
 	if err != nil {
 		return "", err
-	}
-
-	if len(addrs) == 0 {
-		return "", fmt.Errorf("no address found in dev(%s) with family %d", eniLink.Attrs().Name, family)
 	}
 
 	routes, err := netlink.RouteList(eniLink, family)

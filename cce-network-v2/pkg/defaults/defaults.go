@@ -313,7 +313,7 @@ const (
 	UseENIPrimaryAddress = false
 
 	// ParallelAllocWorkers is the default max number of parallel workers doing allocation in the operator
-	ParallelAllocWorkers = 500
+	ParallelAllocWorkers = 50
 
 	// CloudAPIBurst is the default burst value when rate limiting access to external APIs
 	CloudAPIBurst = 30
@@ -422,7 +422,4 @@ const (
 
 	// DefaultENIDescription specifies the default ENI description
 	DefaultENIDescription = "auto created by cce-cni, do not modify"
-
-	// DefaultResourceResyncWorkers specifies the default number of workers for k8s resources handler
-	DefaultResourceResyncWorkers = 8
 )

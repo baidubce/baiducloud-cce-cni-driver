@@ -45,7 +45,7 @@
 |   |-- datapath
 |   |-- debug
 |   |-- defaults
-|   |-- endpoint # cep 核心对象处理包
+|   |-- endpoint
 |   |-- eventqueue
 |   |-- flowdebug
 |   |-- health

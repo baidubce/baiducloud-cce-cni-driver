@@ -37,7 +37,6 @@ const (
 	ErrorReasonRouteRuleRepeated                   ErrorReason = "RouteRuleRepeated"
 	ErrorReasonQuotaLimitExceeded                  ErrorReason = "QuotaLimitExceeded"
 	ErrorReasonNoSuchObject                        ErrorReason = "NoSuchObject"
-	ErrorReasonNoSRouteRuleExceedQuota             ErrorReason = "RouteRuleExceedQuota"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -64,12 +63,10 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonPrivateIPInUse
 		case caseInsensitiveContains(errMsg, "RouteRuleRepeated"):
 			return ErrorReasonRouteRuleRepeated
-		case caseInsensitiveContains(errMsg, "QuotaLimitExceeded"), caseInsensitiveContains(errMsg, "LimitExceeded"):
+		case caseInsensitiveContains(errMsg, "QuotaLimitExceeded"):
 			return ErrorReasonQuotaLimitExceeded
 		case caseInsensitiveContains(errMsg, "ErrorReasonNoSuchObject"):
 			return ErrorReasonNoSuchObject
-		case caseInsensitiveContains(errMsg, "RouteRuleExceedQuota"):
-			return ErrorReasonNoSRouteRuleExceedQuota
 		}
 	}
 	return ErrorReasonUnknown
@@ -117,12 +114,7 @@ func IsErrorRouteRuleRepeated(err error) bool {
 }
 
 func IsErrorQuotaLimitExceeded(err error) bool {
-	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded ||
-		IsErrorQuotaLimitExceeded(err)
-}
-
-func IsErrorCreateRouteRuleExceededQuota(err error) bool {
-	return ReasonForError(err) == ErrorReasonNoSRouteRuleExceedQuota
+	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded
 }
 
 func caseInsensitiveContains(s, substr string) bool {

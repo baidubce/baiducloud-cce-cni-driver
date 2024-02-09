@@ -22,7 +22,6 @@ import (
 
 	v1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
-	v2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -60,16 +59,12 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		// Group=cce.baidubce.com, Version=v2
 	case v2.SchemeGroupVersion.WithResource("cceendpoints"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().CCEEndpoints().Informer()}, nil
-	case v2.SchemeGroupVersion.WithResource("enis"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().ENIs().Informer()}, nil
 	case v2.SchemeGroupVersion.WithResource("netresourcesets"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().NetResourceSets().Informer()}, nil
+	case v2.SchemeGroupVersion.WithResource("enis"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().ENIs().Informer()}, nil
 	case v2.SchemeGroupVersion.WithResource("podsubnettopologyspreads"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().PodSubnetTopologySpreads().Informer()}, nil
-
-		// Group=cce.baidubce.com, Version=v2alpha1
-	case v2alpha1.SchemeGroupVersion.WithResource("clusterpodsubnettopologyspreads"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer()}, nil
 
 	}
 

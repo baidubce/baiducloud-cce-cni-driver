@@ -32,9 +32,6 @@ import (
 // swagger:model EndpointIdentifiers
 type EndpointIdentifiers struct {
 
-	// device driver name
-	Cnidriver string `json:"cnidriver,omitempty"`
-
 	// ID assigned by container runtime
 	ContainerID string `json:"container-id,omitempty"`
 

@@ -57,7 +57,7 @@ func StartSynchronizingNetResourceSets(ctx context.Context, nodeManager NodeEven
 			return nodeManager.Update(node)
 		})
 
-	controller := cm.NewWorkqueueController("network-resource-set-controller", 10, nodeManagerSyncHandler)
+	controller := cm.NewWorkqueueController("network-resource-set-controller", 1, nodeManagerSyncHandler)
 	controller.Run()
 	k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer().AddEventHandler(controller)
 

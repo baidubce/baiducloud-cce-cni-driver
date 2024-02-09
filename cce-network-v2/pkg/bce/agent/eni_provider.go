@@ -6,14 +6,12 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/qos"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/enim/eniprovider"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/health/plugin"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -27,9 +25,6 @@ type eniInitFactory struct {
 	fullENIs  map[string]*ccev2.ENI
 
 	eniClient *watchers.ENIClient
-
-	// the host os release
-	release *os.OSRelease
 }
 
 // RegisterENIInitFatory create a eniInitFactory and register it to ENI event handler
@@ -39,13 +34,9 @@ func RegisterENIInitFatory(watcher *watchers.K8sWatcher) {
 		fullENIs:  make(map[string]*ccev2.ENI),
 		eniClient: watcher.NewENIClient(),
 	}
-	eniHandler.release, _ = os.NewOSDistribution()
 
 	watcher.RegisterENISubscriber(eniHandler)
 	plugin.RegisterPlugin("eni-init-factory", eniHandler)
-
-	qos.InitEgressPriorityManager()
-	qos.GlobalManager.Start(watcher.NewCCEEndpointClient())
 }
 
 func (eh *eniInitFactory) Check() error {
@@ -65,44 +56,55 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	resource := newObj.DeepCopy()
 	eh.fullENIs[resource.Spec.ENI.ID] = resource
 	scopedLog := initLog.WithError(err).WithField("eni", resource.Spec.ENI.ID)
+	// set device and route on the woker machine only when eni bound at bcc
+	isBCC := resource.Spec.Type != ccev2.ENIForBBC
+	isPrimary := resource.Spec.UseMode == ccev2.ENIUseModePrimaryIP
+	isBCCSecondary := isBCC && !isPrimary
 
-	if resource.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-		scopedLog.Debugf("eni is not in use, skip status [%s]", resource.Status.VPCStatus)
-		return nil
-	}
-
-	// downward compatibility with BBC models
-	// TODO 2021-03-08: remove this after BBC secondary models are deprecated
-	if resource.Spec.Type == ccev2.ENIForBBC {
-		resource.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
-	}
-
-	eniLink, err := newENILink(resource, eh.release)
-	if err != nil {
-		scopedLog.WithError(err).Error("Get eniLink falied")
-		return err
-	}
-	switch resource.Spec.UseMode {
-	case ccev2.ENIUseModePrimaryIP:
-		if err = eniLink.rename(true); err != nil {
-			scopedLog.WithError(err).Error("rename eniLink falied")
-			return err
-		}
-	case ccev2.ENIUseModePrimaryWithSecondaryIP:
-		// primary interface with secondary IP mode
-		// do not need to rename eniLink
-	default:
-		// eni with secondary ip mode
-		if err = eniLink.rename(false); err != nil {
-			scopedLog.WithError(err).Error("rename eniLink falied")
-			return err
-		}
-		// set rule when eni secondary IP mode
-		err = eniLink.ensureLinkConfig()
+	if resource.Status.VPCStatus == ccev2.VPCENIStatusInuse || !isBCC {
+		eniLink, err := newENILink(resource)
 		if err != nil {
-			scopedLog.WithError(err).Error("set eniLink falied")
+			scopedLog.WithError(err).Error("Get eniLink falied")
 			return err
 		}
+		if isBCC {
+			if err = eniLink.rename(isPrimary); err != nil {
+				scopedLog.WithError(err).Error("rename eniLink falied")
+				return err
+			}
+		}
+		// set device and route on the woker machine only when eni bound at bcc
+		if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
+			if isBCCSecondary {
+				// set rule when eni secondary IP mode
+				err = eniLink.ensureLinkConfig()
+				if err != nil {
+					scopedLog.WithError(err).Error("set eniLink falied")
+					return err
+				}
+			}
+
+			resource.Status.InterfaceIndex = eniLink.linkIndex
+			resource.Status.InterfaceName = eniLink.linkName
+			resource.Status.ENIIndex = eniLink.eniIndex
+			if eniLink.ipv4Gateway != "" {
+				resource.Status.GatewayIPv4 = eniLink.ipv4Gateway
+			}
+			if eniLink.ipv6Gateway != "" {
+				resource.Status.GatewayIPv6 = eniLink.ipv6Gateway
+			}
+
+			if !reflect.DeepEqual(&resource.Status, &newObj.Status) {
+				(&resource.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
+
+				resource, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
+				if err != nil {
+					scopedLog.WithError(err).Error("update eni status")
+					return err
+				}
+			}
+		}
+
 		if resource.Status.CCEStatus == ccev2.ENIStatusReadyOnNode {
 			if resource.Spec.InstallSourceBasedRouting {
 				err = ensureENIRule(scopedLog, resource)
@@ -110,41 +112,21 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 					scopedLog.WithError(err).Error("install source based routing falied")
 					return err
 				}
+				// set proxy neigh
+				err = ensureENIArpProxy(scopedLog, resource)
+				if err != nil {
+					scopedLog.WithError(err).Error("set arp proxy falied")
+					return err
+				}
+				err = ensureENINDPProxy(scopedLog, resource)
+				if err != nil {
+					scopedLog.WithError(err).Error("set ndp proxy falied")
+					return err
+				}
 			}
 		}
+		eh.localENIs[resource.Spec.ENI.ID] = resource
 	}
-
-	// set eni neigbor config
-	err = eniLink.ensureENINeigh()
-	if err != nil {
-		return fmt.Errorf("failed to set eni neighbor config: %w", err)
-	}
-
-	// set device and route on the woker machine only when eni bound at bcc
-	if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
-		resource.Status.InterfaceIndex = eniLink.linkIndex
-		resource.Status.InterfaceName = eniLink.linkName
-		resource.Status.ENIIndex = eniLink.eniIndex
-		if eniLink.ipv4Gateway != "" {
-			resource.Status.GatewayIPv4 = eniLink.ipv4Gateway
-		}
-		if eniLink.ipv6Gateway != "" {
-			resource.Status.GatewayIPv6 = eniLink.ipv6Gateway
-		}
-
-		if !reflect.DeepEqual(&resource.Status, &newObj.Status) {
-			(&resource.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
-
-			resource, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
-			if err != nil {
-				scopedLog.WithError(err).Error("update eni status")
-				return err
-			}
-		}
-	}
-
-	eh.localENIs[resource.Spec.ENI.ID] = resource
-	qos.GlobalManager.ENIUpdateEventHandler(resource)
 
 	return err
 }

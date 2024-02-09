@@ -22,16 +22,15 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/record"
 )
 
 var (
-	physicalENILog            = logging.NewSubysLogger("physical-eni-sync-manager")
-	physicalENIControllerName = "physical" + eniControllerName
+	bbcENILog            = logging.NewSubysLogger("bbc-eni-sync-manager")
+	bbcENIControllerName = "bbc" + eniControllerName
 )
 
-// physicalENISyncer create SyncerManager for ENI
-type physicalENISyncer struct {
+// bbcENISyncer create SyncerManager for ENI
+type bbcENISyncer struct {
 	VPCIDs       []string
 	ClusterID    string
 	SyncManager  *SyncManager[bbc.GetInstanceEniResult]
@@ -39,29 +38,27 @@ type physicalENISyncer struct {
 	bceclient    cloud.Interface
 	resyncPeriod time.Duration
 	enilister    enilisterv2.ENILister
-
-	eventRecorder record.EventRecorder
 }
 
 // Init initialise the sync manager.
 // add vpcIDs to list
-func (pes *physicalENISyncer) Init(ctx context.Context) error {
-	pes.bceclient = option.BCEClient()
-	pes.resyncPeriod = operatorOption.Config.ResourceResyncInterval
-	pes.SyncManager = NewSyncManager(physicalENIControllerName, pes.resyncPeriod, pes.syncENI)
-	pes.enilister = k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
+func (ss *bbcENISyncer) Init(ctx context.Context) error {
+	ss.bceclient = option.BCEClient()
+	ss.resyncPeriod = operatorOption.Config.ResourceResyncInterval
+	ss.SyncManager = NewSyncManager(bbcENIControllerName, ss.resyncPeriod, ss.syncENI)
+	ss.enilister = k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
 	return nil
 }
 
-func (pes *physicalENISyncer) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
-	pes.updater = updater
-	pes.SyncManager.Run()
-	log.WithField(taskLogField, physicalENIControllerName).Infof("physicalENISyncer is running")
-	return pes
+func (ss *bbcENISyncer) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
+	ss.updater = updater
+	ss.SyncManager.Run()
+	log.WithField(taskLogField, bbcENIControllerName).Infof("bbcENISyncer is running")
+	return ss
 }
 
 // syncENI Sync eni from BCE Cloud, and all eni data are subject to BCE Cloud
-func (pes *physicalENISyncer) syncENI(ctx context.Context) (result []bbc.GetInstanceEniResult, err error) {
+func (ss *bbcENISyncer) syncENI(ctx context.Context) (result []bbc.GetInstanceEniResult, err error) {
 	var (
 		results []bbc.GetInstanceEniResult
 	)
@@ -69,7 +66,7 @@ func (pes *physicalENISyncer) syncENI(ctx context.Context) (result []bbc.GetInst
 	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelENIType: string(ccev2.ENIForBBC),
 	}))
-	enis, err := pes.enilister.List(selector)
+	enis, err := ss.enilister.List(selector)
 	if err != nil {
 		return nil, fmt.Errorf("list ENIs failed: %w", err)
 	}
@@ -78,9 +75,9 @@ func (pes *physicalENISyncer) syncENI(ctx context.Context) (result []bbc.GetInst
 		if instanceId == "" && eni.Labels != nil {
 			instanceId = eni.Labels[k8s.LabelInstanceID]
 		}
-		eniResult, err := pes.bceclient.GetBBCInstanceENI(ctx, instanceId)
+		eniResult, err := ss.bceclient.GetBBCInstanceENI(ctx, instanceId)
 		if err != nil {
-			physicalENILog.WithError(err).WithField("node", eni.Spec.NodeName).Errorf("get physical ENI %s failed", eni.Name)
+			bbcENILog.WithError(err).WithField("node", eni.Spec.NodeName).Errorf("get bbc ENI %s failed", eni.Name)
 			continue
 		}
 		results = append(results, *eniResult)
@@ -92,13 +89,13 @@ func (pes *physicalENISyncer) syncENI(ctx context.Context) (result []bbc.GetInst
 // Create Process synchronization of new enis
 // For a new eni, we should generally query the details of the eni directly
 // and synchronously
-func (pes *physicalENISyncer) Create(resource *ccev2.ENI) error {
-	log.WithField(taskLogField, physicalENIControllerName).
+func (ss *bbcENISyncer) Create(resource *ccev2.ENI) error {
+	log.WithField(taskLogField, bbcENIControllerName).
 		Infof("create a new eni(%s) crd", resource.Name)
-	return pes.Update(resource)
+	return ss.Update(resource)
 }
 
-func (pes *physicalENISyncer) Update(resource *ccev2.ENI) error {
+func (ss *bbcENISyncer) Update(resource *ccev2.ENI) error {
 	if resource.Spec.Type != ccev2.ENIForBBC {
 		return nil
 	}
@@ -110,48 +107,48 @@ func (pes *physicalENISyncer) Update(resource *ccev2.ENI) error {
 		ctx       = logfields.NewContext()
 	)
 
-	scopeLog := physicalENILog.WithFields(logrus.Fields{
+	scopeLog := bbcENILog.WithFields(logrus.Fields{
 		"eniID":      newObj.Name,
 		"vpcID":      newObj.Spec.ENI.VpcID,
 		"eniName":    newObj.Spec.ENI.Name,
 		"instanceID": newObj.Spec.ENI.InstanceID,
 		"status":     newObj.Status.VPCStatus,
-		"method":     "physicalENISyncer.Update",
+		"method":     "bbcENISyncer.Update",
 	})
 
-	pes.mangeFinalizer(newObj)
+	ss.mangeFinalizer(newObj)
 
-	scopeLog.Debug("start refresh physical eni")
-	err = pes.refreshENI(ctx, newObj)
+	scopeLog.Debug("start refresh bbc eni")
+	err = ss.refreshENI(ctx, newObj)
 	if err != nil {
-		scopeLog.WithError(err).Error("refresh physical eni failed")
+		scopeLog.WithError(err).Error("refresh bbc eni failed")
 		return err
 	}
 
 	// update spec and status
 	if !reflect.DeepEqual(&newObj.Spec, &resource.Spec) || !reflect.DeepEqual(newObj.Labels, resource.Labels) {
-		newObj, err = pes.updater.Update(newObj)
+		newObj, err = ss.updater.Update(newObj)
 		if err != nil {
-			scopeLog.WithError(err).Error("update physical eni spec failed")
+			scopeLog.WithError(err).Error("update bbc eni spec failed")
 			return err
 		}
-		scopeLog.Info("update physical eni spec success")
+		scopeLog.Info("update bbc eni spec success")
 	}
 
 	if !reflect.DeepEqual(eniStatus, &resource.Status) {
 		newObj.Status = *eniStatus
-		_, err = pes.updater.UpdateStatus(newObj)
+		_, err = ss.updater.UpdateStatus(newObj)
 		if err != nil {
-			scopeLog.WithError(err).Error("update physical eni status failed")
+			scopeLog.WithError(err).Error("update bbc eni status failed")
 			return err
 		}
-		scopeLog.Info("update physical eni status success")
+		scopeLog.Info("update bbc eni status success")
 	}
 	return nil
 }
 
 // mangeFinalizer except for node deletion, direct deletion of ENI objects is prohibited
-func (*physicalENISyncer) mangeFinalizer(newObj *ccev2.ENI) {
+func (*bbcENISyncer) mangeFinalizer(newObj *ccev2.ENI) {
 	if newObj.DeletionTimestamp == nil && len(newObj.Finalizers) == 0 {
 		newObj.Finalizers = append(newObj.Finalizers, FinalizerENI)
 	}
@@ -170,16 +167,16 @@ func (*physicalENISyncer) mangeFinalizer(newObj *ccev2.ENI) {
 	}
 }
 
-func (pes *physicalENISyncer) Delete(name string) error {
-	physicalENILog.WithField(taskLogField, physicalENIControllerName).
+func (ss *bbcENISyncer) Delete(name string) error {
+	bbcENILog.WithField(taskLogField, bbcENIControllerName).
 		Infof("eni(%s) have been deleted", name)
 	return nil
 }
 
-func (pes *physicalENISyncer) ResyncENI(context.Context) time.Duration {
-	log.WithField(taskLogField, physicalENIControllerName).Infof("start to resync physical eni")
-	pes.SyncManager.RunImmediately()
-	return pes.resyncPeriod
+func (ss *bbcENISyncer) ResyncENI(context.Context) time.Duration {
+	log.WithField(taskLogField, bbcENIControllerName).Infof("start to resync bbc eni")
+	ss.SyncManager.RunImmediately()
+	return ss.resyncPeriod
 }
 
 // override ENI spec
@@ -187,7 +184,7 @@ func (pes *physicalENISyncer) ResyncENI(context.Context) time.Duration {
 // 1. set ip family by private ip address
 // 2. set subnet by priveip search subnet of the private IP from subnets
 // 3. override eni status
-func (es *physicalENISyncer) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
+func (es *bbcENISyncer) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
 	var (
 		eniCache *bbc.GetInstanceEniResult
 		err      error
@@ -255,16 +252,16 @@ func (es *physicalENISyncer) refreshENI(ctx context.Context, newObj *ccev2.ENI) 
 }
 
 // getENIWithCache gets a ENI from the cache if it is there, otherwise
-func (pes *physicalENISyncer) getENIWithCache(ctx context.Context, resource *ccev2.ENI) (*bbc.GetInstanceEniResult, error) {
+func (ss *bbcENISyncer) getENIWithCache(ctx context.Context, resource *ccev2.ENI) (*bbc.GetInstanceEniResult, error) {
 	var err error
-	eniCache := pes.SyncManager.Get(resource.Name)
+	eniCache := ss.SyncManager.Get(resource.Name)
 	// Directly request VPC back to the source
 	if eniCache == nil {
 		instanceId := resource.Spec.ENI.InstanceID
 		if instanceId == "" && resource.Labels != nil {
 			instanceId = resource.Labels[k8s.LabelInstanceID]
 		}
-		eniCache, err = pes.statENI(ctx, instanceId)
+		eniCache, err = ss.statENI(ctx, instanceId)
 	}
 	if err == nil && eniCache == nil {
 		return nil, errors.New(string(cloud.ErrorReasonNoSuchObject))
@@ -273,19 +270,19 @@ func (pes *physicalENISyncer) getENIWithCache(ctx context.Context, resource *cce
 }
 
 // statENI returns one ENI with the given name from bce cloud
-func (pes *physicalENISyncer) statENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
+func (ss *bbcENISyncer) statENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
 	var (
 		eniCache *bbc.GetInstanceEniResult
 		err      error
 	)
-	eniCache, err = pes.bceclient.GetBBCInstanceENI(ctx, instanceID)
+	eniCache, err = ss.bceclient.GetBBCInstanceENI(ctx, instanceID)
 	if err != nil {
-		physicalENILog.WithField(taskLogField, physicalENIControllerName).
+		bbcENILog.WithField(taskLogField, bbcENIControllerName).
 			WithField("instanceID", instanceID).
 			WithContext(ctx).
 			WithError(err).Errorf("stat eni failed")
 		return nil, err
 	}
-	pes.SyncManager.AddItems([]bbc.GetInstanceEniResult{*eniCache})
+	ss.SyncManager.AddItems([]bbc.GetInstanceEniResult{*eniCache})
 	return eniCache, nil
 }

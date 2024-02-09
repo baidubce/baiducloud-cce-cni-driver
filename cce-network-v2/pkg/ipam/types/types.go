@@ -185,9 +185,6 @@ type IPAMStatus struct {
 	//
 	// +optional
 	ReleaseIPs map[string]IPReleaseStatus `json:"release-ips,omitempty"`
-
-	// AvailableSubnets lists all subnets which are available for allocation
-	AvailableSubnetIDs []string `json:"available-subnet-ids,omitempty"`
 }
 
 type VPCRouteStatuMap map[string]VPCRouteStatus

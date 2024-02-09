@@ -53,50 +53,50 @@ import (
 
 var (
 	stdinData = `
- {
-	 "cniVersion":"0.3.1",
-	 "endpoint":"172.16.71.154:80",
-	 "name":"cce-cni",
-	 "prevResult":{
-		 "cniVersion":"0.3.1",
-		 "interfaces":[
-			 {
-				 "name":"vethcc21c2d7785",
-				 "mac":"ba:93:2d:63:cf:22"
-			 },
-			 {
-				 "name":"eth0",
-				 "mac":"12:a6:63:62:fc:77",
-				 "sandbox":"/proc/1417189/ns/net"
-			 }
-		 ],
-		 "ips":[
-			 {
-				 "version":"4",
-				 "interface":1,
-				 "address":"172.31.2.10/24",
-				 "gateway":"172.31.2.1"
-			 }
-		 ],
-		 "routes":[
-			 {
-				 "dst":"0.0.0.0/0"
-			 }
-		 ],
-		 "dns":{
- 
-		 }
-	 },
-	 "type":"crossvpc-eni"
- }`
+{
+    "cniVersion":"0.3.1",
+    "endpoint":"172.16.71.154:80",
+    "name":"cce-cni",
+    "prevResult":{
+        "cniVersion":"0.3.1",
+        "interfaces":[
+            {
+                "name":"vethcc21c2d7785",
+                "mac":"ba:93:2d:63:cf:22"
+            },
+            {
+                "name":"eth0",
+                "mac":"12:a6:63:62:fc:77",
+                "sandbox":"/proc/1417189/ns/net"
+            }
+        ],
+        "ips":[
+            {
+                "version":"4",
+                "interface":1,
+                "address":"172.31.2.10/24",
+                "gateway":"172.31.2.1"
+            }
+        ],
+        "routes":[
+            {
+                "dst":"0.0.0.0/0"
+            }
+        ],
+        "dns":{
+
+        }
+    },
+    "type":"crossvpc-eni"
+}`
 
 	stdinDataMainPlugin = `
- {
-	 "cniVersion":"0.3.1",
-	 "endpoint":"172.16.71.154:80",
-	 "name":"cce-cni",
-	 "type":"crossvpc-eni"
- }`
+{
+    "cniVersion":"0.3.1",
+    "endpoint":"172.16.71.154:80",
+    "name":"cce-cni",
+    "type":"crossvpc-eni"
+}`
 
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
 

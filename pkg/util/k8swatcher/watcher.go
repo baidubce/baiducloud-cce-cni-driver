@@ -74,16 +74,19 @@ func (c *NodeWatcher) RegisterEventHandler(handler NodeHandler) {
 	c.eventHandlers = append(c.eventHandlers, handler)
 }
 
+func (c *NodeWatcher) SyncCache(stopCh <-chan struct{}) error {
+	if !cache.WaitForNamedCacheSync("node watcher", stopCh, c.listerSynced) {
+		return fmt.Errorf("failed to WaitForNamedCacheSync")
+	}
+	return nil
+}
+
 // Run starts the goroutine responsible for calling registered handlers.
 func (c *NodeWatcher) Run(workers int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.workqueue.ShutDown()
 
 	log.Info(context.TODO(), "Starting node watcher")
-
-	if !cache.WaitForNamedCacheSync("node watcher", stopCh, c.listerSynced) {
-		return
-	}
 
 	for i := 0; i < workers; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
@@ -213,6 +216,11 @@ func NewIPPoolWatcher(poolInformer crdinformers.IPPoolInformer, resyncPeriod tim
 // RegisterEventHandler registers a handler which is called on every ipool change.
 func (c *IPPoolWatcher) RegisterEventHandler(handler IPPoolHandler) {
 	c.eventHandlers = append(c.eventHandlers, handler)
+}
+
+// SyncCahe wait cache sync ready
+func (c *IPPoolWatcher) SyncCache(stopCh <-chan struct{}) bool {
+	return cache.WaitForNamedCacheSync("ippool watcher", stopCh, c.listerSynced)
 }
 
 // Run starts the goroutine responsible for calling registered handlers.

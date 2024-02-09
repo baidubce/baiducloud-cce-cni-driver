@@ -203,16 +203,22 @@ func (p *eriPlugin) cmdAdd(args *skel.CmdArgs) error {
 		log.Errorf(ctx, "grad file lock error: %s", err.Error())
 		return fmt.Errorf("grad file lock error: %s", err.Error())
 	}
-	defer l.Close()
 
 	for idx, devName := range roceDevs {
 		roceDevName := fmt.Sprintf("%s%d", roceDevicePrefix, idx+1)
 		err = p.setupIPvlan(ctx, n, devName, roceDevName, netns, k8sArgs, ipam)
 		if err != nil {
-			return err
+			break
 		}
 	}
 
+	if err != nil {
+		_ = p.ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+			return p.delAllIPVlanDevices()
+		})
+		return err
+	}
+	defer l.Close()
 	return types.PrintResult(n.PrevResult, cniVersion)
 }
 

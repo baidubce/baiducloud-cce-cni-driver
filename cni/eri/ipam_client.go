@@ -105,7 +105,7 @@ func (ipam *roceIPAM) ReleaseIP(ctx context.Context, k8sArgs *cni.K8SArgs, endpo
 	})
 	if err != nil {
 		log.Errorf(ctx, "failed to release ip from cni backend: %v", err)
-		return nil, err
+		return resp, err
 	}
 	log.Infof(ctx, "release ip response body: %v", resp.String())
 

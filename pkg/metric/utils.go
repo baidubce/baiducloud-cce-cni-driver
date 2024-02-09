@@ -16,9 +16,13 @@
 package metric
 
 import (
+	"context"
+	"reflect"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 var (
@@ -44,23 +48,34 @@ func MsSince(start time.Time) float64 {
 }
 
 // RegisterPrometheusMetrics register metrics to prometheus server
-func RegisterPrometheusMetrics() {
-	prometheus.Register(OpenAPILatency)
+func RegisterPrometheusMetrics(ctx context.Context) {
+	var collectors []interface{}
+	collectors = append(collectors, MEMUsagePercent)
 
-	prometheus.Register(RPCLatency)
-	prometheus.Register(RPCConcurrency)
-	prometheus.Register(RPCErrorCounter)
-	prometheus.Register(RPCRejectedCounter)
+	collectors = append(collectors, OpenAPILatency)
 
-	prometheus.Register(RPCPerPodLatency)
-	prometheus.Register(RPCPerPodLockLatency)
+	collectors = append(collectors, RPCLatency)
+	collectors = append(collectors, RPCConcurrency)
+	collectors = append(collectors, RPCErrorCounter)
+	collectors = append(collectors, RPCRejectedCounter)
 
-	prometheus.Register(MultiEniMultiIPEniCount)
-	prometheus.Register(MultiEniMultiIPEniIPCount)
+	collectors = append(collectors, RPCPerPodLatency)
+	collectors = append(collectors, RPCPerPodLockLatency)
 
-	prometheus.Register(PrimaryEniMultiIPEniIPTotalCount)
-	prometheus.Register(PrimaryEniMultiIPEniIPAllocatedCount)
-	prometheus.Register(PrimaryEniMultiIPEniIPAvailableCount)
+	collectors = append(collectors, MultiEniMultiIPEniCount)
+	collectors = append(collectors, MultiEniMultiIPEniIPCount)
 
-	prometheus.Register(SubnetAvailableIPCount)
+	collectors = append(collectors, PrimaryEniMultiIPEniIPTotalCount)
+	collectors = append(collectors, PrimaryEniMultiIPEniIPAllocatedCount)
+	collectors = append(collectors, PrimaryEniMultiIPEniIPAvailableCount)
+
+	collectors = append(collectors, SubnetAvailableIPCount)
+
+	var err error
+	for _, collector := range collectors {
+		err = prometheus.Register(collector.(prometheus.Collector))
+		if err != nil {
+			log.Fatalf(ctx, "register collector %v failed: %v", reflect.TypeOf(collector), err)
+		}
+	}
 }

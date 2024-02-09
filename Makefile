@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.7.10
+VERSION := v1.8.4
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -41,7 +41,7 @@ EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.Version=$(VERSION)
 # pro or dev
 PROFILES := dev
 IMAGE_TAG := registry.baidubce.com/cce-plugin-$(PROFILES)/cce-cni
-PUSH_CNI_IMAGE_FLAGS = --push
+PUSH_CNI_IMAGE_FLAGS = --load --push
 
 # make, make all
 all: prepare compile
@@ -72,7 +72,6 @@ cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossv
 $(cni_target): fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/$@ $(HOMEDIR)/cni/$@
-	strip $(HOMEDIR)/$@
 	mv $(HOMEDIR)/$@ $(OUTDIR)/cni-bin/
 
 # Compile all container network programs
@@ -80,7 +79,6 @@ exec_target := cce-ipam cni-node-agent ip-masq-agent
 $(exec_target):	fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/$@ $(HOMEDIR)/cmd/$@
-	strip $(HOMEDIR)/$@
 	mv $(HOMEDIR)/$@ $(OUTDIR)
 
 #make compile

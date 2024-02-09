@@ -155,7 +155,8 @@ func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {
 	if err != nil {
 		return "", err
 	}
-	// typeExStr == "bbc" && typeStr is in the same format as "ebc.l5c.c128m256.1d", set typeExStr = "bcc"
+	// typeExStr == "bbc" && typeStr is in the same format as "ebc.l5c.c128m256.1d"
+	// or "ehc.lgn5.c128m1024.8a100.8re.4d", set typeExStr = "bcc"
 	typeExStr := strings.TrimSpace(string(bodyTypeEx))
 	if typeExStr == "bbc" {
 		bodyType, err := c.GetInstanceType()
@@ -163,7 +164,7 @@ func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {
 			return "", err
 		}
 		typeStr := strings.TrimSpace(string(bodyType))
-		isEbc := strings.HasPrefix(typeStr, "ebc")
+		isEbc := strings.HasPrefix(typeStr, "ebc") || strings.HasPrefix(typeStr, "ehc")
 		if isEbc {
 			typeExStr = string(InstanceTypeExBCC)
 		}

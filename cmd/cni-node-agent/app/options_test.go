@@ -43,7 +43,31 @@ func TestOptions_newOptions(t *testing.T) {
 	o := newOptions()
 	o.addFlags(&pflag.FlagSet{})
 	o.validate()
+	o.config.Kubeconfig = "/tmp/kubeconfig"
+	kubeconfig := `
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: xxxx
+    server: https://106.13.134.30:6443
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    user: usertest
+  name: usertest@kubernetes
+current-context: usertest@kubernetes
+kind: Config
+preferences: {}
+users:
+- name: usertest
+  user:
+    client-certificate-data: yyyy
+    client-key-data: zzzz
+`
+	ioutil.WriteFile(o.config.Kubeconfig, []byte(kubeconfig), 0755)
 	o.run(context.TODO())
+	os.Remove(o.config.Kubeconfig)
 }
 
 func TestOptions_complete(t *testing.T) {

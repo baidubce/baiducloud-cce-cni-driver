@@ -500,7 +500,7 @@ func (ipam *IPAM) batchAllocateIPFromCloud(
 	var err error
 
 	for batchAddNum > 0 {
-		if err := ipam.assertEniCanIncreasePool(ctx, node, eni); err != nil {
+		if err = ipam.assertEniCanIncreasePool(ctx, node, eni); err != nil {
 			break
 		}
 
@@ -513,7 +513,7 @@ func (ipam *IPAM) batchAllocateIPFromCloud(
 
 		if err != nil {
 			// retry condition: batchAddNum > 1 && isErrorNeedExponentialBackoff
-			log.Warningf(ctx, "batch add %s private ip(s) for node %s failed: %s", batchAddNum, node.Name, err)
+			log.Warningf(ctx, "batch add %d private ip(s) for node %s failed: %s", batchAddNum, node.Name, err)
 
 			if batchAddNum == 1 {
 				ipam.handleAllocateError(ctx, err, eni, backoffCap)

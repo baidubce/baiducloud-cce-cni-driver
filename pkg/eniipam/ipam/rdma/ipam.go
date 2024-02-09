@@ -107,8 +107,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 	log.Infof(ctx, "find eniID is %s ", matchedEni.EniID)
 
-	ipam.lock.Lock()
-	defer ipam.lock.Unlock()
+	//	ipam.lock.Lock()
+	//	defer ipam.lock.Unlock()
 	mwep, err := ipam.getMwep(ctx, namespace, name, nodeName)
 	if err != nil {
 		if errors.IsNotFound(err) {

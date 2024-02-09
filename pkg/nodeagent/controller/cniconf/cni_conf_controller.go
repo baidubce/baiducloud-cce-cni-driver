@@ -101,6 +101,8 @@ func (c *Controller) ReconcileCNIConfig() {
 }
 
 func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
+	log.V(6).Infof(ctx, "syncCNIConfig for node: %v begin", nodeName)
+	defer log.V(6).Infof(ctx, "syncCNIConfig for node: %v end", nodeName)
 	if nodeName != c.nodeName {
 		return nil
 	}
@@ -279,11 +281,6 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		ipPool, err := c.ippoolLister.IPPools(v1.NamespaceDefault).Get(ipPoolName)
 		if err != nil {
 			return nil, err
-		}
-
-		// if ippool has no owner reference that means it is a expired object
-		if len(ipPool.OwnerReferences) == 0 {
-			return nil, fmt.Errorf("expired object: ippool object %s have no one owner reference", ipPool.Name)
 		}
 
 		if len(ipPool.Spec.IPv4Ranges) != 0 {

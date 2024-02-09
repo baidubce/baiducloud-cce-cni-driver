@@ -71,14 +71,6 @@ func mockIPAM(t *testing.T, stopChan chan struct{}) *IPAM {
 	)
 	ipamServer := ipam.(*IPAM)
 	ipamServer.cacheHasSynced = true
-	nodeCache := map[string]*v1.Node{
-		"eni-df8888fs": {
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "",
-			},
-		},
-	}
-	ipamServer.nodeCache = nodeCache
 
 	ipamServer.kubeInformer.Start(stopChan)
 	ipamServer.crdInformer.Start(stopChan)
@@ -122,7 +114,6 @@ func (suite *IPAMTest) TestIPAMRun() {
 
 	suite.ipam.iaasClient.(*mockclient.MockIaaSClient).EXPECT().GetMwepType().Return("eri")
 
-	suite.ipam.nodeCache = make(map[string]*v1.Node)
 	go func() {
 		_ = suite.ipam.Run(suite.ctx, suite.stopChan)
 	}()
@@ -605,7 +596,6 @@ func TestIPAM_Allocate(t *testing.T) {
 			}
 			ipam := &IPAM{
 				lock:           tt.fields.lock,
-				nodeCache:      tt.fields.nodeCache,
 				cacheHasSynced: tt.fields.cacheHasSynced,
 				eventRecorder:  tt.fields.eventRecorder,
 				kubeInformer:   tt.fields.kubeInformer,

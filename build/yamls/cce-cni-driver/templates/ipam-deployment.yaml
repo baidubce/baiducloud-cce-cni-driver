@@ -98,7 +98,7 @@ spec:
             periodSeconds: 2
           resources:
             limits:
-              memory: 500Mi
+              memory: 1000Mi
             requests:
               memory: 500Mi
       volumes:

@@ -270,9 +270,14 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.ReleaseIPConcurrencyLimit,
 			opts.Debug)
 
-		// run metric server
+		// Run metric server
 		go func() {
 			runMetricServer(ctx, opts)
+		}()
+
+		// Update the memory usage percent metric every second in a separate goroutine.
+		go func() {
+			metric.RunMemUsagePercentMetric(ctx)
 		}()
 
 		go func() {
@@ -336,7 +341,7 @@ func runMetricServer(ctx context.Context, opts *Options) {
 
 	metric.SetMetricMetaInfo(opts.ClusterID, opts.VPCID)
 
-	metric.RegisterPrometheusMetrics()
+	metric.RegisterPrometheusMetrics(ctx)
 	http.Handle("/metrics", promhttp.Handler())
 	err := http.ListenAndServe(address, nil)
 	if err != nil {

@@ -82,8 +82,7 @@ func (manager *simpleIPResourceManager) patchENICapacityInfoToNode(ctx context.C
 
 	// update node capacity
 	needUpdateIPResourceFlag := true
-	// ENI primary IP is not used for container network IP allocation
-	maxIP := maxENINum * (maxIPPerENI - 1)
+	maxIP := maxENINum * maxIPPerENI
 	ipPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "ip", maxIP)
 	if ipRe, ok := node.Status.Capacity[networking.ResourceIPForNode]; ok {
 		if ipRe.Value() == int64(maxIP) {

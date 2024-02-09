@@ -159,24 +159,24 @@ func (s *nodeAgent) run(ctx context.Context) error {
 
 	// Create watcher to watch for k8s resources
 	nodeWatcher := k8swatcher.NewNodeWatcher(informerFactory.Core().V1().Nodes(), informerResyncPeriod)
+	// This has to start after the calls to NewXXXWatcher  because those
+	// functions must configure their shared informer event handlers first.
+	informerFactory.Start(wait.NeverStop)
+	crdInformerFactory.Start(wait.NeverStop)
+
+	log.Infof(ctx, "waiting for informer caches to sync")
+
+	// WaitCacheSync
+	informerFactory.WaitForCacheSync(wait.NeverStop)
+	crdInformerFactory.WaitForCacheSync(wait.NeverStop)
+
+	log.Infof(ctx, "informer caches are synced")
+
+	nodeWatcher.SyncCache(wait.NeverStop)
 
 	// check cni mode
 	if !types.IsKubenetMode(cniMode) && !types.IsCCECNIMode(cniMode) {
 		return fmt.Errorf("unknown cni mode: %v", cniMode)
-	}
-
-	// all modes need cni config file except kubenet.
-	if !types.IsKubenetMode(cniMode) {
-		// cni config controller
-		cniConfigCtrl := cniconf.New(
-			s.kubeClient,
-			crdInformerFactory.Cce().V1alpha1().IPPools().Lister(),
-			cniMode,
-			s.options.hostName,
-			&s.options.config.CNIConfig,
-		)
-		nodeWatcher.RegisterEventHandler(cniConfigCtrl)
-		go cniConfigCtrl.ReconcileCNIConfig()
 	}
 
 	// all modes needs ippool controller
@@ -194,7 +194,24 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.options.config.CCE.ENIController.PreAttachedENINum,
 		s.options.config.CCE.PodSubnetController.SubnetList,
 	)
+	// 这里先显式将最新的 node cidr 同步到 ippool 中
+	// 避免下面 cni 配置生成时，使用到已删除 node 残留的 ipool 中的 旧 cidr
+	ippoolCtrl.SyncNode(s.options.hostName, informerFactory.Core().V1().Nodes().Lister())
 	nodeWatcher.RegisterEventHandler(ippoolCtrl)
+
+	// all modes need cni config file except kubenet.
+	if !types.IsKubenetMode(cniMode) {
+		// cni config controller
+		cniConfigCtrl := cniconf.New(
+			s.kubeClient,
+			crdInformerFactory.Cce().V1alpha1().IPPools().Lister(),
+			cniMode,
+			s.options.hostName,
+			&s.options.config.CNIConfig,
+		)
+		nodeWatcher.RegisterEventHandler(cniConfigCtrl)
+		go cniConfigCtrl.ReconcileCNIConfig()
+	}
 
 	// all modes runs gc
 	gcCtrl := gc.New()
@@ -223,19 +240,6 @@ func (s *nodeAgent) run(ctx context.Context) error {
 	case types.IsCCECNIModeBasedOnBBCSecondaryIP(cniMode):
 		s.runCCEModeBasedOnBBCSecondaryIP(ctx, nodeWatcher, eniCtrl)
 	}
-
-	// This has to start after the calls to NewXXXWatcher  because those
-	// functions must configure their shared informer event handlers first.
-	informerFactory.Start(wait.NeverStop)
-	crdInformerFactory.Start(wait.NeverStop)
-
-	log.Infof(ctx, "waiting for informer caches to sync")
-
-	// WaitCacheSync
-	informerFactory.WaitForCacheSync(wait.NeverStop)
-	crdInformerFactory.WaitForCacheSync(wait.NeverStop)
-
-	log.Infof(ctx, "informer caches are synced")
 
 	nodeWatcher.Run(s.options.config.Workers, wait.NeverStop)
 

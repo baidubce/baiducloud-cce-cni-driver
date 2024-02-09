@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/cni"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -158,7 +159,9 @@ func newRdmaPlugin() *rdmaPlugin {
 
 func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 	ctx := log.NewContext()
-	log.Infof(ctx, "====> CmdAdd Begins <====")
+	log.Infof(ctx, "====> CmdAdd Begins: containerID: %v, netns: %v, ifName: %v, args: %v, path: %v",
+		args.ContainerID, args.Netns, args.IfName, args.Args, args.Path)
+
 	defer log.Infof(ctx, "====> CmdAdd Ends <====")
 	defer log.Flush()
 	ipam := NewRoceIPAM(p.grpc, p.rpc)
@@ -204,15 +207,33 @@ func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 		log.Errorf(ctx, "grad file lock error: %s", err.Error())
 		return fmt.Errorf("grad file lock error: %s", err.Error())
 	}
-	defer l.Close()
 
+	roceDev2macvlanInterface := make(map[string]*current.Interface)
 	for idx, devName := range roceDevs {
 		roceDevName := fmt.Sprintf("%s%d", roceDevicePrefix, idx+1)
-		err = p.setupMacvlan(ctx, n, devName, roceDevName, netns, k8sArgs, ipam)
+		macvlanInterface, err := p.createMacvlan(n, devName, roceDevName, netns)
 		if err != nil {
 			return err
 		}
+		roceDev2macvlanInterface[roceDevName] = macvlanInterface
 	}
+
+	for idx, devName := range roceDevs {
+		roceDevName := fmt.Sprintf("%s%d", roceDevicePrefix, idx+1)
+		err = p.setupMacvlan(ctx, n, devName, roceDevName, netns, k8sArgs, ipam, roceDev2macvlanInterface)
+		if err != nil {
+			break
+		}
+	}
+
+	if err != nil {
+		_ = p.ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+			return p.delAllMacVlanDevices()
+		})
+		return err
+	}
+
+	l.Close()
 	// err = netns.Do(func(_ ns.NetNS) error {
 	// 	return p.disableRPFCheck(ctx, len(roceDevs))
 	// })
@@ -254,11 +275,18 @@ func (p *rdmaPlugin) cmdDel(args *skel.CmdArgs) error {
 		return nil
 	}
 
+	l, err := keymutex.GrabFileLock(fileLock)
+	if err != nil {
+		log.Errorf(ctx, "grad file lock error: %s", err.Error())
+		return fmt.Errorf("grad file lock error: %s", err.Error())
+	}
+
 	// There is a netns so try to clean up. Delete can be called multiple times
 	// so don't return an error if the device is already removed.
 	err = p.ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
 		return p.delAllMacVlanDevices()
 	})
+	l.Close()
 
 	if err != nil {
 		log.Errorf(ctx, "delete macvlan device failed:%v", err)
@@ -436,7 +464,7 @@ func (p *rdmaPlugin) getAllRoceDevices() ([]string, error) {
 		if devName == defaultRouteInterface {
 			continue
 		}
-		if devName == "" {
+		if devName == "" || strings.Contains(devName, " ") {
 			continue
 		}
 		roceDevs = append(roceDevs, devName)
@@ -464,12 +492,20 @@ func getDefaultRouteInterfaceName() (string, error) {
 	return "", fmt.Errorf("no default route interface found")
 }
 
-func (p *rdmaPlugin) setupMacvlan(ctx context.Context, conf *NetConf, master, ifName string, netns ns.NetNS, k8sArgs *cni.K8SArgs, ipamClient *roceIPAM) error {
-	macvlanInterface, err := p.createMacvlan(conf, master, ifName, netns)
+func (p *rdmaPlugin) setupMacvlan(ctx context.Context, conf *NetConf, master, ifName string, netns ns.NetNS, k8sArgs *cni.K8SArgs,
+	ipamClient *roceIPAM, roceDev2Interface map[string]*current.Interface) error {
+	// macvlanInterface, err := p.createMacvlan(conf, master, ifName, netns)
+	// if err != nil {
+	// 	return err
+	// }
+
+	macvlanInterface := roceDev2Interface[ifName]
+	log.Infof(ctx, "create macvlan dev: %s ,macvlanInterface: %v successfully,master:%s", ifName, macvlanInterface, master)
+
+	m, err := p.nlink.LinkByName(master)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to lookup master %q: %v", master, err)
 	}
-	log.Infof(ctx, "create macvlan dev: %s ,mac: %s successfully,master:%s", ifName, macvlanInterface.Mac, master)
 
 	defer func() {
 		if err != nil {
@@ -481,11 +517,6 @@ func (p *rdmaPlugin) setupMacvlan(ctx context.Context, conf *NetConf, master, if
 			}
 		}
 	}()
-
-	m, err := p.nlink.LinkByName(master)
-	if err != nil {
-		return fmt.Errorf("failed to lookup master %q: %v", master, err)
-	}
 
 	masterMac := m.Attrs().HardwareAddr.String()
 	masterMask := p.getDeviceMask(conf, master)
@@ -572,11 +603,13 @@ func (p *rdmaPlugin) setupMacvlanNetworkInfo(ctx context.Context, conf *NetConf,
 	}
 	name, namespace := string(k8sArgs.K8S_POD_NAME), string(k8sArgs.K8S_POD_NAMESPACE)
 
+	startT := time.Now()
 	resp, err := ipamClient.AllocIP(ctx, k8sArgs, conf.IPAM.Endpoint, masterMac)
 	if err != nil {
 		log.Errorf(ctx, "failed to allocate IP: %v", err)
 		return err
 	}
+	log.Infof(ctx, "AllocIP cost: %v", time.Since(startT))
 	if !resp.IsSuccess {
 		msg := fmt.Sprintf("ipam server allocate IP error: %v", resp.ErrMsg)
 		log.Error(ctx, msg)

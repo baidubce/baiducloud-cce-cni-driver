@@ -380,12 +380,13 @@ func (c *Controller) syncRangeSpec(ctx context.Context, node *v1.Node) error {
 // createOrUpdateIPPool creates or updates node-level IPPool CR
 func (c *Controller) createOrUpdateIPPool(ctx context.Context, node *v1.Node) error {
 	poolName := c.ippoolName
+	nodeGVK := v1.SchemeGroupVersion.WithKind("Node")
 
 	// add owner reference to ippool object, ippool object will be deleted when node's ippool is deleted
 	ownerRefence := []metav1.OwnerReference{
 		{
-			APIVersion: node.APIVersion,
-			Kind:       node.Kind,
+			APIVersion: nodeGVK.GroupVersion().String(),
+			Kind:       nodeGVK.Kind,
 			Name:       node.Name,
 			UID:        node.UID,
 		},

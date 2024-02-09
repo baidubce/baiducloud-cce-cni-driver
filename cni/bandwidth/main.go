@@ -2,18 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
-	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"math"
-
-	"github.com/vishvananda/netlink"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	"github.com/vishvananda/netlink"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/cni"
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containernetworking/plugins/pkg/utils"
@@ -264,7 +263,7 @@ func cmdDel(args *skel.CmdArgs) error {
 }
 
 func main() {
-	initFlags()
+	cni.InitFlags(logFile)
 	defer log.Flush()
 
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.3.0", "0.3.1", version.Current()), bv.BuildString("bandwidth"))
@@ -272,11 +271,4 @@ func main() {
 
 func cmdCheck(args *skel.CmdArgs) error {
 	return nil
-}
-
-func initFlags() {
-	log.InitFlags(nil)
-	flag.Set("logtostderr", "false")
-	flag.Set("log_file", logFile)
-	flag.Parse()
 }

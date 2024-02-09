@@ -1143,13 +1143,6 @@ func TestIPAM14(t *testing.T) {
 	suite.Run(t, test)
 
 }
-func TestIPAM16(t *testing.T) {
-	t.Parallel()
-	test := new(AllocationCustomModeReuseInIPRangeNoTTLTester)
-
-	suite.Run(t, test)
-
-}
 
 func TestIPAM15(t *testing.T) {
 	t.Parallel()

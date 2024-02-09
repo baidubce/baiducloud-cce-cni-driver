@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	ccev1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v1alpha1"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v2"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -14,6 +15,7 @@ import (
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
 	CceV1alpha1() ccev1alpha1.CceV1alpha1Interface
+	CceV2() ccev2.CceV2Interface
 }
 
 // Clientset contains the clients for groups. Each group has exactly one
@@ -21,11 +23,17 @@ type Interface interface {
 type Clientset struct {
 	*discovery.DiscoveryClient
 	cceV1alpha1 *ccev1alpha1.CceV1alpha1Client
+	cceV2       *ccev2.CceV2Client
 }
 
 // CceV1alpha1 retrieves the CceV1alpha1Client
 func (c *Clientset) CceV1alpha1() ccev1alpha1.CceV1alpha1Interface {
 	return c.cceV1alpha1
+}
+
+// CceV2 retrieves the CceV2Client
+func (c *Clientset) CceV2() ccev2.CceV2Interface {
+	return c.cceV2
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -53,6 +61,10 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 	if err != nil {
 		return nil, err
 	}
+	cs.cceV2, err = ccev2.NewForConfig(&configShallowCopy)
+	if err != nil {
+		return nil, err
+	}
 
 	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
 	if err != nil {
@@ -66,6 +78,7 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 func NewForConfigOrDie(c *rest.Config) *Clientset {
 	var cs Clientset
 	cs.cceV1alpha1 = ccev1alpha1.NewForConfigOrDie(c)
+	cs.cceV2 = ccev2.NewForConfigOrDie(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
 	return &cs
@@ -75,6 +88,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
 	cs.cceV1alpha1 = ccev1alpha1.New(c)
+	cs.cceV2 = ccev2.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs

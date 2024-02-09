@@ -3,6 +3,7 @@ package roce
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +13,12 @@ import (
 )
 
 var ( //for mock
-	OSReadFile = os.ReadFile
-	OSReadDir  = os.ReadDir
+	OSReadFile        = os.ReadFile
+	OSReadDir         = os.ReadDir
+	LinkLayerRoCE     = "Ethernet"
+	LinkLayerIB       = "InfiniBand"
+	LinkLayerFileName = "link_layer"
+	InfiniBandBase    = "/sys/class/infiniband"
 )
 
 type IRoCEProbe interface {
@@ -174,7 +179,7 @@ func detectPci(ctx context.Context) ([]DeviceAttribute, error) {
 	return devInfo, nil
 }
 
-const MellanoxDevOnBoardCountMin int = (8)
+const MellanoxDevOnBoardCountMin int = (1)
 
 func (probe *Probe) RoCEHasMellanoxDevOnBoard(ctx context.Context) (bool, error) {
 	var attrs []DeviceAttribute
@@ -265,8 +270,69 @@ func (probe *Probe) HasRoCEMellanox8Available(ctx context.Context) bool {
 		return false
 	}
 
+	isRoce, err := probe.mellanoxDevIsRoce(ctx, LinkLayerFileName, InfiniBandBase)
+	if !isRoce {
+		if err != nil {
+			log.Errorf(ctx, "mellanoxDevIsRoce error: %s", err.Error())
+		} else {
+			log.Infof(ctx, "Mellanox8 Device Type Is IB.")
+		}
+		return false
+	}
 	log.Infof(ctx, "RoCE Mellanox8 Available.")
 	return true
+}
+
+func (probe *Probe) mellanoxDevIsRoce(ctx context.Context, filename, dir string) (bool, error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	var RoceIBMap = map[string]bool{
+		LinkLayerRoCE: false,
+		LinkLayerIB:   false,
+	}
+	for _, curfile := range files {
+		err = probe.mellanoxDevIsRoceCore(filename, dir+"/"+curfile.Name(), RoceIBMap)
+		if err != nil {
+			log.Errorf(ctx, "mellanoxDevIsRoceCore error: %s", err.Error())
+		}
+	}
+	if ib, _ := RoceIBMap[LinkLayerIB]; ib {
+		return false, nil
+	}
+	if roce, _ := RoceIBMap[LinkLayerRoCE]; roce {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (probe *Probe) mellanoxDevIsRoceCore(filename, dir string, m map[string]bool) error {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, curfile := range files {
+		if curfile.IsDir() {
+			_ = probe.mellanoxDevIsRoceCore(filename, dir+"/"+curfile.Name(), m)
+		} else {
+			if curfile.Name() == filename {
+				fileContent, err := ioutil.ReadFile(dir + "/" + filename)
+				if err != nil {
+					return fmt.Errorf("error reading link_layer file %q: %v", dir+"/"+filename, err)
+				}
+				if strings.TrimSpace(string(fileContent)) == LinkLayerRoCE {
+					m[LinkLayerRoCE] = true
+				}
+				if strings.TrimSpace(string(fileContent)) == LinkLayerIB {
+					m[LinkLayerIB] = true
+				}
+				return nil
+			}
+		}
+	}
+	return nil
 }
 
 /** get roce device info from by ib cmdlinetools

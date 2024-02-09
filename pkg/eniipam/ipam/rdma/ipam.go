@@ -1,22 +1,12 @@
-package eri
+package rdma
 
 import (
 	"context"
 	goerrors "errors"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
-	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/scheme"
-	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
-	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
-	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -27,25 +17,37 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
+	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
+	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
 const (
-	syncNodePeriod = 2 * time.Hour
-	cloudMaxTry    = 3
-	// minPrivateIPLifeTime is the life time of a private ip (from allocation to release), aim to trade off db slave delay
-	minPrivateIPLifeTime       = 5 * time.Second
+	// minPrivateIPLifeTime is the lifetime of a private ip (from allocation to release), aim to trade off db slave delay
+	minPrivateIPLifeTime = 5 * time.Second
+
 	rateLimitErrorSleepPeriod  = time.Millisecond * 200
 	rateLimitErrorJitterFactor = 5
+
+	cloudMaxTry = 3
 )
 
 func NewIPAM(
 	vpcID string,
 	kubeClient kubernetes.Interface,
 	crdClient versioned.Interface,
-	bceClient cloud.Interface,
+	iaasClient client.IaaSClient,
 	informerResyncPeriod time.Duration,
 	gcPeriod time.Duration,
 ) (ipamgeneric.RoceInterface, error) {
@@ -53,7 +55,7 @@ func NewIPAM(
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
 	})
-	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cce-eri-ipam"})
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cce-roce-ipam"})
 
 	kubeInformer := informers.NewSharedInformerFactory(kubeClient, informerResyncPeriod)
 	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, informerResyncPeriod)
@@ -66,23 +68,23 @@ func NewIPAM(
 		crdInformer:    crdInformer,
 		crdClient:      crdClient,
 		gcPeriod:       gcPeriod,
-		cloud:          bceClient,
+		iaasClient:     iaasClient,
 		cacheHasSynced: false,
-		nodeCache:      make(map[string]*corev1.Node),
 	}
 	return ipam, nil
 }
 
 func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID string,
 	mac string) (*v1alpha1.WorkloadEndpoint, error) {
-	log.Infof(ctx, "[Allocate] allocating IP for eri pod (%v %v) starts", namespace, name)
-	defer log.Infof(ctx, "[Allocate] allocating IP for eri pod (%v %v) ends", namespace, name)
+	log.Infof(ctx, "[Allocate] allocating IP for roce pod (%v %v) starts", namespace, name)
+	defer log.Infof(ctx, "[Allocate] allocating IP for roce pod (%v %v) ends", namespace, name)
 
 	if !ipam.Ready(ctx) {
-		log.Warningf(ctx, "eri ipam has not synced cache yet")
-		return nil, fmt.Errorf("eri ipam has not synced cache yet")
+		log.Warningf(ctx, "roce ipam has not synced cache yet")
+		return nil, fmt.Errorf("roce ipam has not synced cache yet")
 	}
 
+	// 1. prepare data
 	node, nodeErr := ipam.getNodeByPodName(ctx, namespace, name)
 	if nodeErr != nil {
 		log.Errorf(ctx, "get node for pod (%s/%s) error: %v", namespace, name, nodeErr)
@@ -97,62 +99,78 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	}
 	log.Infof(ctx, "instanceID for pod (%s/%s) is %s ", namespace, name, instanceID)
 
-	// add node to cache if not in the cache
-	if _, exist := ipam.nodeCache[instanceID]; !exist {
-		ipam.nodeCache[instanceID] = node
-	}
-
-	eriInfo, err := ipam.findMatchedEriByMac(ctx, instanceID, mac)
+	// 2. find eni and wep
+	matchedEni, err := ipam.findMatchedEniByMac(ctx, instanceID, mac)
 	if err != nil {
-		log.Errorf(ctx, "failed to find a suitable eri by mac for pod (%v %v) in eri ipam: %v", namespace, name, err)
+		log.Errorf(ctx, "failed to find a suitable eni by mac for pod (%v %v) in roce ipam: %v", namespace, name, err)
 		return nil, err
 	}
-	log.Infof(ctx, "find eniID is %s ", eriInfo.EniId)
+	log.Infof(ctx, "find eniID is %s ", matchedEni.EniID)
 
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
-	mwep, err := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().MultiIPWorkloadEndpoints(namespace).Get(name)
+	mwep, err := ipam.getMwep(ctx, namespace, name, nodeName)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return ipam.allocateFirstIP(ctx, namespace, name, eriInfo.EniId, nodeName, instanceID, containerID, mac)
+			// 3. First time allocate ip for the pod
+			return ipam.allocateFirstIP(ctx, namespace, name, matchedEni.EniID, nodeName, instanceID, containerID, mac)
 		}
 		log.Errorf(ctx, "get mwep for pod (%v/%v) error: %v", namespace, name, err)
 		return nil, err
 	}
 
-	// not first allocate ip for pod
-	if mwep.NodeName != nodeName {
-		msg := fmt.Sprintf("mwep node name: %s, not match current node in eri ipam: %s",
-			mwep.NodeName, nodeName)
-		log.Warningf(ctx, msg)
-		return nil, fmt.Errorf(msg)
-	}
-
-	return ipam.allocateOtherIP(ctx, mwep, eriInfo.EniId, containerID, mac)
+	// // 4. not first time allocate ip for the pod
+	return ipam.allocateOtherIP(ctx, mwep, matchedEni.EniID, containerID, mac)
 }
 
-// find eri by mac address. Return matched eri and eri list of the instanceID
-func (ipam *IPAM) findMatchedEriByMac(ctx context.Context, instanceID string, macAddress string) (*enisdk.Eni, error) {
-	log.Infof(ctx, "start to find suitable eri by mac for instanceID %v/%v", instanceID, macAddress)
-	listArgs := enisdk.ListEniArgs{
-		InstanceId: instanceID,
-		VpcId:      ipam.vpcID,
+func (ipam *IPAM) getNodeByPodName(ctx context.Context, namespace, podName string) (*corev1.Node, error) {
+	pod, podErr := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(namespace).Get(podName)
+	if podErr != nil {
+		log.Errorf(ctx, "get pod (%s/%s) error: %v", namespace, podName, podErr)
+		return nil, podErr
 	}
-	eriList, listErr := ipam.cloud.ListERIs(ctx, listArgs)
+
+	return ipam.kubeInformer.Core().V1().Nodes().Lister().Get(pod.Spec.NodeName)
+}
+
+// find eni by mac address, return matched eni.
+func (ipam *IPAM) findMatchedEniByMac(ctx context.Context, instanceID string, macAddress string) (*client.EniResult, error) {
+	log.Infof(ctx, "start to find suitable eni by mac for instanceID %v/%v", instanceID, macAddress)
+	eniList, listErr := ipam.iaasClient.ListEnis(ctx, ipam.vpcID, instanceID)
 	if listErr != nil {
-		log.Errorf(ctx, "failed to get eri: %v", listErr)
+		log.Errorf(ctx, "failed to get eni: %v", listErr)
 		return nil, listErr
 	}
 
-	for index := range eriList {
-		eriInfo := eriList[index]
-		if eriInfo.MacAddress == macAddress {
-			return &eriInfo, nil
+	for index := range eniList {
+		eniInfo := eniList[index]
+		if strings.EqualFold(eniInfo.MacAddress, macAddress) {
+			return &eniInfo, nil
 		}
 	}
 
-	log.Errorf(ctx, "macAddress %s mismatch, eriList: %v", macAddress, eriList)
-	return nil, fmt.Errorf("macAddress %s mismatch, eriList: %v", macAddress, eriList)
+	log.Errorf(ctx, "macAddress %s mismatch, eniList: %v", macAddress, eniList)
+	return nil, fmt.Errorf("macAddress %s mismatch, eniList: %v", macAddress, eniList)
+}
+
+// getMwep and delete leaked mwep
+func (ipam *IPAM) getMwep(ctx context.Context, namespace, name, nodeName string) (*v1alpha1.MultiIPWorkloadEndpoint, error) {
+	mwep, getErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().
+		MultiIPWorkloadEndpoints(namespace).Get(name)
+	if getErr != nil {
+		return nil, getErr
+	}
+
+	if mwep.NodeName == nodeName {
+		return mwep, nil
+	}
+
+	// it's a leaked mwep, need to delete.
+	deleteErr := ipam.tryDeleteMwep(ctx, mwep)
+	if deleteErr != nil {
+		return nil, deleteErr
+	}
+	return nil, errors.NewNotFound(v1alpha1.Resource("multiipworkloadendpoint"), name)
 }
 
 // allocate first ip for pod, and create mwep
@@ -166,21 +184,21 @@ func (ipam *IPAM) allocateFirstIP(ctx context.Context, namespace, name, eniID, n
 		return nil, goerrors.New(msg)
 	}
 
-	log.Infof(ctx, "eri ipam allocate ip for pod (%s/%s) success, allocate ip result %s ", namespace, name, ipResult)
+	log.Infof(ctx, "roce ipam allocate ip for pod (%s/%s) success, allocate ip result %s ", namespace, name, ipResult)
 
 	// 2. create mwep
+	// 2.1 prepare mwep
 	mwep := &v1alpha1.MultiIPWorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
 			Namespace:  namespace,
 			Finalizers: []string{ipamgeneric.MwepFinalizer},
 			Labels: map[string]string{
-				ipamgeneric.MwepLabelInstanceTypeKey: ipamgeneric.MwepTypeERI,
-				v1.LabelInstanceType:                 "BCC",
+				ipamgeneric.MwepLabelInstanceTypeKey: ipam.iaasClient.GetMwepType(),
 			},
 		},
 		NodeName:   nodeName,
-		Type:       ipamgeneric.MwepTypeERI,
+		Type:       ipam.iaasClient.GetMwepType(),
 		InstanceID: instanceID,
 		Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{
 			{
@@ -193,9 +211,10 @@ func (ipam *IPAM) allocateFirstIP(ctx context.Context, namespace, name, eniID, n
 		},
 	}
 
+	// 2.2 create mwep
 	_, createErr := ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(namespace).Create(ctx, mwep, metav1.CreateOptions{})
 	if createErr != nil {
-		// rollback
+		// 2.3 rollback ip
 		log.Errorf(ctx, "create mwep for pod (%s/%s) error: %v", namespace, name, createErr)
 		time.Sleep(minPrivateIPLifeTime)
 
@@ -208,97 +227,11 @@ func (ipam *IPAM) allocateFirstIP(ctx context.Context, namespace, name, eniID, n
 	}
 	log.Infof(ctx, "create mwep %v for pod (%s/%s) success", mwep.Spec, namespace, name)
 
+	// 3. for response
 	return &v1alpha1.WorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-		},
-		Spec: v1alpha1.WorkloadEndpointSpec{
-			ENIID:       eniID,
-			ContainerID: containerID,
-			IP:          ipResult,
-			Mac:         mac,
-		},
-	}, nil
-}
-
-// allocate ip then update mwep
-func (ipam *IPAM) allocateOtherIP(ctx context.Context, mwep *v1alpha1.MultiIPWorkloadEndpoint,
-	eniID, containerID, mac string) (*v1alpha1.WorkloadEndpoint, error) {
-	if mwep == nil {
-		return nil, fmt.Errorf("mwep required")
-	}
-	if mwep.Type != ipamgeneric.MwepTypeERI {
-		msg := fmt.Sprintf("mwep %s/%s type is %s, not eri", mwep.Namespace, mwep.Name, mwep.Type)
-		log.Warning(ctx, msg)
-		return nil, fmt.Errorf(msg)
-	}
-
-	var oldMwepSpec *v1alpha1.MultiIPWorkloadEndpointSpec
-	for i := range mwep.Spec {
-		tmpMwepSpec := mwep.Spec[i]
-		if tmpMwepSpec.EniID == eniID {
-			oldMwepSpec = &tmpMwepSpec
-			break
-		}
-	}
-	// 1. return wep info if mwep contains info of the eniID
-	if oldMwepSpec != nil {
-		return &v1alpha1.WorkloadEndpoint{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      mwep.Name,
-				Namespace: mwep.Namespace,
-			},
-			Spec: v1alpha1.WorkloadEndpointSpec{
-				ENIID:       eniID,
-				ContainerID: containerID,
-				IP:          oldMwepSpec.IP,
-				Mac:         oldMwepSpec.Mac,
-			},
-		}, nil
-	}
-	// 2. allocate ip for the eniID
-	ipResult, ipErr := ipam.tryAllocateIP(ctx, mwep.Namespace, mwep.Name, eniID)
-	if ipErr != nil {
-		msg := fmt.Sprintf("error allocate private IP for pod (%s/%s): %s", mwep.Namespace, mwep.Name, ipErr)
-		log.Error(ctx, msg)
-		return nil, goerrors.New(msg)
-	}
-	log.Infof(ctx, "eri ipam allocate ip for pod (%s/%s) success, allocate ip result %s ",
-		mwep.Namespace, mwep.Name, ipResult)
-
-	// append to mwep
-	newMwepSpec := v1alpha1.MultiIPWorkloadEndpointSpec{
-		IP:          ipResult,
-		EniID:       eniID,
-		Mac:         mac,
-		ContainerID: containerID,
-		UpdateAt:    metav1.Time{Time: time.Now()},
-	}
-
-	mwep.Spec = append(mwep.Spec, newMwepSpec)
-	log.Infof(ctx, "new specList count is %d", len(mwep.Spec))
-
-	// 3. update mwep
-	_, updateErr := ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(mwep.Namespace).Update(
-		ctx, mwep, metav1.UpdateOptions{})
-	if updateErr != nil {
-		// rollback
-		log.Errorf(ctx, "update mwep for pod (%s/%s) error: %s", mwep.Namespace, mwep.Name, updateErr)
-		time.Sleep(minPrivateIPLifeTime)
-
-		if delErr := ipam.tryDeleteIP(ctx, mwep.Namespace, mwep.Name, eniID, ipResult); delErr != nil {
-			log.Errorf(ctx, "deleted private ip %s for pod (%v/%v) error: %v",
-				ipResult, mwep.Namespace, mwep.Name, delErr)
-			return nil, delErr
-		}
-		return nil, updateErr
-	}
-
-	return &v1alpha1.WorkloadEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      mwep.Name,
-			Namespace: mwep.Namespace,
 		},
 		Spec: v1alpha1.WorkloadEndpointSpec{
 			ENIID:       eniID,
@@ -316,7 +249,7 @@ func (ipam *IPAM) tryAllocateIP(ctx context.Context, namespace, podName, eniID s
 	for i := 0; i < cloudMaxTry; i++ {
 		log.Infof(ctx, "allocate IP max try time is %d, now is %d time", cloudMaxTry, i)
 
-		ipResult, err := ipam.cloud.AddPrivateIP(ctx, "", eniID)
+		ipResult, err := ipam.iaasClient.AddPrivateIP(ctx, eniID, "")
 		if err == nil {
 			log.Infof(ctx, "add private IP %s for pod (%s/%s) success", ipResult, namespace, podName)
 			metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eniID).Inc()
@@ -334,13 +267,123 @@ func (ipam *IPAM) tryAllocateIP(ctx context.Context, namespace, podName, eniID s
 	return "", fmt.Errorf("allocate IP failed, retry count exceeded")
 }
 
+// allocate ip then update mwep
+func (ipam *IPAM) allocateOtherIP(ctx context.Context, mwep *v1alpha1.MultiIPWorkloadEndpoint,
+	eniID, containerID, mac string) (*v1alpha1.WorkloadEndpoint, error) {
+	// 1. validate wep
+	if err := ipam.validateMwepType(ctx, mwep); err != nil {
+		return nil, err
+	}
+
+	// 2. if exists spec with the eni, then update containerID and return
+	exist, existWep, existErr := ipam.existMwepSpecForEni(mwep, eniID, containerID)
+	if exist {
+		return existWep, existErr
+	}
+
+	// 3. allocate ip
+	ipResult, ipErr := ipam.tryAllocateIP(ctx, mwep.Namespace, mwep.Name, eniID)
+	if ipErr != nil {
+		msg := fmt.Sprintf("error allocate private IP for pod (%s/%s): %s", mwep.Namespace, mwep.Name, ipErr)
+		log.Error(ctx, msg)
+		return nil, goerrors.New(msg)
+	}
+	log.Infof(ctx, "roce ipam allocate ip for pod (%s/%s) success, allocate ip result %s ",
+		mwep.Namespace, mwep.Name, ipResult)
+
+	// 4. update mwep
+	// 4.1 append new spec to mwep
+	newMwepSpec := v1alpha1.MultiIPWorkloadEndpointSpec{
+		IP:          ipResult,
+		EniID:       eniID,
+		Mac:         mac,
+		ContainerID: containerID,
+		UpdateAt:    metav1.Time{Time: time.Now()},
+	}
+
+	mwep.Spec = append(mwep.Spec, newMwepSpec)
+	log.Infof(ctx, "new specList count is %d", len(mwep.Spec))
+
+	// 4.2 update mwep
+	_, updateErr := ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(mwep.Namespace).Update(
+		ctx, mwep, metav1.UpdateOptions{})
+	if updateErr != nil {
+		// 4.3 rollback
+		log.Errorf(ctx, "update mwep for pod (%s/%s) error: %s", mwep.Namespace, mwep.Name, updateErr)
+		time.Sleep(minPrivateIPLifeTime)
+
+		if delErr := ipam.tryDeleteIP(ctx, mwep.Namespace, mwep.Name, eniID, ipResult); delErr != nil {
+			log.Errorf(ctx, "deleted private ip %s for pod (%v/%v) error: %v",
+				ipResult, mwep.Namespace, mwep.Name, delErr)
+			return nil, delErr
+		}
+		return nil, updateErr
+	}
+
+	// 5. return wep
+	return &v1alpha1.WorkloadEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mwep.Name,
+			Namespace: mwep.Namespace,
+		},
+		Spec: v1alpha1.WorkloadEndpointSpec{
+			ENIID:       eniID,
+			ContainerID: containerID,
+			IP:          ipResult,
+			Mac:         mac,
+		},
+	}, nil
+}
+
+func (ipam *IPAM) validateMwepType(ctx context.Context, mwep *v1alpha1.MultiIPWorkloadEndpoint) error {
+	if mwep == nil {
+		return fmt.Errorf("mwep required")
+	}
+
+	expectMwepType := ipam.iaasClient.GetMwepType()
+	if mwep.Type != expectMwepType {
+		msg := fmt.Sprintf("mwep %s/%s type is %s, not %s", mwep.Namespace, mwep.Name, mwep.Type, expectMwepType)
+		log.Warning(ctx, msg)
+		return fmt.Errorf(msg)
+	}
+	return nil
+}
+
+// existMwepSpecForEni already exist a spec with the eni
+func (ipam *IPAM) existMwepSpecForEni(mwep *v1alpha1.MultiIPWorkloadEndpoint, eniID, containerID string) (
+	bool, *v1alpha1.WorkloadEndpoint, error) {
+	var oldMwepSpec *v1alpha1.MultiIPWorkloadEndpointSpec
+	for i := range mwep.Spec {
+		tmpMwepSpec := mwep.Spec[i]
+		if tmpMwepSpec.EniID == eniID {
+			oldMwepSpec = &tmpMwepSpec
+			break
+		}
+	}
+
+	if oldMwepSpec == nil {
+		return false, nil, nil
+	}
+	// todo 更新 containerID 到 crd
+	return true, &v1alpha1.WorkloadEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mwep.Name,
+			Namespace: mwep.Namespace,
+		},
+		Spec: v1alpha1.WorkloadEndpointSpec{
+			ENIID:       eniID,
+			ContainerID: containerID, IP: oldMwepSpec.IP,
+			Mac: oldMwepSpec.Mac},
+	}, nil
+}
+
 func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error) {
-	log.Infof(ctx, "[Release] releasing IP for eri pod (%v/%v) starts", namespace, name)
-	defer log.Infof(ctx, "[Release] releasing IP for eri pod (%v/%v) ends", namespace, name)
+	log.Infof(ctx, "[Release] releasing IP for roce pod (%v/%v) starts", namespace, name)
+	defer log.Infof(ctx, "[Release] releasing IP for roce pod (%v/%v) ends", namespace, name)
 
 	if !ipam.Ready(ctx) {
-		log.Warningf(ctx, "release: eri ipamd has not synced cache yet")
-		return nil, fmt.Errorf("release: eri ipamd has not synced cache yet")
+		log.Warningf(ctx, "release: roce ipamd has not synced cache yet")
+		return nil, fmt.Errorf("release: roce ipamd has not synced cache yet")
 	}
 
 	//  mwep, avoid data racing
@@ -358,7 +401,7 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 		return nil, releaseErr
 	}
 	// This API doesn't care about response body
-	wep := &v1alpha1.WorkloadEndpoint{
+	return &v1alpha1.WorkloadEndpoint{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mwep.Name,
@@ -369,14 +412,13 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 			Node:        mwep.NodeName,
 			InstanceID:  mwep.InstanceID,
 		},
-	}
-	return wep, nil
+	}, nil
 }
 
-// delete ip, delete mwep
 func (ipam *IPAM) releaseIPByMwep(ctx context.Context, mwep *v1alpha1.MultiIPWorkloadEndpoint) error {
 	namespace := mwep.Namespace
 	name := mwep.Name
+	//  delete eni ip, delete mwep crd
 	for _, spec := range mwep.Spec {
 		ipErr := ipam.tryDeleteIP(ctx, namespace, name, spec.EniID, spec.IP)
 		if ipErr != nil {
@@ -402,7 +444,7 @@ func (ipam *IPAM) tryDeleteIP(ctx context.Context, namespace, podName, eniID, pr
 	for i := 0; i < cloudMaxTry; i++ {
 		log.Infof(ctx, "delete private IP %s max try time is %d, now is %d time", privateIP, cloudMaxTry, i)
 
-		err := ipam.cloud.DeletePrivateIP(ctx, privateIP, eniID)
+		err := ipam.iaasClient.DeletePrivateIP(ctx, eniID, privateIP)
 		if err == nil {
 			log.Infof(ctx, "delete private IP %s for pod (%s/%s) success", privateIP, namespace, podName)
 			metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eniID).Dec()
@@ -420,23 +462,8 @@ func (ipam *IPAM) tryDeleteIP(ctx context.Context, namespace, podName, eniID, pr
 	return fmt.Errorf("delete IP failed, retry count exceeded")
 }
 
-// Delete workload objects from the k8s cluster
-func (ipam *IPAM) tryDeleteMwep(ctx context.Context, mwep *v1alpha1.MultiIPWorkloadEndpoint) (err error) {
-	// remove finalizers
-	mwep.Finalizers = nil
-	_, err = ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(mwep.Namespace).Update(ctx, mwep, metav1.UpdateOptions{})
-	if err != nil {
-		log.Errorf(ctx, "tryDeleteWep failed to update wep for pod (%v %v): %v", mwep.Namespace, mwep.Name, err)
-		return err
-	}
-	// delete mwep
-	if err := ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(mwep.Namespace).
-		Delete(ctx, mwep.Name, *metav1.NewDeleteOptions(0)); err != nil {
-		log.Errorf(ctx, "tryDeleteMwep failed to delete wep for orphaned pod (%v %v): %v", mwep.Namespace, mwep.Name, err)
-	} else {
-		log.Infof(ctx, "tryDeleteMwep delete wep for orphaned pod (%v %v) successfully", mwep.Namespace, mwep.Name)
-	}
-	return nil
+func (ipam *IPAM) Ready(_ context.Context) bool {
+	return ipam.cacheHasSynced
 }
 
 func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
@@ -444,8 +471,8 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		runtime.HandleCrash()
 	}()
 
-	log.Info(ctx, "Starting cce ipam controller for eri")
-	defer log.Info(ctx, "Shutting down cce ipam controller for eri")
+	log.Info(ctx, "Starting cce ipam controller for roce")
+	defer log.Info(ctx, "Shutting down cce ipam controller for roce")
 
 	nodeInformer := ipam.kubeInformer.Core().V1().Nodes().Informer()
 	podInformer := ipam.kubeInformer.Core().V1().Pods().Informer()
@@ -465,19 +492,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		return nil
 	}
 	log.Info(ctx, "WaitForCacheSync done")
-
-	// build node cache
-	nodeErr := ipam.buildNodeCache(ctx)
-	if nodeErr != nil {
-		return nodeErr
-	}
 	ipam.cacheHasSynced = true
-
-	go func() {
-		if err := ipam.syncNode(stopCh); err != nil {
-			log.Errorf(ctx, "failed to sync node info: %v", err)
-		}
-	}()
 
 	go func() {
 		if err := ipam.gc(stopCh); err != nil {
@@ -485,99 +500,37 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		}
 	}()
 
-	// k8sr resource are synced
-	ipam.cacheHasSynced = true
 	log.Infof(ctx, "ipam cacheHasSynced is: %v", ipam.cacheHasSynced)
 
 	<-stopCh
 	return nil
 }
 
-func (ipam *IPAM) syncNode(stopCh <-chan struct{}) error {
-	ctx := log.NewContext()
-
-	err := wait.PollImmediateUntil(syncNodePeriod, func() (bool, error) {
-		return false, ipam.buildNodeCache(ctx)
-	}, stopCh)
-
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (ipam *IPAM) buildNodeCache(ctx context.Context) error {
-	var (
-		wg sync.WaitGroup
-		ch = make(chan struct{}, 10)
-	)
-
-	nodeSelector, _ := nodeListerSelector()
-	nodes, err := ipam.kubeInformer.Core().V1().Nodes().Lister().List(nodeSelector)
-	if err != nil {
-		log.Errorf(ctx, "failed to list nodes: %v", err)
-		return err
-	}
-
-	for _, node := range nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-
-		go func(node *v1.Node) {
-			defer func() {
-				wg.Done()
-				<-ch
-			}()
-
-			instanceID, err := util.GetInstanceIDFromNode(node)
-			if err != nil {
-				return
-			}
-
-			ipam.lock.Lock()
-			defer ipam.lock.Unlock()
-			//add node instance
-			ipam.nodeCache[instanceID] = node
-		}(node)
-	}
-
-	wg.Wait()
-
-	return nil
-}
-
-func nodeListerSelector() (labels.Selector, error) {
-	requirement, err := labels.NewRequirement(v1.LabelInstanceType, selection.In, []string{"BCC", "GPU", "DCC"})
-	if err != nil {
-		return nil, err
-	}
-	return labels.NewSelector().Add(*requirement), nil
-}
-
-func mwepListerSelector() (labels.Selector, error) {
-	// for mwep owned by bcc, use selector "node.kubernetes.io/instance-type", to be compatible with old versions.
-	requireInstanceType, insErr := labels.NewRequirement(v1.LabelInstanceType, selection.In, []string{"BCC", "GPU", "DCC"})
-	if insErr != nil {
-		return nil, insErr
-	}
+func (ipam *IPAM) mwepListerSelector() (labels.Selector, error) {
 	requireMwepType, typeErr := labels.NewRequirement(ipamgeneric.MwepLabelInstanceTypeKey, selection.Equals,
-		[]string{ipamgeneric.MwepTypeERI})
+		[]string{ipam.iaasClient.GetMwepType()})
 	if typeErr != nil {
 		return nil, typeErr
 	}
-	return labels.NewSelector().Add(*requireInstanceType, *requireMwepType), nil
+	return labels.NewSelector().Add(*requireMwepType), nil
 }
 
-func (ipam *IPAM) Ready(_ context.Context) bool {
-	return ipam.cacheHasSynced
-}
-
-func (ipam *IPAM) getNodeByPodName(ctx context.Context, namespace, podName string) (*corev1.Node, error) {
-	pod, podErr := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(namespace).Get(podName)
-	if podErr != nil {
-		log.Errorf(ctx, "get pod (%s/%s) error: %v", namespace, podName, podErr)
-		return nil, podErr
+// rdma-device-plugin node selector:
+//
+//	feature.node.kubernetes.io/custom-rdma.available: "true"
+//	feature.node.kubernetes.io/custom-rdma.capable: "true"
+func (ipam *IPAM) nodeListerSelector() (labels.Selector, error) {
+	rdmaAvailable, availableErr := labels.NewRequirement(
+		ipamgeneric.RDMANodeLabelAvailableKey, selection.Equals, []string{"true"})
+	if availableErr != nil {
+		return nil, availableErr
 	}
 
-	return ipam.kubeInformer.Core().V1().Nodes().Lister().Get(pod.Spec.NodeName)
+	rdmaCapable, capableErr := labels.NewRequirement(
+		ipamgeneric.RDMANodeLabelCapableKey, selection.Equals, []string{"true"})
+	if capableErr != nil {
+		return nil, capableErr
+	}
+
+	return labels.NewSelector().Add(*rdmaAvailable, *rdmaCapable), nil
 }

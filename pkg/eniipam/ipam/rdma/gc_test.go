@@ -1,10 +1,11 @@
-package eri
+package rdma
 
 import (
+	"fmt"
 	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
-	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
+	mockclient "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client/mock"
 	"github.com/golang/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -65,8 +66,9 @@ func (suite *IPAMTest) Test__gcLeakedPod() {
 	suite.Assert().Nil(podErr)
 	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
 
-	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
-	mockInterface.DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.1"), gomock.Eq("eni-0")).Return(nil)
+	mockInterface := suite.ipam.iaasClient.(*mockclient.MockIaaSClient).EXPECT()
+	mockInterface.GetMwepType().Return("eri")
+	mockInterface.DeletePrivateIP(gomock.Any(), gomock.Eq("eni-0"), gomock.Eq("10.1.1.1")).Return(nil)
 
 	gcErr := suite.ipam.gcLeakedPod(suite.ctx)
 	suite.Assert().Nil(gcErr)
@@ -126,7 +128,7 @@ func (suite *IPAMTest) Test__gcDeletedNode() {
 }
 
 func (suite *IPAMTest) Test__gcLeakedIP() {
-	// 1. empty wep
+	// 1. empty wep, delete all ip
 	suite.ipam.nodeCache = map[string]*corev1.Node{
 		"node-0": {
 			ObjectMeta: metav1.ObjectMeta{
@@ -135,40 +137,40 @@ func (suite *IPAMTest) Test__gcLeakedIP() {
 		},
 	}
 
-	cloudClient := suite.ipam.cloud.(*mockcloud.MockInterface)
-	eriList := []enisdk.Eni{
+	iaasClient := suite.ipam.iaasClient.(*mockclient.MockIaaSClient)
+	enis := []client.EniResult{
 		{
-			EniId: "eni-0",
-			PrivateIpSet: []enisdk.PrivateIp{
+			EniID: "eni-0",
+			PrivateIPSet: []client.PrivateIP{
 				{
 					Primary:          true,
-					PrivateIpAddress: "10.1.1.0",
+					PrivateIPAddress: "10.1.1.0",
 				},
 				{
 					Primary:          false,
-					PrivateIpAddress: "10.1.1.1",
+					PrivateIPAddress: "10.1.1.1",
 				},
 				{
 					Primary:          false,
-					PrivateIpAddress: "10.1.1.2",
+					PrivateIPAddress: "10.1.1.2",
 				},
 			},
 		},
 	}
 	gomock.InOrder(
-		cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return(eriList, nil),
-		cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.1"), gomock.Eq("eni-0")).Return(nil),
-		cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.2"), gomock.Eq("eni-0")).Return(nil),
+		iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return(enis, nil),
+		iaasClient.EXPECT().GetMwepType().Return("eri"),
+		iaasClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("eni-0"), gomock.Eq("10.1.1.1")).Return(nil),
+		iaasClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("eni-0"), gomock.Eq("10.1.1.2")).Return(nil),
 	)
 
 	gcErr := suite.ipam.gcLeakedIP(suite.ctx)
 	suite.Assert().Nil(gcErr)
 
 	// 2. delete leaked ip 10.1.1.2
-	gomock.InOrder(
-		cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return(eriList, nil),
-		cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.2"), gomock.Eq("eni-0")).Return(nil),
-	)
+	iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return(enis, nil)
+	iaasClient.EXPECT().GetMwepType().Return("eri").Times(2)
+	iaasClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("eni-0"), gomock.Eq("10.1.1.2")).Return(nil)
 
 	mwep0 := &networkingv1alpha1.MultiIPWorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
@@ -197,4 +199,9 @@ func (suite *IPAMTest) Test__gcLeakedIP() {
 
 	gcErr2 := suite.ipam.gcLeakedIP(suite.ctx)
 	suite.Assert().Nil(gcErr2)
+
+	// 3. list eni failed
+	iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("error"))
+	gcErr3 := suite.ipam.gcLeakedIP(suite.ctx)
+	suite.Assert().Nil(gcErr3)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	v1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	v2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v2"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -51,6 +52,10 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().Subnets().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("workloadendpoints"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().WorkloadEndpoints().Informer()}, nil
+
+		// Group=cce.io, Version=v2
+	case v2.SchemeGroupVersion.WithResource("cceenis"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2().CceENIs().Informer()}, nil
 
 	}
 

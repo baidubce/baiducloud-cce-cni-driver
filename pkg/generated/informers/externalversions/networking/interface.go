@@ -5,12 +5,15 @@ package networking
 import (
 	internalinterfaces "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions/internalinterfaces"
 	v1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions/networking/v1alpha1"
+	v2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions/networking/v2"
 )
 
 // Interface provides access to each of this group's versions.
 type Interface interface {
 	// V1alpha1 provides access to shared informers for resources in V1alpha1.
 	V1alpha1() v1alpha1.Interface
+	// V2 provides access to shared informers for resources in V2.
+	V2() v2.Interface
 }
 
 type group struct {
@@ -27,4 +30,9 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // V1alpha1 returns a new v1alpha1.Interface.
 func (g *group) V1alpha1() v1alpha1.Interface {
 	return v1alpha1.New(g.factory, g.namespace, g.tweakListOptions)
+}
+
+// V2 returns a new v2.Interface.
+func (g *group) V2() v2.Interface {
+	return v2.New(g.factory, g.namespace, g.tweakListOptions)
 }

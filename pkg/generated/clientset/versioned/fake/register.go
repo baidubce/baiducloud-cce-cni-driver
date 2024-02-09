@@ -4,6 +4,7 @@ package fake
 
 import (
 	ccev1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v2"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,6 +17,7 @@ var codecs = serializer.NewCodecFactory(scheme)
 var parameterCodec = runtime.NewParameterCodec(scheme)
 var localSchemeBuilder = runtime.SchemeBuilder{
 	ccev1alpha1.AddToScheme,
+	ccev2.AddToScheme,
 }
 
 // AddToScheme adds all types of this clientset into the given scheme. This allows composition

@@ -39,6 +39,11 @@ const (
 	MwepTypeERI              = "eri"
 	MwepLabelInstanceTypeKey = "cce.io/instance-type"
 	MwepFinalizer            = "cce-cni-roce.cce.io"
+
+	// RDMANodeLabelAvailableKey = true and RDMANodeLabelCapableKey = true is node selector of rdma-device-plugin
+	RDMANodeLabelAvailableKey = "feature.node.kubernetes.io/custom-rdma.available"
+	RDMANodeLabelCapableKey   = "feature.node.kubernetes.io/custom-rdma.capable"
+
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
 	KubeletCniTimeout = network.CNITimeoutSec * time.Second
 

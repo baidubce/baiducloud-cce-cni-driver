@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -107,15 +106,8 @@ type NetConf struct {
 	Endpoint string `json:"endpoint"`
 }
 
-func initFlags() {
-	log.InitFlags(nil)
-	flag.Set("logtostderr", "false")
-	flag.Set("log_file", logFile)
-	flag.Parse()
-}
-
 func main() {
-	initFlags()
+	cni.InitFlags(logFile)
 	defer log.Flush()
 
 	logDir := filepath.Dir(logFile)
@@ -252,7 +244,7 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 		log.Info(ctx, "crossvpc-eni is the main plugin or in exclusive mode")
 		result.Interfaces = []*current.Interface{{
 			Name:    n.IfName,
-			Mac:     resp.GetCrossVPCENI().GetIP(),
+			Mac:     resp.GetCrossVPCENI().GetMac(),
 			Sandbox: args.Netns,
 		}}
 		result.IPs = []*current.IPConfig{

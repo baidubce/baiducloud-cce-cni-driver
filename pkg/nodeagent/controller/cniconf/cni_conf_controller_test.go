@@ -203,7 +203,7 @@ func TestOptions_getNodeInstanceTypeEx(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "normal case",
+			name: "normal bcc case",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				metaClient := mockmetadata.NewMockInterface(ctrl)
@@ -221,6 +221,27 @@ func TestOptions_getNodeInstanceTypeEx(t *testing.T) {
 				ctx: context.TODO(),
 			},
 			want:    metadata.InstanceTypeExBCC,
+			wantErr: false,
+		},
+		{
+			name: "normal bbc case",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				metaClient := mockmetadata.NewMockInterface(ctrl)
+
+				gomock.InOrder(
+					metaClient.EXPECT().GetInstanceTypeEx().Return(metadata.InstanceTypeExBBC, nil),
+				)
+
+				return fields{
+					metaClient: metaClient,
+					kubeClient: nil,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+			},
+			want:    metadata.InstanceTypeExBBC,
 			wantErr: false,
 		},
 		{
@@ -470,6 +491,7 @@ func TestController_fillCNIConfigData(t *testing.T) {
 				IPAMEndPoint:    "10.0.0.2:80",
 				VethMTU:         1400,
 				MasterInterface: "eth0",
+				LocalDNSAddress: "169.254.20.10",
 				InstanceType:    "bcc",
 			},
 			wantErr: false,

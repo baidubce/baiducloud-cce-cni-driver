@@ -40,8 +40,8 @@ import (
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	eniipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
-	eriipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/eri"
-	roceipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/roce"
+	rdmaipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma"
+	rdmaclient "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
@@ -188,29 +188,28 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			log.Fatalf(ctx, "failed to create cross vpc eni ipamd: %v", err)
 		}
 
-		roceipamd, err := roceipam.NewIPAM(
-			kubeClient,
-			crdClient,
-			bceClient,
-			opts.ResyncPeriod,
-			opts.ENISyncPeriod,
-			opts.GCPeriod,
-			opts.Debug,
-		)
-		if err != nil {
-			log.Fatalf(ctx, "failed to create roce ipamd: %v", err)
-		}
-
-		eriipamd, err := eriipam.NewIPAM(
+		roceipamd, err := rdmaipam.NewIPAM(
 			opts.VPCID,
 			kubeClient,
 			crdClient,
-			bceClient,
+			rdmaclient.NewRoCEClient(bceClient),
 			opts.ResyncPeriod,
 			opts.GCPeriod,
 		)
 		if err != nil {
-			log.Fatalf(ctx, "failed to create eri ipamd: %v", err)
+			log.Fatalf(ctx, "failed to create bbc roce ipamd: %v", err)
+		}
+
+		eriipamd, err := rdmaipam.NewIPAM(
+			opts.VPCID,
+			kubeClient,
+			crdClient,
+			rdmaclient.NewEriClient(bceClient),
+			opts.ResyncPeriod,
+			opts.GCPeriod,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create bcc roce ipamd: %v", err)
 		}
 
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
@@ -244,18 +243,18 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 		}
 
 		if roceipamd != nil {
-			go func(roceipamd ipam.RoceInterface) {
+			go func(rdmaipamd ipam.RoceInterface) {
 				ctx := log.NewContext()
-				if err := roceipamd.Run(ctx, opts.stopCh); err != nil {
-					log.Fatalf(ctx, "roce ipamd failed to run: %v", err)
+				if err := rdmaipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "bbc roce ipamd failed to run: %v", err)
 				}
 			}(roceipamd)
 		}
 		if eriipamd != nil {
-			go func(eriipamd ipam.RoceInterface) {
+			go func(rdmaipamd ipam.RoceInterface) {
 				ctx := log.NewContext()
-				if err := eriipamd.Run(ctx, opts.stopCh); err != nil {
-					log.Fatalf(ctx, "eri ipamd failed to run: %v", err)
+				if err := rdmaipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "bcc roce ipamd failed to run: %v", err)
 				}
 			}(eriipamd)
 		}

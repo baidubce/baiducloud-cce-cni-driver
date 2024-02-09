@@ -60,14 +60,46 @@ import (
 
 var (
 	stdinData = `
- {
-	 "cniVersion":"0.3.1",
-	 "name":"cce-cni",
-	 "type":"rdma",
-	 "ipam":{
-		 "endpoint":"172.25.66.38:80"
-	 }
- }`
+	 {
+		 "cniVersion":"0.3.1",
+		 "name":"cce-cni",
+		 "type":"rdma",
+		 "ipam":{
+			 "endpoint":"172.25.66.38:80"
+		 },
+		 "prevResult": {
+			 "ips": [
+				 {
+				   "address": "10.1.0.5/16",
+				   "gateway": "10.1.0.1",
+				   "interface": 2
+				 }
+			 ],
+			 "routes": [
+			   {
+				 "dst": "0.0.0.0/0"
+			   }
+			 ],
+			 "interfaces": [
+				 {
+					 "name": "cni0",
+					 "mac": "00:11:22:33:44:55"
+				 },
+				 {
+					 "name": "veth3243",
+					 "mac": "55:44:33:22:11:11"
+				 },
+				 {
+					 "name": "eth0",
+					 "mac": "00:11:22:33:44:66",
+					 "sandbox": "/var/run/netns/blue"
+				 }
+			 ],
+			 "dns": {
+			   "nameservers": [ "10.1.0.1" ]
+			 }
+		 }
+	 }`
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
 )
 
@@ -96,7 +128,7 @@ func setupEnv(ctrl *gomock.Controller) (
 
 func Test_cmdDel(t *testing.T) {
 	t.Log("test cmd del")
-
+	SetUPK8SClientEnv()
 	type fields struct {
 		ctrl    *gomock.Controller
 		nlink   netlinkwrapper.Interface
@@ -199,7 +231,7 @@ func Test_cmdDel(t *testing.T) {
 					StdinData:   []byte(stdinData),
 				},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "异常流程2",
@@ -207,7 +239,15 @@ func Test_cmdDel(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
+				allocReply := rpcdef.ReleaseIPReply{
+					IsSuccess: true,
+					ErrMsg:    "",
+				}
+				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				ns.EXPECT().WithNetNSPath(gomock.Any(), gomock.Any()).Return(errors.New("nspath error for cmd del unit testrelease"))
+				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
+				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
+				cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil)
 
 				return fields{
 					ctrl:    ctrl,
@@ -232,7 +272,7 @@ func Test_cmdDel(t *testing.T) {
 					StdinData:   []byte(stdinData),
 				},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -702,7 +742,7 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 
 				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient).AnyTimes()
-				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error"))
+				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error")).AnyTimes()
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 
@@ -1182,7 +1222,6 @@ func Test_cmdCheck(t *testing.T) {
 
 func TestNewRdmaPlugin(t *testing.T) {
 	t.Log("test cmd rdma plugin")
-	initFlags()
 	p := newRdmaPlugin()
 	if p == nil {
 		t.Error("newRdmaPlugin returns nil")

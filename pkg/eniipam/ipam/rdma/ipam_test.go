@@ -1,21 +1,19 @@
-package eri
+package rdma
 
 import (
 	"context"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
-	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
-	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
-	"github.com/baidubce/bce-sdk-go/services/eni"
-	"github.com/golang/mock/gomock"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
+	mockclient "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client/mock"
 	"github.com/stretchr/testify/assert"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/suite"
-	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/runtime"
@@ -25,10 +23,11 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-	"reflect"
-	"sync"
-	"testing"
-	"time"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
+	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
+	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 )
 
 type IPAMTest struct {
@@ -50,7 +49,7 @@ func (suite *IPAMTest) SetupTest() {
 	suite.ipam = mockIPAM(suite.T(), suite.stopChan)
 	suite.ctx = context.TODO()
 	suite.name = "busybox"
-	suite.namespace = corev1.NamespaceDefault
+	suite.namespace = v1.NamespaceDefault
 	suite.podLabel = labels.Set{
 		"k8s.io/app": "busybox",
 	}
@@ -61,18 +60,18 @@ func (suite *IPAMTest) SetupTest() {
 // mock a ipam server
 func mockIPAM(t *testing.T, stopChan chan struct{}) *IPAM {
 	ctrl := gomock.NewController(t)
-	kubeClient, _, crdClient, _, cloudClient := setupEnv(ctrl)
+	kubeClient, _, crdClient, _, iaasClient := setupEnv(ctrl)
 	ipam, _ := NewIPAM(
 		"test-vpcid",
 		kubeClient,
 		crdClient,
-		cloudClient,
+		iaasClient,
 		20*time.Second,
 		300*time.Second,
 	)
 	ipamServer := ipam.(*IPAM)
 	ipamServer.cacheHasSynced = true
-	nodeCache := map[string]*corev1.Node{
+	nodeCache := map[string]*v1.Node{
 		"eni-df8888fs": {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "",
@@ -91,15 +90,15 @@ func setupEnv(ctrl *gomock.Controller) (
 	informers.SharedInformerFactory,
 	versioned.Interface,
 	crdinformers.SharedInformerFactory,
-	*mockcloud.MockInterface,
+	*mockclient.MockIaaSClient,
 ) {
 	kubeClient := kubefake.NewSimpleClientset()
 	kubeInformer := informers.NewSharedInformerFactory(kubeClient, time.Minute)
 	crdClient := crdfake.NewSimpleClientset()
 	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, time.Minute)
-	cloudClient := mockcloud.NewMockInterface(ctrl)
+	iaasClient := mockclient.NewMockIaaSClient(ctrl)
 	return kubeClient, kubeInformer,
-		crdClient, crdInformer, cloudClient
+		crdClient, crdInformer, iaasClient
 }
 
 func (suite *IPAMTest) TearDownTest() {
@@ -108,28 +107,30 @@ func (suite *IPAMTest) TearDownTest() {
 
 func (suite *IPAMTest) TestIPAMRun() {
 	mwep := mockMultiWorkloadEndpoint()
-	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(
+	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).Create(
 		suite.ctx, mwep, metav1.CreateOptions{})
 
 	mwep1 := mockMultiWorkloadEndpoint()
 	mwep1.Name = "busybox-1"
-	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(
+	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).Create(
 		suite.ctx, mwep1, metav1.CreateOptions{})
 
 	mwep2 := mockMultiWorkloadEndpoint()
 	mwep2.Name = "busybox-2"
-	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(
+	_, _ = suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).Create(
 		suite.ctx, mwep2, metav1.CreateOptions{})
 
-	suite.ipam.nodeCache = make(map[string]*corev1.Node)
+	suite.ipam.iaasClient.(*mockclient.MockIaaSClient).EXPECT().GetMwepType().Return("eri")
+
+	suite.ipam.nodeCache = make(map[string]*v1.Node)
 	go func() {
 		_ = suite.ipam.Run(suite.ctx, suite.stopChan)
 	}()
 	time.Sleep(3 * time.Second)
 }
 
-func mockMultiWorkloadEndpoint() *networkingv1alpha1.MultiIPWorkloadEndpoint {
-	return &networkingv1alpha1.MultiIPWorkloadEndpoint{
+func mockMultiWorkloadEndpoint() *v1alpha1.MultiIPWorkloadEndpoint {
+	return &v1alpha1.MultiIPWorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "busybox-0",
 			Namespace: "default",
@@ -138,7 +139,7 @@ func mockMultiWorkloadEndpoint() *networkingv1alpha1.MultiIPWorkloadEndpoint {
 			},
 			Finalizers: []string{"cce-cni.cce.io"},
 		},
-		Spec: []networkingv1alpha1.MultiIPWorkloadEndpointSpec{{
+		Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{{
 			IP:       "192.168.1.199",
 			EniID:    "eni-dfsfs",
 			UpdateAt: metav1.Time{Time: time.Unix(0, 0)},
@@ -165,7 +166,7 @@ func TestIPAM_Allocate(t *testing.T) {
 	type fields struct {
 		ctrl              *gomock.Controller
 		lock              sync.RWMutex
-		nodeCache         map[string]*corev1.Node
+		nodeCache         map[string]*v1.Node
 		privateIPNumCache map[string]int
 		cacheHasSynced    bool
 
@@ -173,7 +174,7 @@ func TestIPAM_Allocate(t *testing.T) {
 		kubeClient   kubernetes.Interface
 		crdInformer  crdinformers.SharedInformerFactory
 		crdClient    versioned.Interface
-		cloud        cloud.Interface
+		iaasClient   client.IaaSClient
 
 		informerResyncPeriod time.Duration
 		gcPeriod             time.Duration
@@ -210,20 +211,20 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "node has no pod",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				return fields{
 					ctrl:           ctrl,
 					lock:           sync.RWMutex{},
-					nodeCache:      make(map[string]*corev1.Node),
+					nodeCache:      make(map[string]*v1.Node),
 					cacheHasSynced: true,
 					kubeInformer:   kubeInformer,
 					kubeClient:     kubeClient,
 					crdInformer:    crdInformer,
 					crdClient:      crdClient,
-					cloud:          cloudClient,
+					iaasClient:     iaasClient,
 				}
 			}(),
 			args: args{
@@ -238,7 +239,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "node has no eni",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, podErr := kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
@@ -256,13 +257,13 @@ func TestIPAM_Allocate(t *testing.T) {
 				return fields{
 					ctrl:           ctrl,
 					lock:           sync.RWMutex{},
-					nodeCache:      make(map[string]*corev1.Node),
+					nodeCache:      make(map[string]*v1.Node),
 					cacheHasSynced: true,
 					kubeInformer:   kubeInformer,
 					kubeClient:     kubeClient,
 					crdInformer:    crdInformer,
 					crdClient:      crdClient,
-					cloud:          cloudClient,
+					iaasClient:     iaasClient,
 				}
 			}(),
 			args: args{
@@ -277,7 +278,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "invalid mac",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, podErr := kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
@@ -295,7 +296,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
 					},
-					Spec: corev1.NodeSpec{
+					Spec: v1.NodeSpec{
 						ProviderID: "cce://i-xxxxx",
 					},
 				}, metav1.CreateOptions{})
@@ -304,9 +305,9 @@ func TestIPAM_Allocate(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
-					cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return([]eni.Eni{
+					iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return([]client.EniResult{
 						{
-							EniId:      "eni-test",
+							EniID:      "eni-test",
 							MacAddress: "mac-test",
 						},
 					}, nil),
@@ -321,8 +322,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					kubeClient:        kubeClient,
 					crdInformer:       crdInformer,
 					crdClient:         crdClient,
-					cloud:             cloudClient,
-					nodeCache:         make(map[string]*corev1.Node),
+					iaasClient:        iaasClient,
+					nodeCache:         make(map[string]*v1.Node),
 				}
 			}(),
 			args: args{
@@ -337,7 +338,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "allocate first ip",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, podErr := kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
@@ -355,7 +356,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
 					},
-					Spec: corev1.NodeSpec{
+					Spec: v1.NodeSpec{
 						ProviderID: "cce://i-xxxxx",
 					},
 				}, metav1.CreateOptions{})
@@ -364,14 +365,16 @@ func TestIPAM_Allocate(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
-					cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return([]eni.Eni{
+					iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return([]client.EniResult{
 						{
-							EniId:      "eni-test",
+							EniID:      "eni-test",
 							MacAddress: "mac-test",
 						},
 					}, nil),
-					cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Eq(""), gomock.Eq("eni-test")).
+					iaasClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Eq("eni-test"), gomock.Eq("")).
 						Return("10.1.1.1", nil),
+					iaasClient.EXPECT().GetMwepType().Return("eri"),
+					iaasClient.EXPECT().GetMwepType().Return("eri"),
 				)
 
 				return fields{
@@ -383,8 +386,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					kubeClient:        kubeClient,
 					crdInformer:       crdInformer,
 					crdClient:         crdClient,
-					cloud:             cloudClient,
-					nodeCache:         make(map[string]*corev1.Node),
+					iaasClient:        iaasClient,
+					nodeCache:         make(map[string]*v1.Node),
 				}
 			}(),
 			args: args{
@@ -410,7 +413,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "already allocated",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, podErr := kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
@@ -428,7 +431,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
 					},
-					Spec: corev1.NodeSpec{
+					Spec: v1.NodeSpec{
 						ProviderID: "cce://i-xxxxx",
 					},
 				}, metav1.CreateOptions{})
@@ -436,14 +439,14 @@ func TestIPAM_Allocate(t *testing.T) {
 
 				// 准备 mwep
 				_, mwepErr := crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).Create(
-					context.TODO(), &networkingv1alpha1.MultiIPWorkloadEndpoint{
+					context.TODO(), &v1alpha1.MultiIPWorkloadEndpoint{
 						TypeMeta: metav1.TypeMeta{},
 						ObjectMeta: metav1.ObjectMeta{
 							Name: "busybox",
 						},
 						NodeName: "test-node",
 						Type:     ipamgeneric.MwepTypeERI,
-						Spec: []networkingv1alpha1.MultiIPWorkloadEndpointSpec{
+						Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{
 							{
 								EniID: "eni-test-1",
 								IP:    "10.1.1.1",
@@ -456,12 +459,13 @@ func TestIPAM_Allocate(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
-					cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return([]eni.Eni{
+					iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return([]client.EniResult{
 						{
-							EniId:      "eni-test-1",
+							EniID:      "eni-test-1",
 							MacAddress: "mac-test-1",
 						},
 					}, nil),
+					iaasClient.EXPECT().GetMwepType().Return("eri"),
 				)
 
 				return fields{
@@ -473,8 +477,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					kubeClient:        kubeClient,
 					crdInformer:       crdInformer,
 					crdClient:         crdClient,
-					cloud:             cloudClient,
-					nodeCache:         make(map[string]*corev1.Node),
+					iaasClient:        iaasClient,
+					nodeCache:         make(map[string]*v1.Node),
 				}
 			}(),
 			args: args{
@@ -500,7 +504,7 @@ func TestIPAM_Allocate(t *testing.T) {
 			name: "allocate other ip",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, podErr := kubeClient.CoreV1().Pods(v1.NamespaceDefault).Create(context.TODO(), &v1.Pod{
 					TypeMeta: metav1.TypeMeta{},
@@ -518,7 +522,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "test-node",
 					},
-					Spec: corev1.NodeSpec{
+					Spec: v1.NodeSpec{
 						ProviderID: "cce://i-xxxxx",
 					},
 				}, metav1.CreateOptions{})
@@ -526,14 +530,14 @@ func TestIPAM_Allocate(t *testing.T) {
 
 				// 准备 mwep
 				_, mwepErr := crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).Create(
-					context.TODO(), &networkingv1alpha1.MultiIPWorkloadEndpoint{
+					context.TODO(), &v1alpha1.MultiIPWorkloadEndpoint{
 						TypeMeta: metav1.TypeMeta{},
 						ObjectMeta: metav1.ObjectMeta{
 							Name: "busybox",
 						},
 						NodeName: "test-node",
 						Type:     ipamgeneric.MwepTypeERI,
-						Spec: []networkingv1alpha1.MultiIPWorkloadEndpointSpec{
+						Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{
 							{
 								EniID: "eni-test-1",
 								IP:    "10.1.1.1",
@@ -546,17 +550,18 @@ func TestIPAM_Allocate(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
-					cloudClient.EXPECT().ListERIs(gomock.Any(), gomock.Any()).Return([]eni.Eni{
+					iaasClient.EXPECT().ListEnis(gomock.Any(), gomock.Any(), gomock.Any()).Return([]client.EniResult{
 						{
-							EniId:      "eni-test-1",
+							EniID:      "eni-test-1",
 							MacAddress: "mac-test-1",
 						},
 						{
-							EniId:      "eni-test-2",
+							EniID:      "eni-test-2",
 							MacAddress: "mac-test-2",
 						},
 					}, nil),
-					cloudClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Eq(""), gomock.Eq("eni-test-2")).
+					iaasClient.EXPECT().GetMwepType().Return("eri"),
+					iaasClient.EXPECT().AddPrivateIP(gomock.Any(), gomock.Eq("eni-test-2"), gomock.Eq("")).
 						Return("10.1.1.2", nil),
 				)
 
@@ -569,8 +574,8 @@ func TestIPAM_Allocate(t *testing.T) {
 					kubeClient:        kubeClient,
 					crdInformer:       crdInformer,
 					crdClient:         crdClient,
-					cloud:             cloudClient,
-					nodeCache:         make(map[string]*corev1.Node),
+					iaasClient:        iaasClient,
+					nodeCache:         make(map[string]*v1.Node),
 				}
 			}(),
 			args: args{
@@ -607,7 +612,7 @@ func TestIPAM_Allocate(t *testing.T) {
 				kubeClient:     tt.fields.kubeClient,
 				crdInformer:    tt.fields.crdInformer,
 				crdClient:      tt.fields.crdClient,
-				cloud:          tt.fields.cloud,
+				iaasClient:     tt.fields.iaasClient,
 				gcPeriod:       tt.fields.gcPeriod,
 			}
 			got, err := ipam.Allocate(tt.args.ctx, tt.args.name, tt.args.namespace, tt.args.containerID, tt.args.mac)
@@ -647,13 +652,13 @@ func TestIPAM_Release(t *testing.T) {
 	type fields struct {
 		ctrl           *gomock.Controller
 		lock           sync.RWMutex
-		nodeCache      map[string]*corev1.Node
+		nodeCache      map[string]*v1.Node
 		cacheHasSynced bool
 		kubeInformer   informers.SharedInformerFactory
 		kubeClient     kubernetes.Interface
 		crdInformer    crdinformers.SharedInformerFactory
 		crdClient      versioned.Interface
-		cloud          cloud.Interface
+		iaasClient     client.IaaSClient
 		gcPeriod       time.Duration
 	}
 	type args struct {
@@ -674,7 +679,7 @@ func TestIPAM_Release(t *testing.T) {
 			name: "delete ip success",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, cloudClient := setupEnv(ctrl)
+				kubeClient, kubeInformer, crdClient, crdInformer, iaasClient := setupEnv(ctrl)
 
 				_, mwepErr := crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(v1.NamespaceDefault).
 					Create(context.TODO(), &v1alpha1.MultiIPWorkloadEndpoint{
@@ -698,8 +703,8 @@ func TestIPAM_Release(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				gomock.InOrder(
-					cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.1"), gomock.Eq("eni-1")).Return(nil),
-					cloudClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("10.1.1.2"), gomock.Eq("eni-2")).Return(nil),
+					iaasClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("eni-1"), gomock.Eq("10.1.1.1")).Return(nil),
+					iaasClient.EXPECT().DeletePrivateIP(gomock.Any(), gomock.Eq("eni-2"), gomock.Eq("10.1.1.2")).Return(nil),
 				)
 
 				return fields{
@@ -710,7 +715,7 @@ func TestIPAM_Release(t *testing.T) {
 					kubeClient:     kubeClient,
 					crdInformer:    crdInformer,
 					crdClient:      crdClient,
-					cloud:          cloudClient,
+					iaasClient:     iaasClient,
 				}
 			}(),
 			args: args{
@@ -739,7 +744,7 @@ func TestIPAM_Release(t *testing.T) {
 				kubeClient:     tt.fields.kubeClient,
 				crdInformer:    tt.fields.crdInformer,
 				crdClient:      tt.fields.crdClient,
-				cloud:          tt.fields.cloud,
+				iaasClient:     tt.fields.iaasClient,
 				gcPeriod:       tt.fields.gcPeriod,
 			}
 			got, err := ipam.Release(tt.args.ctx, tt.args.name, tt.args.namespace, tt.args.containerID)

@@ -35,6 +35,7 @@ const (
 )
 
 type InstanceTypeEx string
+type InstanceType string
 
 var (
 	InstanceTypeExBBC     InstanceTypeEx = "bbc"
@@ -50,6 +51,7 @@ var (
 type Interface interface {
 	GetInstanceID() (string, error)
 	GetInstanceName() (string, error)
+	GetInstanceType() (InstanceType, error)
 	GetInstanceTypeEx() (InstanceTypeEx, error)
 	GetLocalIPv4() (string, error)
 	GetAvailabilityZone() (string, error)
@@ -139,13 +141,34 @@ func (c *Client) GetInstanceName() (string, error) {
 	return instanceID, nil
 }
 
-func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {
-	body, err := c.sendRequest(metadataBasePath + "instance-type-ex")
+func (c *Client) GetInstanceType() (InstanceType, error) {
+	bodyType, err := c.sendRequest(metadataBasePath + "instance-type")
 	if err != nil {
 		return "", err
 	}
-	typeStr := strings.TrimSpace(string(body))
-	switch typeStr {
+	typeStr := strings.TrimSpace(string(bodyType))
+	return InstanceType(typeStr), nil
+}
+
+func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {
+	bodyTypeEx, err := c.sendRequest(metadataBasePath + "instance-type-ex")
+	if err != nil {
+		return "", err
+	}
+	// typeExStr == "bbc" && typeStr is in the same format as "ebc.l5c.c128m256.1d", set typeExStr = "bcc"
+	typeExStr := strings.TrimSpace(string(bodyTypeEx))
+	if typeExStr == "bbc" {
+		bodyType, err := c.GetInstanceType()
+		if err != nil {
+			return "", err
+		}
+		typeStr := strings.TrimSpace(string(bodyType))
+		isEbc := strings.HasPrefix(typeStr, "ebc")
+		if isEbc {
+			typeExStr = string(InstanceTypeExBCC)
+		}
+	}
+	switch typeExStr {
 	case "bbc":
 		return InstanceTypeExBBC, nil
 	case "bcc":

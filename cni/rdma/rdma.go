@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -44,6 +43,7 @@ import (
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
+	"github.com/containernetworking/cni/pkg/version"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
@@ -98,6 +98,16 @@ func loadConf(bytes []byte) (*NetConf, string, error) {
 	n := &NetConf{}
 	if err := json.Unmarshal(bytes, n); err != nil {
 		return nil, "", fmt.Errorf("failed to load netconf: %v", err)
+	}
+
+	if n.NetConf.RawPrevResult != nil {
+		if err := version.ParsePrevResult(&n.NetConf); err != nil {
+			return nil, "", fmt.Errorf("could not parse prevResult: %v", err)
+		}
+		_, err := current.NewResultFromResult(n.PrevResult)
+		if err != nil {
+			return nil, "", fmt.Errorf("could not convert result to current version: %v", err)
+		}
 	}
 
 	if n.IPAM == nil {
@@ -157,17 +167,19 @@ func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 	if err != nil {
 		return err
 	}
+	if n.PrevResult == nil {
+		return fmt.Errorf("unable to get previous network result")
+	}
 	netns, err := p.ns.GetNS(args.Netns)
 	if err != nil {
 		return fmt.Errorf("failed to open netns %q: %v", netns, err)
 	}
 	defer netns.Close()
-	result := &current.Result{CNIVersion: cniVersion}
 
 	roceDevs, err := p.getAllRoceDevices()
 	if err != nil || len(roceDevs) <= 0 {
-		log.Infof(ctx, "not found roce devices err: %s", err.Error())
-		return types.PrintResult(result, cniVersion)
+		log.Infof(ctx, "not found roce devices err: %w", err)
+		return types.PrintResult(n.PrevResult, cniVersion)
 	}
 
 	log.Infof(ctx, "roce devs:%v", roceDevs)
@@ -176,6 +188,7 @@ func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 	if err != nil {
 		return err
 	}
+
 	want, err := wantRoce(string(k8sArgs.K8S_POD_NAMESPACE), string(k8sArgs.K8S_POD_NAME), n)
 	if err != nil {
 		log.Errorf(ctx, "check want roce failed: %s", err.Error())
@@ -183,7 +196,7 @@ func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 
 	if !want {
 		log.Infof(ctx, "pod: %s,donot want roce", string(k8sArgs.K8S_POD_NAME))
-		return types.PrintResult(result, n.CNIVersion)
+		return types.PrintResult(n.PrevResult, n.CNIVersion)
 	}
 
 	l, err := keymutex.GrabFileLock(fileLock)
@@ -200,12 +213,11 @@ func (p *rdmaPlugin) cmdAdd(args *skel.CmdArgs) error {
 			return err
 		}
 	}
-
 	// err = netns.Do(func(_ ns.NetNS) error {
 	// 	return p.disableRPFCheck(ctx, len(roceDevs))
 	// })
 
-	return types.PrintResult(result, cniVersion)
+	return types.PrintResult(n.PrevResult, cniVersion)
 }
 
 func (p *rdmaPlugin) cmdDel(args *skel.CmdArgs) error {
@@ -219,25 +231,37 @@ func (p *rdmaPlugin) cmdDel(args *skel.CmdArgs) error {
 		return nil
 	}
 
-	// There is a netns so try to clean up. Delete can be called multiple times
-	// so don't return an error if the device is already removed.
-	err := p.ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		return p.delAllMacVlanDevices()
-	})
-
-	if err != nil {
-		log.Errorf(ctx, "delete macvlan device failed:%s", err.Error())
-		return err
-	}
-
 	n, _, err := loadConf(args.StdinData)
 	if err != nil {
-		return err
+		log.Errorf(ctx, "load conf failed: %w", err)
+		return nil
 	}
 
 	k8sArgs, err := p.loadK8SArgs(args.Args)
 	if err != nil {
-		return err
+		log.Errorf(ctx, "load k8s args failed: %w", err)
+		return nil
+	}
+
+	want, err := wantRoce(string(k8sArgs.K8S_POD_NAMESPACE), string(k8sArgs.K8S_POD_NAME), n)
+	if err != nil {
+		log.Errorf(ctx, "check want roce failed: %s", err.Error())
+		return nil
+	}
+
+	if !want {
+		log.Infof(ctx, "pod: %s,donot want roce for del", string(k8sArgs.K8S_POD_NAME))
+		return nil
+	}
+
+	// There is a netns so try to clean up. Delete can be called multiple times
+	// so don't return an error if the device is already removed.
+	err = p.ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+		return p.delAllMacVlanDevices()
+	})
+
+	if err != nil {
+		log.Errorf(ctx, "delete macvlan device failed:%v", err)
 	}
 
 	ipamClient := NewRoceIPAM(p.grpc, p.rpc)
@@ -245,18 +269,17 @@ func (p *rdmaPlugin) cmdDel(args *skel.CmdArgs) error {
 	if err != nil {
 		msg := fmt.Sprintf("failed to delete IP for pod (%v %v): %v", k8sArgs.K8S_POD_NAMESPACE, k8sArgs.K8S_POD_NAME, err)
 		log.Error(ctx, msg)
-		return errors.New(msg)
+		return nil
 	}
 
 	if !resp.IsSuccess {
 		msg := fmt.Sprintf("ipam server release IP error: %v", resp.ErrMsg)
 		log.Error(ctx, msg)
-		return errors.New(msg)
+		return nil
 	}
+
 	log.Infof(ctx, "release for pod(%v %v) successfully", k8sArgs.K8S_POD_NAMESPACE, k8sArgs.K8S_POD_NAME)
-
-	return err
-
+	return nil
 }
 
 func (p *rdmaPlugin) delAllMacVlanDevices() error {
@@ -277,7 +300,7 @@ func (p *rdmaPlugin) delAllMacVlanDevices() error {
 }
 
 func main() {
-	initFlags()
+	cni.InitFlags(logFile)
 	defer log.Flush()
 
 	logDir := filepath.Dir(logFile)
@@ -310,13 +333,6 @@ func (p *rdmaPlugin) loadK8SArgs(envArgs string) (*cni.K8SArgs, error) {
 		}
 	}
 	return &k8sArgs, nil
-}
-
-func initFlags() {
-	log.InitFlags(nil)
-	flag.Set("logtostderr", "false")
-	flag.Set("log_file", logFile)
-	flag.Parse()
 }
 
 func modeFromString(s string) (netlink.MacvlanMode, error) {
@@ -420,7 +436,9 @@ func (p *rdmaPlugin) getAllRoceDevices() ([]string, error) {
 		if devName == defaultRouteInterface {
 			continue
 		}
-
+		if devName == "" {
+			continue
+		}
 		roceDevs = append(roceDevs, devName)
 	}
 
@@ -554,7 +572,7 @@ func (p *rdmaPlugin) setupMacvlanNetworkInfo(ctx context.Context, conf *NetConf,
 	}
 	name, namespace := string(k8sArgs.K8S_POD_NAME), string(k8sArgs.K8S_POD_NAMESPACE)
 
-	resp, err := ipamClient.AllocIP(ctx, k8sArgs, conf.IPAM.Endpoint, masterMac, conf.InstanceType)
+	resp, err := ipamClient.AllocIP(ctx, k8sArgs, conf.IPAM.Endpoint, masterMac)
 	if err != nil {
 		log.Errorf(ctx, "failed to allocate IP: %v", err)
 		return err

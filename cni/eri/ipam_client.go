@@ -44,7 +44,7 @@ func NewRoceIPAM(grpc grpcwrapper.Interface, rpc rpcwrapper.Interface) *roceIPAM
 	}
 }
 
-func (ipam *roceIPAM) AllocIP(ctx context.Context, k8sArgs *cni.K8SArgs, endpoint string, masterMac string, instanceType string) (*rpc.AllocateIPReply, error) {
+func (ipam *roceIPAM) AllocIP(ctx context.Context, k8sArgs *cni.K8SArgs, endpoint string, masterMac string) (*rpc.AllocateIPReply, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
@@ -59,18 +59,13 @@ func (ipam *roceIPAM) AllocIP(ctx context.Context, k8sArgs *cni.K8SArgs, endpoin
 		}
 	}()
 
-	requestIPType := rpc.IPType_ERIENIMultiIPType
-	if instanceType == "bbc" {
-		requestIPType = rpc.IPType_RoceENIMultiIPType
-	}
-
 	c := ipam.rpc.NewCNIBackendClient(conn)
 
 	resp, err := c.AllocateIP(ctx, &rpc.AllocateIPRequest{
 		K8SPodName:             string(k8sArgs.K8S_POD_NAME),
 		K8SPodNamespace:        string(k8sArgs.K8S_POD_NAMESPACE),
 		K8SPodInfraContainerID: string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID),
-		IPType:                 requestIPType,
+		IPType:                 rpc.IPType_ERIENIMultiIPType,
 		NetworkInfo: &rpc.AllocateIPRequest_ENIMultiIP{
 			ENIMultiIP: &rpc.ENIMultiIPRequest{
 				Mac: masterMac,
@@ -100,17 +95,13 @@ func (ipam *roceIPAM) ReleaseIP(ctx context.Context, k8sArgs *cni.K8SArgs, endpo
 		}
 	}()
 
-	requestIPType := rpc.IPType_ERIENIMultiIPType
-	if instanceType == "bbc" {
-		requestIPType = rpc.IPType_RoceENIMultiIPType
-	}
 	c := ipam.rpc.NewCNIBackendClient(conn)
 
 	resp, err := c.ReleaseIP(ctx, &rpc.ReleaseIPRequest{
 		K8SPodName:             string(k8sArgs.K8S_POD_NAME),
 		K8SPodNamespace:        string(k8sArgs.K8S_POD_NAMESPACE),
 		K8SPodInfraContainerID: string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID),
-		IPType:                 requestIPType,
+		IPType:                 rpc.IPType_ERIENIMultiIPType,
 	})
 	if err != nil {
 		log.Errorf(ctx, "failed to release ip from cni backend: %v", err)

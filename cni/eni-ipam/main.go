@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -107,7 +106,7 @@ func loadK8SArgs(envArgs string) (*K8SArgs, error) {
 }
 
 func main() {
-	initFlags()
+	cni.InitFlags(logFile)
 	defer log.Flush()
 
 	logDir := filepath.Dir(logFile)
@@ -260,11 +259,4 @@ func cmdDel(args *skel.CmdArgs) error {
 
 func cmdCheck(args *skel.CmdArgs) error {
 	return nil
-}
-
-func initFlags() {
-	log.InitFlags(nil)
-	flag.Set("logtostderr", "false")
-	flag.Set("log_file", logFile)
-	flag.Parse()
 }

@@ -6,7 +6,7 @@ OUTDIR  := $(HOMEDIR)/output
 GO      := $(GO_1_18_BIN)/go
 ifeq ($(GO), /go)
 	GO = go
-endif	
+endif
 GOROOT  := $(GO_1_18_HOME)
 GOPATH  := $(shell $(GO) env GOPATH)
 GOMOD   := $(GO) mod
@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.6.12
+VERSION := v1.7.10
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 

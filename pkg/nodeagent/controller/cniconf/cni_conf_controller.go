@@ -50,11 +50,11 @@ import (
 const (
 	ipvlanRequiredKernelVersion = "4.9"
 	ipvlanKernelModuleName      = "ipvlan"
-	vethDefaultMTU              = 1500
 	forceRecreatePeriod         = 60 * time.Second
 
 	pluginsConfigKey = "plugins"
 	eriVifFeatures   = "elastic_rdma"
+	localDNSAddress  = "169.254.20.10"
 )
 
 func New(
@@ -303,9 +303,9 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 
 	configData.VethMTU, err = c.netutil.DetectInterfaceMTU(configData.MasterInterface)
 	if err != nil {
-		configData.VethMTU = vethDefaultMTU
+		configData.VethMTU = DefaultMTU
 	}
-
+	configData.LocalDNSAddress = localDNSAddress
 	return &configData, nil
 }
 
@@ -382,7 +382,7 @@ func (c *Controller) patchCNIConfig(ctx context.Context, oriYamlStr string, data
 	}
 
 	if dataObject.InstanceType == string(metadata.InstanceTypeExBCC) {
-		return c.patchCNIConfigForERI(ctx, oriYamlStr, dataObject)
+		return c.patchCNIConfigForBCCRDMA(ctx, oriYamlStr, dataObject)
 	}
 
 	log.Errorf(ctx, "unknown instance type: %s", dataObject.InstanceType)
@@ -449,17 +449,22 @@ unchanged:
 	return oriYamlStr, nil
 }
 
-func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	// has eri
+func (c *Controller) patchCNIConfigForBCCRDMA(ctx context.Context, oriYamlStr string,
+	dataObject *CNIConfigData) (string, error) {
 	hasERI, eriErr := c.hasERI(ctx)
+	// is eri?
 	if eriErr != nil {
 		log.Errorf(ctx, "check eri failed: %s", eriErr)
-		return oriYamlStr, nil
 	}
+	if hasERI {
+		return c.patchCNIConfigForERI(ctx, oriYamlStr, dataObject)
+	}
+	// is hpc?
+	return c.patchCNIConfigForMellanox8(ctx, oriYamlStr, dataObject)
+}
 
-	if !hasERI {
-		return oriYamlStr, nil
-	}
+func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string,
+	dataObject *CNIConfigData) (string, error) {
 	// patch eri info to cni config
 	oriConfigMap := make(map[string]interface{})
 	jsonErr := json.Unmarshal([]byte(oriYamlStr), &oriConfigMap)

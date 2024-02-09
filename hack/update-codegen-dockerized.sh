@@ -14,7 +14,7 @@ protoc pkg/rpc/rpc.proto --go_out=plugins=grpc:.
 
 # Generate deepcopy code with K8s codegen tools.
 $GOPATH/bin/deepcopy-gen \
-  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1" \
+  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1,${CNI_PKG}/pkg/apis/networking/v2" \
   -O zz_generated.deepcopy \
   --go-header-file hack/boilerplate.go.txt
 
@@ -23,18 +23,19 @@ $GOPATH/bin/client-gen \
   --clientset-name versioned \
   --input-base "" \
   --input "${CNI_PKG}/pkg/apis/networking/v1alpha1" \
+  --input "${CNI_PKG}/pkg/apis/networking/v2" \
   --output-package "${CNI_PKG}/pkg/generated/clientset" \
   --go-header-file hack/boilerplate.go.txt
 
 # Generate listers with K8s codegen tools.
 $GOPATH/bin/lister-gen \
-  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1" \
+  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1,${CNI_PKG}/pkg/apis/networking/v2" \
   --output-package "${CNI_PKG}/pkg/generated/listers" \
   --go-header-file hack/boilerplate.go.txt
 
 # Generate informers with K8s codegen tools.
 $GOPATH/bin/informer-gen \
-  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1" \
+  --input-dirs "${CNI_PKG}/pkg/apis/networking/v1alpha1,${CNI_PKG}/pkg/apis/networking/v2" \
   --versioned-clientset-package "${CNI_PKG}/pkg/generated/clientset/versioned" \
   --listers-package "${CNI_PKG}/pkg/generated/listers" \
   --output-package "${CNI_PKG}/pkg/generated/informers" \

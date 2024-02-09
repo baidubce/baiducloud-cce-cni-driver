@@ -6,6 +6,8 @@ import (
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	ccev1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v1alpha1"
 	fakeccev1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v1alpha1/fake"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v2"
+	fakeccev2 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/typed/networking/v2/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
@@ -63,4 +65,9 @@ var _ clientset.Interface = &Clientset{}
 // CceV1alpha1 retrieves the CceV1alpha1Client
 func (c *Clientset) CceV1alpha1() ccev1alpha1.CceV1alpha1Interface {
 	return &fakeccev1alpha1.FakeCceV1alpha1{Fake: &c.Fake}
+}
+
+// CceV2 retrieves the CceV2Client
+func (c *Clientset) CceV2() ccev2.CceV2Interface {
+	return &fakeccev2.FakeCceV2{Fake: &c.Fake}
 }

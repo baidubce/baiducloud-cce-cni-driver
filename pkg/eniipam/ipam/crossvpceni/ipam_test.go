@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
@@ -44,6 +43,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/scheme"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 )
 
 func setupEnv(ctrl *gomock.Controller) (

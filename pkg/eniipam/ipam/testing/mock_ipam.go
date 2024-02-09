@@ -6,10 +6,9 @@ package testing
 
 import (
 	context "context"
-	reflect "reflect"
-
 	v1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
+	reflect "reflect"
 )
 
 // MockInterface is a mock of Interface interface

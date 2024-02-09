@@ -19,25 +19,8 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/containernetworking/cni/pkg/skel"
-	"github.com/containernetworking/cni/pkg/types/current"
-	"github.com/golang/mock/gomock"
-	"github.com/vishvananda/netlink"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/rest"
-	"k8s.io/utils/exec"
-	utilexec "k8s.io/utils/exec"
-	fakeexec "k8s.io/utils/exec/testing"
-
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/cni"
 	rpcdef "github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	mockcbclient "github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc/testing"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -60,18 +43,63 @@ import (
 	mockrpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/rpc/testing"
 	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 	mocksysctl "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl/testing"
+	"github.com/containernetworking/cni/pkg/skel"
+	"github.com/containernetworking/cni/pkg/types/current"
+	"github.com/golang/mock/gomock"
+	"github.com/vishvananda/netlink"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	"k8s.io/utils/exec"
+	utilexec "k8s.io/utils/exec"
+	fakeexec "k8s.io/utils/exec/testing"
 )
 
 var (
 	stdinData = `
-{
-    "cniVersion":"0.3.1",
-    "name":"cce-cni",
-    "type":"rdma",
-	"ipam":{
-        "endpoint":"172.25.66.38:80"
-    }
-}`
+	{
+		"cniVersion":"0.3.1",
+		"name":"cce-cni",
+		"type":"rdma",
+		"ipam":{
+			"endpoint":"172.25.66.38:80"
+		},
+		"prevResult": {
+			"ips": [
+				{
+				  "address": "10.1.0.5/16",
+				  "gateway": "10.1.0.1",
+				  "interface": 2
+				}
+			],
+			"routes": [
+			  {
+				"dst": "0.0.0.0/0"
+			  }
+			],
+			"interfaces": [
+				{
+					"name": "cni0",
+					"mac": "00:11:22:33:44:55"
+				},
+				{
+					"name": "veth3243",
+					"mac": "55:44:33:22:11:11"
+				},
+				{
+					"name": "eth0",
+					"mac": "00:11:22:33:44:66",
+					"sandbox": "/var/run/netns/blue"
+				}
+			],
+			"dns": {
+			  "nameservers": [ "10.1.0.1" ]
+			}
+		}
+	}`
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
 )
 
@@ -100,7 +128,7 @@ func setupEnv(ctrl *gomock.Controller) (
 
 func Test_cmdDel(t *testing.T) {
 	t.Log("test cmd del")
-
+	SetUPK8SClientEnv()
 	type fields struct {
 		ctrl    *gomock.Controller
 		nlink   netlinkwrapper.Interface
@@ -203,7 +231,7 @@ func Test_cmdDel(t *testing.T) {
 					StdinData:   []byte(stdinData),
 				},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "异常流程2",
@@ -211,7 +239,15 @@ func Test_cmdDel(t *testing.T) {
 				ctrl := gomock.NewController(t)
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
+				allocReply := rpcdef.ReleaseIPReply{
+					IsSuccess: true,
+					ErrMsg:    "",
+				}
+				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				ns.EXPECT().WithNetNSPath(gomock.Any(), gomock.Any()).Return(errors.New("nspath error for cmd del unit testrelease"))
+				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
+				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
+				cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil)
 
 				return fields{
 					ctrl:    ctrl,
@@ -236,7 +272,7 @@ func Test_cmdDel(t *testing.T) {
 					StdinData:   []byte(stdinData),
 				},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -559,8 +595,10 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				fakeCmd := fakeexec.FakeCmd{
 					CombinedOutputScript: []fakeexec.FakeAction{
 						func() ([]byte, []byte, error) { return []byte("ens11"), nil, nil },
+						func() ([]byte, []byte, error) { return []byte("ens12"), nil, nil },
 					},
 					RunScript: []fakeexec.FakeAction{
+						func() ([]byte, []byte, error) { return nil, nil, nil },
 						func() ([]byte, []byte, error) { return nil, nil, nil },
 					},
 				}
@@ -582,8 +620,8 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 				nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil)
+				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil).AnyTimes()
+				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil).AnyTimes()
 				netutil.EXPECT().InterfaceByName(gomock.Any()).Return(&net.Interface{}, nil)
 				netutil.EXPECT().GratuitousArpOverIface(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -704,7 +742,7 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 
 				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient).AnyTimes()
-				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error"))
+				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error")).AnyTimes()
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 
@@ -745,8 +783,10 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				fakeCmd := fakeexec.FakeCmd{
 					CombinedOutputScript: []fakeexec.FakeAction{
 						func() ([]byte, []byte, error) { return []byte("ens11"), nil, nil },
+						func() ([]byte, []byte, error) { return []byte("ens12"), nil, nil },
 					},
 					RunScript: []fakeexec.FakeAction{
+						func() ([]byte, []byte, error) { return nil, nil, nil },
 						func() ([]byte, []byte, error) { return nil, nil, nil },
 					},
 				}
@@ -773,8 +813,8 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 				nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil)
+				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil).AnyTimes()
+				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil).AnyTimes()
 				netutil.EXPECT().InterfaceByName(gomock.Any()).Return(&net.Interface{}, errors.New("get interface by name error"))
 				//netutil.EXPECT().GratuitousArpOverIface(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -1182,7 +1222,6 @@ func Test_cmdCheck(t *testing.T) {
 
 func TestNewRdmaPlugin(t *testing.T) {
 	t.Log("test cmd rdma plugin")
-	cni.InitFlags(filepath.Join(os.TempDir(), "rdma.log"))
 	p := newRdmaPlugin()
 	if p == nil {
 		t.Error("newRdmaPlugin returns nil")

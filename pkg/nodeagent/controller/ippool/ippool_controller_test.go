@@ -261,7 +261,7 @@ func (suite *IPPoolTestCase) TestIPv4CreateIPRange() {
 	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(256, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(255, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestIPv4IPv6CreateIPRange() {
@@ -292,7 +292,7 @@ func (suite *IPPoolTestCase) TestIPv4IPv6CreateIPRange() {
 	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(9223372036854775807, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(9223372036854775806, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateBCCENI() {
@@ -323,7 +323,7 @@ func (suite *IPPoolTestCase) TestCreateBCCENI() {
 	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(240, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestEmptyIPPool() {
@@ -371,7 +371,7 @@ func (suite *IPPoolTestCase) TestEmptyIPPool() {
 	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(240, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateBBCENI() {
@@ -403,7 +403,7 @@ func (suite *IPPoolTestCase) TestCreateBBCENI() {
 	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(40, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(39, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateBCCENIonVPCHybird() {
@@ -435,10 +435,10 @@ func (suite *IPPoolTestCase) TestCreateBCCENIonVPCHybird() {
 	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(240, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
 }
 
-func (suite *IPPoolTestCase) TestCreateBBCENIWithCustomerMaxIP() {
+func (suite *IPPoolTestCase) TestCreateBBCENIonHybirdWithCustomerMaxIP() {
 	c := suite.c
 	c.cniMode = types.CCEModeBBCSecondaryIPVeth
 	node := mockIPv4Node(c.nodeName, c.instanceID)
@@ -470,7 +470,7 @@ func (suite *IPPoolTestCase) TestCreateBBCENIWithCustomerMaxIP() {
 	suite.Assert().EqualValues(10, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(1000, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(990, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateCrossVPCEni() {

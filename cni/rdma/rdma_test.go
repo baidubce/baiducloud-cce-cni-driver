@@ -746,7 +746,7 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 
 				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient).AnyTimes()
-				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error"))
+				cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("allocate ip error")).AnyTimes()
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 

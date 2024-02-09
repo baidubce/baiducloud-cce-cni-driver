@@ -61,7 +61,7 @@ func (p *rocePlugin) getRdmaDeviceFromMetaAPI(ctx context.Context) (map[string]s
 			return nil, fmt.Errorf("get mac %s vif features failed: %v", macAddress, vifErr)
 		}
 		if DeviceRequireIpvlanMaps[strings.TrimSpace(vifFeatures)] {
-			target, err := p.netutil.GetLinkByMacAddress(macAddress)
+			target, err := p.netutil.GetLinkByMacAddress(strings.ToLower(macAddress))
 			if err != nil {
 				return nil, err
 			}

@@ -1,4 +1,4 @@
-FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0
+FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0-slim
 
 LABEL maintainer="Chen Yaqi<chenyaqi01@baidu.com>"
 
@@ -26,4 +26,4 @@ COPY output/ip-masq-agent /bin/cce-ip-masq-agent
 
 COPY build/images/cce-cni/entrypoint.sh /entrypoint.sh
 
-CMD ["/bin/bash", "/entrypoint.sh"]
+CMD ["/bin/sh", "/entrypoint.sh"]

@@ -7,6 +7,7 @@ package testing
 import (
 	context "context"
 	v1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	rpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
 )
@@ -165,77 +166,77 @@ type MockRoceInterface struct {
 	recorder *MockRoceInterfaceMockRecorder
 }
 
-// MockRoceInterfaceMockRecorder is the mock recorder for MockRoceInterface
+// MockRoceInterfaceMockRecorder is the mock recorder for MockRoceInterface.
 type MockRoceInterfaceMockRecorder struct {
 	mock *MockRoceInterface
 }
 
-// NewMockRoceInterface creates a new mock instance
+// NewMockRoceInterface creates a new mock instance.
 func NewMockRoceInterface(ctrl *gomock.Controller) *MockRoceInterface {
 	mock := &MockRoceInterface{ctrl: ctrl}
 	mock.recorder = &MockRoceInterfaceMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRoceInterface) EXPECT() *MockRoceInterfaceMockRecorder {
 	return m.recorder
 }
 
-// Allocate mocks base method
-func (m *MockRoceInterface) Allocate(ctx context.Context, name, namespace, containerID, mac string) (*v1alpha1.WorkloadEndpoint, error) {
+// Allocate mocks base method.
+func (m *MockRoceInterface) Allocate(arg0 context.Context, arg1, arg2, arg3, arg4 string, arg5 rpc.IPType) (*v1alpha1.WorkloadEndpoint, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Allocate", ctx, name, namespace, containerID, mac)
+	ret := m.ctrl.Call(m, "Allocate", arg0, arg1, arg2, arg3, arg4, arg5)
 	ret0, _ := ret[0].(*v1alpha1.WorkloadEndpoint)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Allocate indicates an expected call of Allocate
-func (mr *MockRoceInterfaceMockRecorder) Allocate(ctx, name, namespace, containerID, mac interface{}) *gomock.Call {
+// Allocate indicates an expected call of Allocate.
+func (mr *MockRoceInterfaceMockRecorder) Allocate(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Allocate", reflect.TypeOf((*MockRoceInterface)(nil).Allocate), ctx, name, namespace, containerID, mac)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Allocate", reflect.TypeOf((*MockRoceInterface)(nil).Allocate), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
-// Release mocks base method
-func (m *MockRoceInterface) Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error) {
+// Ready mocks base method.
+func (m *MockRoceInterface) Ready(arg0 context.Context) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Release", ctx, name, namespace, containerID)
-	ret0, _ := ret[0].(*v1alpha1.WorkloadEndpoint)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Release indicates an expected call of Release
-func (mr *MockRoceInterfaceMockRecorder) Release(ctx, name, namespace, containerID interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Release", reflect.TypeOf((*MockRoceInterface)(nil).Release), ctx, name, namespace, containerID)
-}
-
-// Run mocks base method
-func (m *MockRoceInterface) Run(ctx context.Context, stopCh <-chan struct{}) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Run", ctx, stopCh)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Run indicates an expected call of Run
-func (mr *MockRoceInterfaceMockRecorder) Run(ctx, stopCh interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRoceInterface)(nil).Run), ctx, stopCh)
-}
-
-// Ready mocks base method
-func (m *MockRoceInterface) Ready(ctx context.Context) bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ready", ctx)
+	ret := m.ctrl.Call(m, "Ready", arg0)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
-// Ready indicates an expected call of Ready
-func (mr *MockRoceInterfaceMockRecorder) Ready(ctx interface{}) *gomock.Call {
+// Ready indicates an expected call of Ready.
+func (mr *MockRoceInterfaceMockRecorder) Ready(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ready", reflect.TypeOf((*MockRoceInterface)(nil).Ready), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ready", reflect.TypeOf((*MockRoceInterface)(nil).Ready), arg0)
+}
+
+// Release mocks base method.
+func (m *MockRoceInterface) Release(arg0 context.Context, arg1, arg2, arg3 string) (*v1alpha1.WorkloadEndpoint, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Release", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(*v1alpha1.WorkloadEndpoint)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Release indicates an expected call of Release.
+func (mr *MockRoceInterfaceMockRecorder) Release(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Release", reflect.TypeOf((*MockRoceInterface)(nil).Release), arg0, arg1, arg2, arg3)
+}
+
+// Run mocks base method.
+func (m *MockRoceInterface) Run(arg0 context.Context, arg1 <-chan struct{}) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Run", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Run indicates an expected call of Run.
+func (mr *MockRoceInterfaceMockRecorder) Run(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRoceInterface)(nil).Run), arg0, arg1)
 }

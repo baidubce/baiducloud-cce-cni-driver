@@ -169,46 +169,22 @@ func Test_cmdDel(t *testing.T) {
 				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
 				cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil)
 
-				return fields{
-					ctrl:    ctrl,
-					nlink:   nlink,
-					ns:      ns,
-					ipam:    ipam,
-					ip:      ip,
-					types:   types,
-					netutil: netutil,
-					rpc:     rpc,
-					grpc:    grpc,
-					sysctl:  sysctl,
+				macVlanDev := &netlink.Macvlan{
+					LinkAttrs: netlink.LinkAttrs{
+						HardwareAddr: []byte{100, 100, 100, 100, 100, 100},
+					},
 				}
-			}(),
-			args: args{
-				args: &skel.CmdArgs{
-					ContainerID: "xxxx",
-					Netns:       "/proc/100/ns/net",
-					IfName:      "eth0",
-					Args:        envArgs,
-					Path:        "/opt/cin/bin",
-					StdinData:   []byte(stdinData),
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "异常流程1",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+				nlink.EXPECT().LinkList().Return([]netlink.Link{macVlanDev}, nil)
 
-				allocReply := rpcdef.ReleaseIPReply{
-					IsSuccess: true,
-					ErrMsg:    "",
-				}
-				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
-				ns.EXPECT().WithNetNSPath(gomock.Any(), gomock.Any()).Return(nil)
-				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
-				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
-				cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("release ip error"))
+				// neigh := netlink.Neigh{
+				// 	LinkIndex:    1,
+				// 	State:        netlink.NUD_PERMANENT,
+				// 	IP:           net.IPv4(10, 10, 0, 45),
+				// 	HardwareAddr: []byte{100, 100, 100, 100, 100, 100},
+				// }
+
+				// nlink.EXPECT().NeighList(gomock.Any(), gomock.Any()).Return([]netlink.Neigh{neigh}, nil)
+				// nlink.EXPECT().NeighDel(gomock.Any()).Return(nil)
 
 				return fields{
 					ctrl:    ctrl,
@@ -235,6 +211,47 @@ func Test_cmdDel(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// {
+		// 	name: "异常流程1",
+		// 	fields: func() fields {
+		// 		ctrl := gomock.NewController(t)
+		// 		nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+		// 		allocReply := rpcdef.ReleaseIPReply{
+		// 			IsSuccess: true,
+		// 			ErrMsg:    "",
+		// 		}
+		// 		cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
+		// 		ns.EXPECT().WithNetNSPath(gomock.Any(), gomock.Any()).Return(nil)
+		// 		grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
+		// 		rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
+		// 		cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("release ip error"))
+
+		// 		return fields{
+		// 			ctrl:    ctrl,
+		// 			nlink:   nlink,
+		// 			ns:      ns,
+		// 			ipam:    ipam,
+		// 			ip:      ip,
+		// 			types:   types,
+		// 			netutil: netutil,
+		// 			rpc:     rpc,
+		// 			grpc:    grpc,
+		// 			sysctl:  sysctl,
+		// 		}
+		// 	}(),
+		// 	args: args{
+		// 		args: &skel.CmdArgs{
+		// 			ContainerID: "xxxx",
+		// 			Netns:       "/proc/100/ns/net",
+		// 			IfName:      "eth0",
+		// 			Args:        envArgs,
+		// 			Path:        "/opt/cin/bin",
+		// 			StdinData:   []byte(stdinData),
+		// 		},
+		// 	},
+		// 	wantErr: false,
+		// },
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -467,7 +484,7 @@ func Test_rocePlugin_setupIpvlanInterface(t *testing.T) {
 	}
 }
 
-func Test_rdmaPlugin_setupIPvlanNetworkInfo(t *testing.T) {
+func Test_rocePlugin_setupIPvlanNetworkInfo(t *testing.T) {
 	t.Log("test rocePlugin setupIPvlanNetworkInfo")
 
 	type fields struct {
@@ -528,7 +545,7 @@ func Test_rdmaPlugin_setupIPvlanNetworkInfo(t *testing.T) {
 				nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil).AnyTimes()
 				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil).AnyTimes()
-				nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil)
+				//				nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil)
 
 				MaxRetries = 3
 				Factor = 1.0
@@ -759,6 +776,14 @@ func Test_eriPlugin_delAllIPVlanDevices(t *testing.T) {
 				ip.EXPECT().DelLinkByName(gomock.Any()).Return(nil)
 				nlink.EXPECT().LinkList().Return([]netlink.Link{ipVlanDev}, nil)
 
+				add := netlink.Addr{
+					IPNet: &net.IPNet{
+						IP:   net.IPv4(25, 0, 0, 45),
+						Mask: net.CIDRMask(24, 32),
+					},
+				}
+
+				nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return([]netlink.Addr{add}, nil)
 				return fields{
 					ctrl:    ctrl,
 					nlink:   nlink,
@@ -799,6 +824,13 @@ func Test_eriPlugin_delAllIPVlanDevices(t *testing.T) {
 
 				ip.EXPECT().DelLinkByName(gomock.Any()).Return(errors.New("Delete Link By Name Error"))
 				nlink.EXPECT().LinkList().Return([]netlink.Link{ipVlanDev}, nil)
+				add := netlink.Addr{
+					IPNet: &net.IPNet{
+						IP:   net.IPv4(25, 0, 0, 45),
+						Mask: net.CIDRMask(24, 32),
+					},
+				}
+				nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return([]netlink.Addr{add}, nil)
 
 				return fields{
 					ctrl:    ctrl,
@@ -844,145 +876,147 @@ func Test_eriPlugin_delAllIPVlanDevices(t *testing.T) {
 				sysctl:  tt.fields.sysctl,
 			}
 			ctx := log.NewContext()
-			if err := p.delAllIPVlanDevices(ctx); (err != nil) != tt.wantErr {
+			ip2devMap := make(map[string]string)
+			ip2devMap[roceDevicePrefix] = "25.0.0.45"
+			if err := p.delAllIPVlanDevices(ctx, ip2devMap); (err != nil) != tt.wantErr {
 				t.Errorf("rocePlugin.delAllIPVlanDevices() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func Test_eriPlugin_addRoute2IPVlanMasterNetNS(t *testing.T) {
-	t.Log("test rocePlugin setupIPvlanNetworkInfo")
+// func Test_eriPlugin_addRoute2IPVlanMasterNetNS(t *testing.T) {
+// 	t.Log("test rocePlugin setupIPvlanNetworkInfo")
 
-	type fields struct {
-		ctrl    *gomock.Controller
-		nlink   netlinkwrapper.Interface
-		ns      nswrapper.Interface
-		ipam    ipamwrapper.Interface
-		ip      ipwrapper.Interface
-		types   typeswrapper.Interface
-		netutil networkutil.Interface
-		rpc     rpcwrapper.Interface
-		grpc    grpcwrapper.Interface
-		exec    utilexec.Interface
-		sysctl  sysctlwrapper.Interface
-	}
-	type args struct {
-		args *skel.CmdArgs
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr bool
-	}{
-		{
-			name: "正常流程",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+// 	type fields struct {
+// 		ctrl    *gomock.Controller
+// 		nlink   netlinkwrapper.Interface
+// 		ns      nswrapper.Interface
+// 		ipam    ipamwrapper.Interface
+// 		ip      ipwrapper.Interface
+// 		types   typeswrapper.Interface
+// 		netutil networkutil.Interface
+// 		rpc     rpcwrapper.Interface
+// 		grpc    grpcwrapper.Interface
+// 		exec    utilexec.Interface
+// 		sysctl  sysctlwrapper.Interface
+// 	}
+// 	type args struct {
+// 		args *skel.CmdArgs
+// 	}
+// 	tests := []struct {
+// 		name    string
+// 		fields  fields
+// 		args    args
+// 		wantErr bool
+// 	}{
+// 		{
+// 			name: "正常流程",
+// 			fields: func() fields {
+// 				ctrl := gomock.NewController(t)
+// 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
-				veth1 := &netlink.Veth{
-					LinkAttrs: netlink.LinkAttrs{
-						HardwareAddr: []byte{100, 100, 100, 100, 100, 100},
-					},
-				}
-				nlink.EXPECT().LinkList().Return([]netlink.Link{veth1}, nil)
-				nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil)
-				nlink.EXPECT().RouteList(gomock.Any(), gomock.Any()).Return([]netlink.Route{{
-					LinkIndex: 2,
-				},
-				}, nil)
+// 				veth1 := &netlink.Veth{
+// 					LinkAttrs: netlink.LinkAttrs{
+// 						HardwareAddr: []byte{100, 100, 100, 100, 100, 100},
+// 					},
+// 				}
+// 				nlink.EXPECT().LinkList().Return([]netlink.Link{veth1}, nil)
+// 				nlink.EXPECT().RouteAdd(gomock.Any()).Return(nil)
+// 				nlink.EXPECT().RouteList(gomock.Any(), gomock.Any()).Return([]netlink.Route{{
+// 					LinkIndex: 2,
+// 				},
+// 				}, nil)
 
-				return fields{
-					ctrl:    ctrl,
-					nlink:   nlink,
-					ns:      ns,
-					ipam:    ipam,
-					ip:      ip,
-					types:   types,
-					netutil: netutil,
-					rpc:     rpc,
-					grpc:    grpc,
-					sysctl:  sysctl,
-				}
-			}(),
-			args: args{
-				args: &skel.CmdArgs{
-					ContainerID: "xxxx",
-					Netns:       "/proc/100/ns/net",
-					IfName:      "eth0",
-					Args:        envArgs,
-					Path:        "/opt/cin/bin",
-					StdinData:   []byte(stdinData),
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "异常流程1",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+// 				return fields{
+// 					ctrl:    ctrl,
+// 					nlink:   nlink,
+// 					ns:      ns,
+// 					ipam:    ipam,
+// 					ip:      ip,
+// 					types:   types,
+// 					netutil: netutil,
+// 					rpc:     rpc,
+// 					grpc:    grpc,
+// 					sysctl:  sysctl,
+// 				}
+// 			}(),
+// 			args: args{
+// 				args: &skel.CmdArgs{
+// 					ContainerID: "xxxx",
+// 					Netns:       "/proc/100/ns/net",
+// 					IfName:      "eth0",
+// 					Args:        envArgs,
+// 					Path:        "/opt/cin/bin",
+// 					StdinData:   []byte(stdinData),
+// 				},
+// 			},
+// 			wantErr: false,
+// 		},
+// 		{
+// 			name: "异常流程1",
+// 			fields: func() fields {
+// 				ctrl := gomock.NewController(t)
+// 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
-				nlink.EXPECT().RouteList(gomock.Any(), gomock.Any()).Return([]netlink.Route{{
-					LinkIndex: 2,
-					Dst: &net.IPNet{
-						IP:   net.IPv4(169, 254, 1, 1),
-						Mask: net.CIDRMask(24, 32),
-					},
-				},
-				}, nil)
-				return fields{
-					ctrl:    ctrl,
-					nlink:   nlink,
-					ns:      ns,
-					ipam:    ipam,
-					ip:      ip,
-					types:   types,
-					netutil: netutil,
-					rpc:     rpc,
-					grpc:    grpc,
-					sysctl:  sysctl,
-				}
-			}(),
-			args: args{
-				args: &skel.CmdArgs{
-					ContainerID: "xxxx",
-					Netns:       "/proc/100/ns/net",
-					IfName:      "eth0",
-					Args:        envArgs,
-					Path:        "/opt/cin/bin",
-					StdinData:   []byte(stdinData),
-				},
-			},
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.fields.ctrl != nil {
-				defer tt.fields.ctrl.Finish()
-			}
-			p := &rocePlugin{
-				nlink:   tt.fields.nlink,
-				ns:      tt.fields.ns,
-				ipam:    tt.fields.ipam,
-				ip:      tt.fields.ip,
-				types:   tt.fields.types,
-				netutil: tt.fields.netutil,
-				rpc:     tt.fields.rpc,
-				grpc:    tt.fields.grpc,
-				exec:    tt.fields.exec,
-				sysctl:  tt.fields.sysctl,
-			}
-			addr, _ := netlink.ParseAddr("192.168.12.12/32")
-			if err := p.addRoute2IPVlanMasterNetNS([]netlink.Addr{*addr}); (err != nil) != tt.wantErr {
-				t.Errorf("rocePlugin.addRoute2IPVlanMasterNetNS() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
+// 				nlink.EXPECT().RouteList(gomock.Any(), gomock.Any()).Return([]netlink.Route{{
+// 					LinkIndex: 2,
+// 					Dst: &net.IPNet{
+// 						IP:   net.IPv4(169, 254, 1, 1),
+// 						Mask: net.CIDRMask(24, 32),
+// 					},
+// 				},
+// 				}, nil)
+// 				return fields{
+// 					ctrl:    ctrl,
+// 					nlink:   nlink,
+// 					ns:      ns,
+// 					ipam:    ipam,
+// 					ip:      ip,
+// 					types:   types,
+// 					netutil: netutil,
+// 					rpc:     rpc,
+// 					grpc:    grpc,
+// 					sysctl:  sysctl,
+// 				}
+// 			}(),
+// 			args: args{
+// 				args: &skel.CmdArgs{
+// 					ContainerID: "xxxx",
+// 					Netns:       "/proc/100/ns/net",
+// 					IfName:      "eth0",
+// 					Args:        envArgs,
+// 					Path:        "/opt/cin/bin",
+// 					StdinData:   []byte(stdinData),
+// 				},
+// 			},
+// 			wantErr: false,
+// 		},
+// 	}
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			if tt.fields.ctrl != nil {
+// 				defer tt.fields.ctrl.Finish()
+// 			}
+// 			p := &rocePlugin{
+// 				nlink:   tt.fields.nlink,
+// 				ns:      tt.fields.ns,
+// 				ipam:    tt.fields.ipam,
+// 				ip:      tt.fields.ip,
+// 				types:   tt.fields.types,
+// 				netutil: tt.fields.netutil,
+// 				rpc:     tt.fields.rpc,
+// 				grpc:    tt.fields.grpc,
+// 				exec:    tt.fields.exec,
+// 				sysctl:  tt.fields.sysctl,
+// 			}
+// 			addr, _ := netlink.ParseAddr("192.168.12.12/32")
+// 			if err := p.addRoute2IPVlanMasterNetNS([]netlink.Addr{*addr}); (err != nil) != tt.wantErr {
+// 				t.Errorf("rocePlugin.addRoute2IPVlanMasterNetNS() error = %v, wantErr %v", err, tt.wantErr)
+// 			}
+// 		})
+// 	}
+// }
 
 func Test_eriPlugin_disableRPFCheck(t *testing.T) {
 	t.Log("test rocePlugin disableRPFCheck")

@@ -185,7 +185,7 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 
 				roceipamd := mockipam.NewMockRoceInterface(ctrl)
 				gomock.InOrder(
-					roceipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					roceipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 						Return(&v1alpha1.WorkloadEndpoint{
 							Spec: v1alpha1.WorkloadEndpointSpec{
 								IP: "192.168.100.100",
@@ -230,7 +230,7 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 
 				eriipamd := mockipam.NewMockRoceInterface(ctrl)
 				gomock.InOrder(
-					eriipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					eriipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 						Return(&v1alpha1.WorkloadEndpoint{
 							Spec: v1alpha1.WorkloadEndpointSpec{
 								IP: "192.168.100.100",
@@ -239,8 +239,8 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 				)
 
 				return fields{
-					ctrl:     ctrl,
-					eriipamd: eriipamd,
+					ctrl:      ctrl,
+					roceipamd: eriipamd,
 				}
 			}(),
 			args: args{
@@ -278,8 +278,8 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 				bccipamd:  tt.fields.ipamd,
 				eniipamd:  tt.fields.eniipamd,
 				roceipamd: tt.fields.roceipamd,
-				eriipamd:  tt.fields.eriipamd,
-				port:      tt.fields.port,
+				//	eriipamd:  tt.fields.eriipamd,
+				port: tt.fields.port,
 			}
 			got, err := cb.AllocateIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {
@@ -489,8 +489,8 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 				)
 
 				return fields{
-					ctrl:     ctrl,
-					eriipamd: ipamd,
+					ctrl:      ctrl,
+					roceipamd: ipamd,
 				}
 			}(),
 			args: args{
@@ -523,8 +523,8 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 				bccipamd:  tt.fields.ipamd,
 				eniipamd:  tt.fields.eniipamd,
 				roceipamd: tt.fields.roceipamd,
-				eriipamd:  tt.fields.eriipamd,
-				port:      tt.fields.port,
+				//eriipamd:  tt.fields.eriipamd,
+				port: tt.fields.port,
 			}
 			got, err := cb.ReleaseIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {
@@ -580,7 +580,6 @@ func Test_isRateLimitErrorMessage(t *testing.T) {
 
 func TestRunRPCServer(t *testing.T) {
 	srv := New(
-		nil,
 		nil,
 		nil,
 		nil,

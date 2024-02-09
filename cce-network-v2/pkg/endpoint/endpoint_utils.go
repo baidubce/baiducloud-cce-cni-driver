@@ -36,17 +36,10 @@ import (
 func GetEndpointCrossCache(ctx context.Context, cceEndpointClient *watchers.CCEEndpointClient, namespace string, name string) (*ccev2.CCEEndpoint, error) {
 	oldEP, err := cceEndpointClient.Get(namespace, name)
 
-	if err != nil {
-		oldEP, err = cceEndpointClient.CCEEndpoints(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			if kerrors.IsNotFound(err) {
-				oldEP = nil
-			} else {
-				return nil, fmt.Errorf("get endpoint object error %w", err)
-			}
-		}
+	if kerrors.IsNotFound(err) {
+		return nil, nil
 	}
-	return oldEP, nil
+	return oldEP, err
 }
 
 // NewEndpointTemplate create a Elastic CCE Endpoint

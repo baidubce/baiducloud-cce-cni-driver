@@ -301,6 +301,10 @@ func EnsureRoute(log *logrus.Entry, eniLink netlink.Link, family int, rtTable in
 		return "", err
 	}
 
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("no address found in dev(%s) with family %d", eniLink.Attrs().Name, family)
+	}
+
 	routes, err := netlink.RouteList(eniLink, family)
 	if err != nil {
 		return "", fmt.Errorf("failed to list dev %v routes: %v", eniLink.Attrs().Name, err)

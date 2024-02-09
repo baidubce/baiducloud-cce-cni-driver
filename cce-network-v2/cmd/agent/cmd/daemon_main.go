@@ -418,6 +418,11 @@ func initializeFlags() {
 	flags.Duration(option.K8sHeartbeatTimeout, 30*time.Second, "Configures the timeout for api-server heartbeat, set to 0 to disable")
 	option.BindEnv(option.K8sHeartbeatTimeout)
 
+	flags.Float32(option.K8sClientQPSLimit, defaults.K8sClientQPSLimit, "Queries per second limit for the K8s client")
+	option.BindEnv(option.K8sClientQPSLimit)
+	flags.Int(option.K8sClientBurst, defaults.K8sClientBurst, "Burst value allowed for the K8s client")
+	option.BindEnv(option.K8sClientBurst)
+
 	flags.String(option.LocalRouterIPv4, "", "Link-local IPv4 used for CCE's router devices")
 	option.BindEnv(option.LocalRouterIPv4)
 
@@ -495,7 +500,7 @@ func initEnv(cmd *cobra.Command) {
 	// Configure k8s as soon as possible so that k8s.IsEnabled() has the right
 	// behavior.
 	bootstrapStats.k8sInit.Start()
-	k8s.Configure(option.Config.K8sAPIServer, option.Config.K8sKubeConfigPath, defaults.K8sClientQPSLimit, defaults.K8sClientBurst)
+	k8s.Configure(option.Config.K8sAPIServer, option.Config.K8sKubeConfigPath, float32(option.Config.K8sClientQPSLimit), option.Config.K8sClientBurst)
 	bootstrapStats.k8sInit.End(true)
 
 	for _, grp := range option.Config.DebugVerbose {

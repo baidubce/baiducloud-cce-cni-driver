@@ -2,6 +2,8 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.8 (2023/08/07)
+#### 2.8.4 [20230914]
+1. [BUG] vpc-eni，修复在 centos 8等使用 NetworkManager 的操作系统发行版，当 ENI 网卡被重命名后，DHCP 删除 IP 导致 ENI 无法就绪的问题
 #### 2.8.3 [20230904]
 1. [Feature]支持kubelet删除cni配置文件后，重新创建配置文件
 2. [Feature]network-agent支持开启pprof，并获取mutex和block数据

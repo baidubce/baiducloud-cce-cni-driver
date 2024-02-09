@@ -72,9 +72,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 				scopedLog.WithError(err).Error("rename eniLink falied")
 				return err
 			}
-		}
-		// set device and route on the woker machine only when eni bound at bcc
-		if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
+
 			if isBCCSecondary {
 				// set rule when eni secondary IP mode
 				err = eniLink.ensureLinkConfig()
@@ -83,7 +81,10 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 					return err
 				}
 			}
-
+		}
+		
+		// set device and route on the woker machine only when eni bound at bcc
+		if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
 			resource.Status.InterfaceIndex = eniLink.linkIndex
 			resource.Status.InterfaceName = eniLink.linkName
 			resource.Status.ENIIndex = eniLink.eniIndex

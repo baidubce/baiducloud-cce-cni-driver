@@ -22,10 +22,13 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
@@ -60,6 +63,8 @@ const (
 
 	retryDuration = 500 * time.Millisecond
 	retryTimeout  = 15 * time.Second
+
+	vpcENISubsys = "vpc-eni-node-allocator"
 )
 
 type realNodeInf interface {
@@ -125,6 +130,8 @@ type bceNode struct {
 
 	creatingENINums int
 
+	eventRecorder record.EventRecorder
+
 	log *logrus.Entry
 }
 
@@ -137,7 +144,8 @@ func NewNode(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *Inst
 		manager:           manager,
 		instanceID:        k8sObj.Spec.InstanceID,
 		expiredVPCVersion: make(map[string]int64),
-		log:               logging.NewSubysLogger("vpc-eni-node-allocator").WithField("instanceID", k8sObj.Spec.InstanceID).WithField("nodeName", k8sObj.Name),
+		log:               logging.NewSubysLogger(vpcENISubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("nodeName", k8sObj.Name),
+		eventRecorder:     k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: vpcENISubsys}),
 	}
 
 	// 2. Get isSuportedENI from ccev2.NetResourceSet Label[k8s.LabelIsSupportENI], this Label is setted by nodediscovery determined by metadata api.

@@ -22,6 +22,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/record"
 )
 
 var (
@@ -38,6 +39,8 @@ type bbcENISyncer struct {
 	bceclient    cloud.Interface
 	resyncPeriod time.Duration
 	enilister    enilisterv2.ENILister
+
+	eventRecorder record.EventRecorder
 }
 
 // Init initialise the sync manager.

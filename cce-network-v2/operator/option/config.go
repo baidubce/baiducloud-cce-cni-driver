@@ -159,14 +159,14 @@ const (
 	// BCECloudVPCID allows user to specific vpc
 	BCECloudVPCID = "bce-cloud-vpc-id"
 	// BCECloudHost host of iaas api
-	BCECloudHost              = "bce-cloud-host"
-	BCECloudRegion            = "bce-cloud-region"
-	BCECloudContry            = "bce-cloud-country"
-	BCECloudAccessKey         = "bce-cloud-access-key"
-	BCECloudSecureKey         = "bce-cloud-secure-key"
+	BCECloudHost      = "bce-cloud-host"
+	BCECloudRegion    = "bce-cloud-region"
+	BCECloudContry    = "bce-cloud-country"
+	BCECloudAccessKey = "bce-cloud-access-key"
+	BCECloudSecureKey = "bce-cloud-secure-key"
 
 	ResourceENIResyncInterval = "resource-eni-resync-interval"
-	ResourceResyncWorkers = "resource-resync-workers"
+	ResourceResyncWorkers     = "resource-resync-workers"
 
 	// BCECustomerMaxENI is the max eni number of customer
 	BCECustomerMaxENI = "bce-customer-max-eni"

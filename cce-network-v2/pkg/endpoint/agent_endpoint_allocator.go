@@ -472,8 +472,8 @@ func recreateCEP(ctx context.Context, cceEndpointClient *watchers.CCEEndpointCli
 recreate:
 	err = DeleteEndpointAndWait(ctx, cceEndpointClient, newEP)
 	if err != nil {
-				return nil, fmt.Errorf("wait endpoint delete error: %w", err)
-			}
+		return nil, fmt.Errorf("wait endpoint delete error: %w", err)
+	}
 	ep, err = cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint error: %w", err)

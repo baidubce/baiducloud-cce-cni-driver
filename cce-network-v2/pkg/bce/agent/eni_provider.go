@@ -82,7 +82,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 				}
 			}
 		}
-		
+
 		// set device and route on the woker machine only when eni bound at bcc
 		if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
 			resource.Status.InterfaceIndex = eniLink.linkIndex

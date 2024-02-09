@@ -26,6 +26,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	cnitypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
@@ -70,6 +72,7 @@ type NodeDiscovery struct {
 	k8sNodeGetter         k8sNodeGetter
 	localNodeLock         lock.Mutex
 	localNode             nodeTypes.Node
+	eventRecorder         record.EventRecorder
 }
 
 func enableLocalNodeRoute() bool {
@@ -97,10 +100,11 @@ func NewNodeDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 		Registered:            make(chan struct{}),
 		localStateInitialized: make(chan struct{}),
 		NetConf:               netConf,
+		eventRecorder:         k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: nodeDiscoverySubsys}),
 	}
 }
 
-// start configures the local node and starts node discovery. This is called on
+// StartDiscovery start configures the local node and starts node discovery. This is called on
 // agent startup to configure the local node based on the configuration options
 // passed to the agent. nodeName is the name to be used in the local agent.
 func (n *NodeDiscovery) StartDiscovery() {
@@ -379,6 +383,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 
 	instanceID, err := agent.GetInstanceID()
 	if err != nil || instanceID == "" {
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError01", "failed to get instance id: %v", err)
 		log.WithError(err).Fatal("get instance id fail")
 	}
 	nodeResource.Spec.InstanceID = instanceID
@@ -394,6 +399,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 		if nodeResource.Spec.ENI == nil {
 			eni, err := agent.GenerateENISpec()
 			if err != nil {
+				n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError02", "generate eni metadata error: %v", err)
 				log.WithError(err).Fatal("generate ENI spec fail")
 			}
 			nodeResource.Spec.ENI = eni

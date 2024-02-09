@@ -7,6 +7,14 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
@@ -19,22 +27,18 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
-	"github.com/sirupsen/logrus"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 const (
 	eniControllerName = "eni-sync-manager"
 
 	ENIReadyTimeToAttach = 5 * time.Second
-	ENIMaxCreateDuration = 10 * time.Minute
+	ENIMaxCreateDuration = 5 * time.Minute
 
 	FinalizerENI = "eni-syncer"
 )
 
-var eniLog = logging.NewSubysLogger("bce-sync-manager")
+var eniLog = logging.NewSubysLogger(eniControllerName)
 
 // VPCENISyncer only work with single vpc cluster
 type VPCENISyncer struct {
@@ -44,7 +48,9 @@ type VPCENISyncer struct {
 
 // NewVPCENISyncer create a new VPCENISyncer
 func (es *VPCENISyncer) Init(ctx context.Context) error {
-	es.eni = &eniSyncher{}
+	eventRecorder := k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: eniControllerName})
+
+	es.eni = &eniSyncher{eventRecorder: eventRecorder}
 	es.eni.VPCIDs = append(es.eni.VPCIDs, operatorOption.Config.BCECloudVPCID)
 	es.eni.ClusterID = operatorOption.Config.CCEClusterID
 	err := es.eni.Init(ctx)
@@ -52,7 +58,8 @@ func (es *VPCENISyncer) Init(ctx context.Context) error {
 		return err
 	}
 
-	es.bbceni = &bbcENISyncer{}
+	es.bbceni = &bbcENISyncer{eventRecorder: eventRecorder}
+
 	return es.bbceni.Init(ctx)
 }
 
@@ -104,6 +111,8 @@ type eniSyncher struct {
 	updater      syncer.ENIUpdater
 	bceclient    cloud.Interface
 	resyncPeriod time.Duration
+
+	eventRecorder record.EventRecorder
 }
 
 // Init initialise the sync manager.
@@ -226,10 +235,10 @@ func (ss *eniSyncher) createExternalENI(eni *enisdk.Eni) {
 	}
 	_, err = ss.updater.Create(newENI)
 	if err != nil {
-		scopeLog.WithError(err).Errorf("create external eni failed")
+		ss.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateExternalENI", "Failed to create external ENI on nrs %s: %s", resource.Name, err)
 		return
 	}
-	scopeLog.Infof("create external eni success")
+	ss.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateExternalENISuccess", "create external ENI %s on nrs %s success", eni.EniId, resource.Name)
 }
 
 // Create Process synchronization of new enis
@@ -246,10 +255,11 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 		return nil
 	}
 	var (
-		newObj    = resource.DeepCopy()
-		eniStatus *ccev2.ENIStatus
-		err       error
-		ctx       = logfields.NewContext()
+		newObj      = resource.DeepCopy()
+		eniStatus   *ccev2.ENIStatus
+		err         error
+		updateError error
+		ctx         = logfields.NewContext()
 	)
 
 	scopeLog := eniLog.WithFields(logrus.Fields{
@@ -272,9 +282,22 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 		}
 
 		err = machine.start()
-		if _, ok := err.(*cm.DelayEvent); err != nil && !ok {
-			scopeLog.WithError(err).Error("eni machine failed")
-			return err
+		_, isDelayError := err.(*cm.DelayEvent)
+		if err != nil {
+			if isDelayError {
+				// if vpc status is not changed, will retry after 5s
+				if newObj.Status.VPCStatus == resource.Status.VPCStatus {
+					scopeLog.Infof("eni vpc status not changed, will retry later")
+					return err
+				} else {
+					// if vpc status is changed, will upate status on apiserver
+					goto updateAPIServer
+				}
+			} else {
+				scopeLog.WithError(err).Error("eni machine failed")
+				return err
+			}
+
 		}
 
 		scopeLog.Debug("start refresh eni")
@@ -285,16 +308,17 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 		}
 	}
 
+updateAPIServer:
 	eniStatus = &newObj.Status
 	// update spec and status
 	if !reflect.DeepEqual(&newObj.Spec, &resource.Spec) ||
 		!reflect.DeepEqual(newObj.Labels, resource.Labels) ||
 		!reflect.DeepEqual(newObj.Finalizers, resource.Finalizers) {
 		scopeLog.Debug("start update eni spec")
-		newObj, err = ss.updater.Update(newObj)
-		if err != nil {
-			scopeLog.WithError(err).Error("update eni spec failed")
-			return err
+		newObj, updateError = ss.updater.Update(newObj)
+		if updateError != nil {
+			scopeLog.WithError(updateError).Error("update eni spec failed")
+			return updateError
 		}
 		scopeLog.Info("update eni spec success")
 	}
@@ -302,10 +326,10 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 	if !reflect.DeepEqual(eniStatus, &resource.Status) {
 		newObj.Status = *eniStatus
 		scopeLog.Debug("start update eni status")
-		_, err = ss.updater.UpdateStatus(newObj)
-		if err != nil {
-			scopeLog.WithError(err).Error("update eni status failed")
-			return err
+		_, updateError = ss.updater.UpdateStatus(newObj)
+		if updateError != nil {
+			scopeLog.WithError(updateError).Error("update eni status failed")
+			return updateError
 		}
 		scopeLog.Info("update eni status success")
 	}
@@ -448,17 +472,19 @@ type eniStateMachine struct {
 	ss       *eniSyncher
 	ctx      context.Context
 	resource *ccev2.ENI
+	vpceni   *eni.Eni
 }
 
 // Start state machine flow
 func (esm *eniStateMachine) start() error {
 	var err error
 	if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-
+		// refresh status of ENI
+		esm.vpceni, err = esm.ss.statENI(esm.ctx, esm.resource.Name)
+		if err != nil {
+			return fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
+		}
 		switch esm.resource.Status.VPCStatus {
-		case ccev2.VPCENIStatusNone:
-			// refresh status of ENI
-			_, err = esm.ss.statENI(esm.ctx, esm.resource.Name)
 		case ccev2.VPCENIStatusAvailable:
 			err = esm.attachENI()
 		case ccev2.VPCENIStatusAttaching:
@@ -475,6 +501,7 @@ func (esm *eniStateMachine) start() error {
 			return err
 		}
 
+		(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
 		// not the final status, will retry later
 		return cm.NewDelayEvent(esm.resource.Name, ENIReadyTimeToAttach, fmt.Sprintf("eni %s status is not final: %s", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus))
 	}
@@ -484,12 +511,8 @@ func (esm *eniStateMachine) start() error {
 // attachENI attach a  ENI to instance
 // Only accept calls whose ENI status is "available"
 func (esm *eniStateMachine) attachENI() error {
-	eniCache, err := esm.ss.statENI(esm.ctx, esm.resource.Spec.ENI.ID)
-	if err != nil {
-		return err
-	}
 	// status is not match
-	if eniCache.Status != string(ccev2.VPCENIStatusAvailable) {
+	if esm.vpceni.Status != string(ccev2.VPCENIStatusAvailable) {
 		return nil
 	}
 
@@ -499,14 +522,15 @@ func (esm *eniStateMachine) attachENI() error {
 	}
 
 	// try to attach eni to bcc instance
-	err = esm.ss.bceclient.AttachENI(esm.ctx, &enisdk.EniInstance{
+	err := esm.ss.bceclient.AttachENI(esm.ctx, &enisdk.EniInstance{
 		InstanceId: esm.resource.Spec.ENI.InstanceID,
 		EniId:      esm.resource.Spec.ENI.ID,
 	})
 	if err != nil {
+		esm.ss.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "AttachENIFailed", "failed attach eni(%s) to %s, will delete it: %v", esm.resource.Spec.ENI.ID, esm.resource.Spec.ENI.InstanceID, err)
+
 		err2 := esm.deleteENI()
 		err = fmt.Errorf("failed to attach eni(%s) to instance(%s): %s, delete eni crd: %s", esm.resource.Spec.ENI.ID, esm.resource.Spec.ENI.InstanceID, err.Error(), err2.Error())
-
 		return err
 	}
 
@@ -520,9 +544,10 @@ func (esm *eniStateMachine) attachENI() error {
 func (esm *eniStateMachine) deleteENI() error {
 	err := esm.ss.bceclient.DeleteENI(esm.ctx, esm.resource.Spec.ENI.ID)
 	if err != nil {
+		esm.ss.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "DeleteENIFailed", "failed to delete eni(%s): %v", esm.resource.Spec.ENI.ID, err)
 		return fmt.Errorf("failed to delete eni(%s): %s", esm.resource.Spec.ENI.ID, err.Error())
 	}
-
+	esm.ss.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "DeleteENISuccess", "delete eni(%s) success", esm.resource.Spec.ENI.ID)
 	// delete resource after delete eni in cloud
 	err = esm.ss.updater.Delete(esm.resource.Name)
 	if err != nil {
@@ -535,16 +560,13 @@ func (esm *eniStateMachine) deleteENI() error {
 // attachingENI Processing ENI in the attaching state
 // ENI may be stuck in the attaching state for a long time and need to be manually deleted
 func (esm *eniStateMachine) attachingENI() error {
-	eniCache, err := esm.ss.statENI(esm.ctx, esm.resource.Spec.ENI.ID)
-	if err != nil {
-		return err
-	}
 	// status is not match
-	if eniCache.Status != string(ccev2.VPCENIStatusAttaching) {
+	if esm.vpceni.Status != string(ccev2.VPCENIStatusAttaching) {
 		return nil
 	}
 
 	if esm.resource.CreationTimestamp.Add(ENIMaxCreateDuration).Before(time.Now()) {
+		esm.ss.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "AttachingENIError", "eni(%s) is in attaching status more than %s, will delete it", esm.resource.Spec.ENI.ID, ENIMaxCreateDuration.String())
 		return esm.deleteENI()
 	}
 	return nil

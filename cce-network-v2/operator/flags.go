@@ -270,7 +270,6 @@ func init() {
 	flags.Duration(pkgOption.FixedIPTimeout, defaults.CCEEndpointGCInterval, "Timeout for waiting for the fixed IP assignment to succeed")
 	option.BindEnv(pkgOption.FixedIPTimeout)
 
-
 	flags.Bool(operatorOption.EnableRemoteFixedIPGC, true, "gc remote fixed ip when endpoint have been deleted")
 	option.BindEnv(operatorOption.EnableRemoteFixedIPGC)
 

@@ -42,7 +42,7 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 
 	enisLister := k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
 
-	var endpointManagerSyncHandler = func(key string) error {
+	var eniSyncHandler = func(key string) error {
 		obj, err := enisLister.Get(key)
 
 		// Delete handling
@@ -59,7 +59,7 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 	resyncPeriod := eniManager.ResyncENI(ctx)
 	controller := cm.NewResyncController("cce-eni-controller", int(operatorOption.Config.ResourceResyncWorkers),
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(),
-		endpointManagerSyncHandler)
+		eniSyncHandler)
 	controller.RunWithResync(resyncPeriod)
 	return nil
 }

@@ -21,6 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
@@ -33,10 +39,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
-	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
@@ -137,7 +139,7 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 // CreateInterface create a new ENI
 func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	n.mutex.RLock()
-	resource := *n.k8sObj
+	resource := n.k8sObj
 	n.mutex.RUnlock()
 
 	if n.nextCreateENITime != nil && n.nextCreateENITime.After(time.Now()) {
@@ -226,7 +228,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 // createENIOnCluster The ENI object is created in the cluster and the ENI Synchronizer
 // will automatically create the ENI object from VPC.
 // The ENI object is created successfully and the node will record a status of “creating ENI”.
-func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource ccev2.NetResourceSet, subnet *ccev1.Subnet) error {
+func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *ccev1.Subnet) error {
 	eniName := CreateNameForENI(option.Config.ClusterID, n.instanceID, resource.Name)
 
 	newENI := &ccev2.ENI{
@@ -263,8 +265,10 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	scopedLog = scopedLog.WithField("eniName", eniName).WithField("securityGroupIDs", resource.Spec.ENI.SecurityGroups)
 	eniID, err := n.createENI(ctx, newENI, scopedLog)
 	if err != nil {
+		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "Failed to create ENI on nrs %s: %s", resource.Name, err)
 		return err
 	}
+	n.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateENISuccess", "Create new ENI %s on nrs %s success", eniID, resource.Name)
 	scopedLog = scopedLog.WithField("eniID", eniID)
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
@@ -277,7 +281,6 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	if err != nil {
 		return fmt.Errorf("failed to create ENI: %w", err)
 	}
-	scopedLog.Infof("create ENI successed")
 
 	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
 		ret, err := n.manager.enilister.Get(newENI.Name)

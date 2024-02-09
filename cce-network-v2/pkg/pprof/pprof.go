@@ -32,7 +32,7 @@ var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "pprof")
 // Enable runs an HTTP server to serve the pprof API
 func Enable(port int) {
 	runtime.SetBlockProfileRate(1)
-    runtime.SetMutexProfileFraction(1)
+	runtime.SetMutexProfileFraction(1)
 	var apiAddress = net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
 	go func() {
 		if err := http.ListenAndServe(apiAddress, nil); err != nil {

@@ -132,7 +132,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		log.WithError(err).Errorf("failed to allocate psts ip")
 		return err
 	}
-	
+
 	log.Info("allocate remote psts ip success")
 
 	status.Networking.Addressing = action.Addressing

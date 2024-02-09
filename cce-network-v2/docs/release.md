@@ -2,11 +2,17 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.8 (2023/08/07)
-#### 2.8.6
+#### 2.8.7 [暂未发布]
+1. [BUG] 修复 cce-network-v2-config 中 --bce-customer-max-eni 及 --bce-customer-max-ip 参数配置不生效
+#### 2.8.6 [20231110]
 1. [BUG] 优化 EndpointManager 在更新 endpoint 对象时不会超时的逻辑，且由于资源过期等问题会出现死循环的问题
 2. [optimize] 优化 operator 工作队列，支持自定义 worker 数量，加速事件处理
 3. [optimize] EndpointManager 核心工作流日志，把关键流程日志修改为 info 级别
 4. [optimize] 优化EndpointManager gc工作流，动态 IP 分配的 gc 时间设置为一周
+5. [optimize] 增加 ENI VPC 状态机流转时没有触发状态变更时重新入队时间，加速 ENI 就绪时间
+6. [optimize] 增加增删 ENI 状态变更事件，增加 ENI 的 VPC 非终态日志记录
+7. [optimize] 缺少 metaapi 时，记录相关事件
+8. [optimize] 当VPC路由满，记录相关事件
 
 #### 2.8.5 [20241017]
 1. [优化] 优化了 psts 分配 IP 时失败的回收机制，避免出现 IP 泄露

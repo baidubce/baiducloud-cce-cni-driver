@@ -134,11 +134,11 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 	}
 
 	var (
-		ctx, cancel   = context.WithTimeout(context.Background(), operatorOption.Config.FixedIPTimeout)
-		start    = time.Now()
-		err      error
-		apiError error
-		logEntry = managerLog.WithFields(logrus.Fields{
+		ctx, cancel = context.WithTimeout(context.Background(), operatorOption.Config.FixedIPTimeout)
+		start       = time.Now()
+		err         error
+		apiError    error
+		logEntry    = managerLog.WithFields(logrus.Fields{
 			"namespace": resource.Namespace,
 			"name":      resource.Name,
 			"event":     "update",
@@ -401,7 +401,6 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 			cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeFixed {
 			continue
 		}
-		
 
 		log := logEntry.WithFields(logrus.Fields{
 			"namespace": cep.Namespace,
@@ -421,10 +420,10 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 
 		// if endpoint is not reused ip mode, skip it
 		if cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted == nil {
-				expireDuration := int64(operatorOption.Config.FixedIPTTL.Seconds())
-				cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &expireDuration
+			expireDuration := int64(operatorOption.Config.FixedIPTTL.Seconds())
+			cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &expireDuration
 		}
-		
+
 		if cep.Status.State == string(models.EndpointStatePodDeleted) {
 			if len(cep.Status.Log) == 0 {
 				log.Warningf("gc fixed ip failed, no controller log in endpoint status")

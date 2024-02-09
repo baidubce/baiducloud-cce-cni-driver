@@ -117,11 +117,11 @@ func (manager *bbcIPResourceManager) CalaculateCapacity() *NodeCapacity {
 		maxENINum   = 1
 		maxIPPerENI = 40
 	)
-	if maxENINum < operatorOption.Config.BCECustomerMaxENI {
+	if operatorOption.Config.BCECustomerMaxENI != 0 {
 		maxENINum = operatorOption.Config.BCECustomerMaxENI
 	}
 
-	if maxIPPerENI < operatorOption.Config.BCECustomerMaxIP {
+	if operatorOption.Config.BCECustomerMaxIP != 0 {
 		maxIPPerENI = operatorOption.Config.BCECustomerMaxIP
 	}
 	manager.limiter = &NodeCapacity{
@@ -153,11 +153,11 @@ func (manager *bccIPResourceManager) CalaculateCapacity() *NodeCapacity {
 		maxENINum   = GetMaxENIPerNode(manager.cpuCount)
 		maxIPPerENI = GetMaxIPPerENI(manager.memoryCapacityInGB)
 	)
-	if maxENINum < operatorOption.Config.BCECustomerMaxENI {
+	if operatorOption.Config.BCECustomerMaxENI != 0 {
 		maxENINum = operatorOption.Config.BCECustomerMaxENI
 	}
 
-	if maxIPPerENI < operatorOption.Config.BCECustomerMaxIP {
+	if operatorOption.Config.BCECustomerMaxIP != 0 {
 		maxIPPerENI = operatorOption.Config.BCECustomerMaxIP
 	}
 
@@ -262,11 +262,11 @@ func (manager *rangeIPResourceManager) getIPRangeSize() int {
 func (manager *rangeIPResourceManager) SyncCapacity(ctx context.Context) error {
 	var maxENINum, maxIPPerENI int
 	maxENINum = 1
-	if maxENINum < operatorOption.Config.BCECustomerMaxENI {
+	if operatorOption.Config.BCECustomerMaxENI != 0 {
 		maxENINum = operatorOption.Config.BCECustomerMaxENI
 	}
 	maxIPPerENI = manager.getIPRangeSize()
-	if maxIPPerENI < operatorOption.Config.BCECustomerMaxIP {
+	if operatorOption.Config.BCECustomerMaxIP != 0 {
 		maxIPPerENI = operatorOption.Config.BCECustomerMaxIP
 	}
 
@@ -304,7 +304,7 @@ func (manager *crossVPCEniResourceManager) SyncCapacity(ctx context.Context) err
 	)
 
 	maxEniNum = GetMaxENIPerNode(manager.bccInstance.CpuCount)
-	if maxEniNum < operatorOption.Config.BCECustomerMaxENI {
+	if operatorOption.Config.BCECustomerMaxENI != 0 {
 		maxEniNum = operatorOption.Config.BCECustomerMaxENI
 	}
 

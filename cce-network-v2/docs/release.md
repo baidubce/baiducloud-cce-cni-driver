@@ -2,8 +2,10 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.8 (2023/08/07)
-#### 2.8.7 [暂未发布]
-1. [BUG] 修复 cce-network-v2-config 中 --bce-customer-max-eni 及 --bce-customer-max-ip 参数配置不生效
+#### 2.8.8 [20231227]
+1. [BUG] VPC-ENI 并发申请和释放IP 时，Pod 可能申请到过期的 IP 地址
+#### 2.8.7 [20231127]
+1. [BUG] 修复 cce-network-v2-config 中 --bce-customer-max-eni 及 --bce-customer-max-ip 参数配置不生效；未限制并发创建 ENI ，并发下最大 ENI 数量可能超发
 #### 2.8.6 [20231110]
 1. [BUG] 优化 EndpointManager 在更新 endpoint 对象时不会超时的逻辑，且由于资源过期等问题会出现死循环的问题
 2. [optimize] 优化 operator 工作队列，支持自定义 worker 数量，加速事件处理

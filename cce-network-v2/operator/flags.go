@@ -279,5 +279,7 @@ func init() {
 	flags.Int64(operatorOption.ResourceResyncWorkers, defaults.DefaultResourceResyncWorkers, "Number of workers to process resource event")
 	option.BindEnv(operatorOption.ResourceResyncWorkers)
 
+	flags.Int(operatorOption.ExcessIPReleaseDelay, 180, "controls how long operator would wait before an IP previously marked as excess is released. default is 180 seconds")
+
 	viper.BindPFlags(flags)
 }

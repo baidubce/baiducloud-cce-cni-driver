@@ -297,8 +297,8 @@ func (n *nodeStore) deleteLocalNodeResource() {
 // on the custom resource passed into the function.
 func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 	n.mutex.Lock()
-	defer n.mutex.Unlock()
 
+	var markedToReleaseIPMap = make(map[string]*crdAllocator)
 	n.ownNode = node
 	n.allocationPoolSize[IPv4] = 0
 	n.allocationPoolSize[IPv6] = 0
@@ -364,7 +364,6 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 			continue
 		}
 		// Retrieve the appropriate allocator
-		var allocator *crdAllocator
 		var ipFamily Family
 		if ipAddr := net.ParseIP(ip); ipAddr != nil {
 			ipFamily = DeriveFamily(ipAddr)
@@ -374,29 +373,33 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 		}
 		for _, a := range n.allocators {
 			if a.family == ipFamily {
-				allocator = a
+				markedToReleaseIPMap[ip] = a
 			}
 		}
-		if allocator == nil {
+		if _, ok := markedToReleaseIPMap[ip]; !ok {
 			continue
 		}
 
+		releaseUpstreamSyncNeeded = true
+	}
+	n.mutex.Unlock()
+
+	for ip, allocator := range markedToReleaseIPMap {
 		// Some functions like crdAllocator.Allocate() acquire lock on allocator first and then on nodeStore.
 		// So release nodestore lock before acquiring allocator lock to avoid potential deadlocks from inconsistent
 		// lock ordering.
-		n.mutex.Unlock()
-		allocator.mutex.Lock()
-		_, ok := allocator.allocated[ip]
-		allocator.mutex.Unlock()
+		allocator.mutex.RLock()
 		n.mutex.Lock()
 
-		if ok {
+		if _, ok := allocator.allocated[ip]; ok {
 			// IP still in use, update the operator to stop releasing the IP.
 			n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMDoNotRelease
 		} else {
 			n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMReadyForRelease
 		}
-		releaseUpstreamSyncNeeded = true
+		
+		n.mutex.Unlock()
+		allocator.mutex.RUnlock()
 	}
 
 	if releaseUpstreamSyncNeeded {

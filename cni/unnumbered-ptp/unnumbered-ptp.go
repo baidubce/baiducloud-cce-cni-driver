@@ -344,6 +344,7 @@ func (p *ptpPlugin) setupHostVeth(vethName string, hostAddrs []netlink.Addr, res
 // disableRPFCheck set /proc/sys/net/ipv4/conf/*/rp_filter to 0
 // xref https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt
 // The max value from conf/{all,interface}/rp_filter is used
+//
 //	when doing source validation on the {interface}.
 func (p *ptpPlugin) disableRPFCheck(ifName string) error {
 	_, err := p.sysctl.Sysctl(fmt.Sprintf(rpFilterSysctlTemplate, "all"), "0")

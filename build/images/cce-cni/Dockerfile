@@ -1,4 +1,4 @@
-FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0
+FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0-slim
 
 LABEL maintainer="Chen Yaqi<chenyaqi01@baidu.com>"
 
@@ -21,4 +21,4 @@ COPY output/cni-node-agent /bin/cni-node-agent
 # install cce node agent binary
 COPY output/ip-masq-agent /bin/cce-ip-masq-agent
 
-CMD ["/bin/bash", "/entrypoint.sh"]
+CMD ["/bin/sh", "/entrypoint.sh"]

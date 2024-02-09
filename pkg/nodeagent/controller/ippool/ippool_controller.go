@@ -175,7 +175,11 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 			c.ipResourceManager = NewBCCIPResourceManager(c.kubeClient, c.preAttachedENINum, node, c.bccInstance)
 			return c.syncENISpec(ctx, nodeCopy)
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(c.cniMode):
-			c.ipResourceManager = NewBBCIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
+			if c.instanceType == metadata.InstanceTypeExBBC {
+				c.ipResourceManager = NewBBCIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
+			} else {
+				c.ipResourceManager = NewBCCIPResourceManager(c.kubeClient, c.preAttachedENINum, node, c.bccInstance)
+			}
 			e1 := c.syncENISpec(ctx, nodeCopy)
 			e2 := c.syncPodSubnetSpec(ctx, nodeCopy)
 			return utilerrors.NewAggregate([]error{e1, e2})

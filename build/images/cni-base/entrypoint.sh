@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -u -e
 
 CNI_BINARY_DIR=/opt/cni/bin/

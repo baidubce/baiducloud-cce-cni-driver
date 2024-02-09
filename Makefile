@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.9.0
+VERSION := v1.9.3
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 

@@ -287,6 +287,11 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 			return nil, err
 		}
 
+		// if ippool has no owner reference that means it is a expired object
+		if len(ipPool.OwnerReferences) == 0 {
+			return nil, fmt.Errorf("expired object: ippool object %s have no one owner reference", ipPool.Name)
+		}
+
 		if len(ipPool.Spec.IPv4Ranges) != 0 {
 			configData.Subnet = ipPool.Spec.IPv4Ranges[0].CIDR
 		} else if len(ipPool.Spec.IPv6Ranges) != 0 {

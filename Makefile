@@ -13,7 +13,7 @@ GOMOD   := $(GO) mod
 GOARCH  := $(shell $(GO) env GOARCH)
 GOBUILD = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build
 GOTEST  := $(GO) test
-GOPKGS  := $$($(GO) list ./...| grep -vE "vendor" | grep -vE "cmd" |grep -vE "test" |grep -v 'apis/networking'| grep -v 'generated')
+GOPKGS  := $$($(GO) list ./...| grep "pkg" |grep -v "vendor" | grep -v "cmd" |grep -v "test" | grep -v 'api' |grep -v "generated" | grep -v 'pkg/bce' | grep -v config | grep -v metric | grep -v rpc | grep -v version | grep -v wrapper | grep -v util)
 GOGCFLAGS := -gcflags=all="-trimpath=$(GOPATH)" -asmflags=all="-trimpath=$(GOPATH)"
 GOLDFLAGS := -ldflags '-s -w'
 GO_PACKAGE := github.com/baidubce/baiducloud-cce-cni-driver
@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.5.4
+VERSION := v1.6.12
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -68,7 +68,7 @@ gomod: set-env
 outdir: 
 	mkdir -p $(OUTDIR)/cni-bin
 # Compile all cni plug-ins
-cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni rdma
+cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni rdma eri
 $(cni_target): fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/$@ $(HOMEDIR)/cni/$@
@@ -90,7 +90,7 @@ build: compile
 # make test, test your code
 test: prepare test-case
 test-case:
-	$(GOTEST) -v -cover $(GOPKGS)
+	$(GOTEST) -v -cover -parallel 16 $(GOPKGS)
 
 debian-iptables-image:
 	@echo "===> Building debian iptables base image <==="

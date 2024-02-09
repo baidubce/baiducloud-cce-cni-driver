@@ -34,6 +34,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	"github.com/vishvananda/netlink"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/cni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
@@ -163,6 +164,7 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 		ipam       = NewCrossVpcEniIPAM(p.grpc, p.rpc)
 		netns      ns.NetNS
 		err        error
+		linkErr    error
 	)
 
 	log.Infof(ctx, "====> CmdAdd Begins <====")
@@ -215,23 +217,24 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	// ENI 插入虚机后 driver 有时候需要 10s 才能识别到网卡设备，这里重试延长设备等待时间
-	const (
-		linkReadyRetryCount = 6
-	)
-
-	for i := 0; i < linkReadyRetryCount; i++ {
-		target, err = p.netutil.GetLinkByMacAddress(resp.GetCrossVPCENI().Mac)
-		if err != nil {
-			log.Errorf(ctx, "retry: host netns: %v", err)
+	// the kernel would take some time to detect eni insertion.
+	err = wait.ExponentialBackoff(wait.Backoff{
+		Duration: time.Millisecond * 500,
+		Factor:   1,
+		Steps:    6,
+	}, func() (done bool, err error) {
+		target, linkErr = p.netutil.GetLinkByMacAddress(resp.GetCrossVPCENI().Mac)
+		if linkErr != nil {
+			log.Warningf(ctx, "host netns: %v", linkErr)
 		} else {
-			break
+			log.Infof(ctx, "host netns: found link %v with mac address %v", target.Attrs().Name, resp.GetCrossVPCENI().Mac)
+			return true, nil
 		}
-		time.Sleep(time.Second * 2)
-	}
 
-	if err != nil {
-		return fmt.Errorf("host netns: %v", err)
+		return false, nil
+	})
+	if err != nil && err == wait.ErrWaitTimeout {
+		return fmt.Errorf("host netns: %v", linkErr)
 	}
 
 	if err = p.nlink.LinkSetNsFd(target, int(netns.Fd())); err != nil {

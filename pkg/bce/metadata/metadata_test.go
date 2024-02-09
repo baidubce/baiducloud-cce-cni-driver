@@ -46,6 +46,8 @@ func newHandler(handler func(w http.ResponseWriter, r *http.Request)) http.Handl
 	r.HandleFunc(metadataBasePath+"region", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"vpc-id", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"subnet-id", handler).Methods("GET")
+	r.HandleFunc(metadataBasePath+"network/interfaces/macs/test-mac/vif_features", handler).Methods("GET")
+	r.HandleFunc(metadataBasePath+"network/interfaces/macs", handler).Methods("GET")
 
 	return r
 }
@@ -120,6 +122,22 @@ func TestMetaDataOK(t *testing.T) {
 
 	if result != "xxx" {
 		t.Errorf("TestMetaData want: %v , got : %v", "xxx", result)
+	}
+
+	result, err = c.GetVifFeatures("test-mac")
+	if err != nil {
+		t.Errorf("TestMetaData got error: %v", err)
+	}
+	if result != "xxx" {
+		t.Errorf("TestMetaData want: %v , got : %v", "xxx", result)
+	}
+
+	results, listErr := c.ListMacs()
+	if listErr != nil {
+		t.Errorf("TestMetaData got error: %v", listErr)
+	}
+	if len(results) != 1 {
+		t.Errorf("TestMetaData len(results) wants: %d , got : %d", 1, len(results))
 	}
 }
 

@@ -27,11 +27,12 @@ import (
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/ipcache"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	eniutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
-	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
+	"github.com/baidubce/baiducloud-cce-cni-driver/test/data"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/golang/mock/gomock"
 	"github.com/juju/ratelimit"
@@ -87,9 +88,9 @@ func Test_buildENICache(t *testing.T) {
 func Test_listAttachedENIs(t *testing.T) {
 	var (
 		enis = []enisdk.Eni{
-			enisdk.Eni{Name: "cce-xxx/i-aaa/nodeA/1234", Status: utileni.ENIStatusInuse, InstanceId: "i-aaa"},
-			enisdk.Eni{Name: "cce-xxx/i-bbb/nodeB/1234", Status: utileni.ENIStatusAttaching},
-			enisdk.Eni{Name: "cce-xxx/i-aaa/nodeA/1234", Status: utileni.ENIStatusAttaching},
+			enisdk.Eni{Name: "cce-xxx/i-aaa/nodeA/1234", Status: eniutil.ENIStatusInuse, InstanceId: "i-aaa"},
+			enisdk.Eni{Name: "cce-xxx/i-bbb/nodeB/1234", Status: eniutil.ENIStatusAttaching},
+			enisdk.Eni{Name: "cce-xxx/i-aaa/nodeA/1234", Status: eniutil.ENIStatusAttaching},
 		}
 	)
 	type args struct {
@@ -148,7 +149,6 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 		possibleLeakedIPCache   map[eniAndIPAddrKey]time.Time
 		addIPBackoffCache       map[string]*wait.Backoff
 		cacheHasSynced          bool
-		allocated               map[string]*v1alpha1.WorkloadEndpoint
 		datastore               *datastorev1.DataStore
 		idleIPPoolMinSize       int
 		idleIPPoolMaxSize       int
@@ -330,14 +330,17 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 		if tt.fields.ctrl != nil {
 			defer tt.fields.ctrl.Finish()
 		}
+		eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+		for key, v := range tt.fields.eniCache {
+
+			eniCache.Append(key, v...)
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			ipam := &IPAM{
-				eniCache:                tt.fields.eniCache,
+				eniCache:                eniCache,
 				privateIPNumCache:       tt.fields.privateIPNumCache,
 				possibleLeakedIPCache:   tt.fields.possibleLeakedIPCache,
-				addIPBackoffCache:       tt.fields.addIPBackoffCache,
 				cacheHasSynced:          tt.fields.cacheHasSynced,
-				allocated:               tt.fields.allocated,
 				datastore:               tt.fields.datastore,
 				idleIPPoolMinSize:       tt.fields.idleIPPoolMinSize,
 				idleIPPoolMaxSize:       tt.fields.idleIPPoolMaxSize,
@@ -376,7 +379,7 @@ func TestIPAM_getSecurityGroupsFromDefaultIPPool(t *testing.T) {
 	}
 }
 
-type IPAMENI struct {
+type IPAMENITester struct {
 	suite.Suite
 	ipam      *IPAM
 	wantErr   bool
@@ -387,30 +390,41 @@ type IPAMENI struct {
 }
 
 // 每次测试前设置上下文
-func (suite *IPAMENI) SetupTest() {
+func (suite *IPAMENITester) SetupTest() {
 	suite.stopChan = make(chan struct{})
 	suite.ipam = mockIPAM(suite.T(), suite.stopChan)
 	suite.ctx = context.TODO()
+
+	suite.ipam.kubeInformer.Core().V1().Nodes().Informer()
+	suite.ipam.kubeInformer.Core().V1().Pods().Informer()
+	suite.ipam.kubeInformer.Apps().V1().StatefulSets().Informer()
+	suite.ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Informer()
+	suite.ipam.crdInformer.Cce().V1alpha1().IPPools().Informer()
+	suite.ipam.crdInformer.Cce().V1alpha1().Subnets().Informer()
+	suite.ipam.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()
+
+	suite.ipam.kubeInformer.Start(suite.stopChan)
+	suite.ipam.crdInformer.Start(suite.stopChan)
 }
 
 // 每次测试后执行清理
-func (suite *IPAMENI) TearDownTest() {
+func (suite *IPAMENITester) TearDownTest() {
 	suite.ipam = nil
 	suite.ctx = nil
 	suite.wantErr = false
 	close(suite.stopChan)
 }
 
-func (suite *IPAMENI) TestSyncEni() {
+func (suite *IPAMENITester) TestSyncEni() {
 	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
 	mockInterface.ListENIs(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("error")).AnyTimes()
 	go suite.ipam.syncENI(suite.stopChan)
 	time.Sleep(time.Second)
 }
 
-func (suite *IPAMENI) TestResyncEni() {
+func (suite *IPAMENITester) TestResyncEni() {
 	eni4 := mockEni("eni-4", "i-3", "10.0.0.3")
-	eni4.Status = utileni.ENIStatusAttaching
+	eni4.Status = eniutil.ENIStatusAttaching
 	enis := []enisdk.Eni{
 		mockEni("eni-1", "i-1", "10.0.0.1"),
 		mockEni("eni-2", "i-1", "10.0.0.1"),
@@ -461,12 +475,40 @@ func (suite *IPAMENI) TestResyncEni() {
 	suite.ipam.resyncENI()
 }
 
+type increaseEniSuite struct {
+	IPAMENITester
+}
+
+func (suite *increaseEniSuite) TestIncreaseEni() {
+	eni4 := mockEni("eni-4", "i-3", "10.0.0.3")
+	eni4.Status = eniutil.ENIStatusAttaching
+	enis := []enisdk.Eni{
+		mockEni("eni-1", "i-1", "10.0.0.1"),
+		mockEni("eni-2", "i-1", "10.0.0.1"),
+		mockEni("eni-3", "i-1", "10.0.0.1"),
+		eni4,
+	}
+	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
+	mockInterface.ListENIs(gomock.Any(), gomock.Any()).Return(enis, nil).AnyTimes()
+
+	node := data.MockNode("10.0.0.1", "BCC", "cce://i-1")
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+	node2 := data.MockNode("10.0.0.2", "BCC", "cce://i-2")
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node2, metav1.CreateOptions{})
+	node3 := data.MockNode("10.0.0.3", "BCC", "cce://i-3")
+	node3.Status.Conditions = make([]corev1.NodeCondition, 0)
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), node3, metav1.CreateOptions{})
+
+	__waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer, suite.stopChan)
+	suite.ipam.resyncENI()
+}
+
 func mockEni(id, instanceId, node string) enisdk.Eni {
 	return enisdk.Eni{
 
 		EniId:      id,
 		Name:       fmt.Sprintf("clusterID/%s/%s/%s", instanceId, node, id),
-		Status:     utileni.ENIStatusInuse,
+		Status:     eniutil.ENIStatusInuse,
 		ZoneName:   "zoneF",
 		SubnetId:   "sbn-test",
 		VpcId:      "vpcID",
@@ -475,5 +517,11 @@ func mockEni(id, instanceId, node string) enisdk.Eni {
 	}
 }
 func TestIPAMENI(t *testing.T) {
-	suite.Run(t, new(IPAMENI))
+	t.Parallel()
+	suite.Run(t, new(IPAMENITester))
+}
+
+func TestIPAMENI2(t *testing.T) {
+	t.Parallel()
+	suite.Run(t, new(increaseEniSuite))
 }

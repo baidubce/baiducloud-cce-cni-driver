@@ -313,7 +313,7 @@ func TestIPAM_Allocate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "busybox",
 					},
-					Type:     ipamgeneric.MwepType,
+					Type:     ipamgeneric.MwepTypeRoce,
 					NodeName: "test-node",
 					Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{
 						{

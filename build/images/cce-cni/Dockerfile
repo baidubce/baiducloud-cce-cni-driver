@@ -12,6 +12,7 @@ COPY output/cni-bin/eni-ipam /eni-ipam
 COPY output/cni-bin/sysctl /sysctl
 COPY output/cni-bin/crossvpc-eni /crossvpc-eni
 COPY output/cni-bin/rdma /rdma
+COPY output/cni-bin/eri /eri
 
 # install cce ipam binary
 COPY output/cce-ipam /bin/cce-ipam

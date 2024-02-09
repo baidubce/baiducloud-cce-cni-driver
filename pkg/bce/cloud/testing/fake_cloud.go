@@ -206,6 +206,10 @@ func (fake *FakeBceCloud) ListENIs(ctx context.Context, args eni.ListEniArgs) ([
 	return nil, nil
 }
 
+func (fake *FakeBceCloud) ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+	return nil, nil
+}
+
 func (fake *FakeBceCloud) ListRouteTable(ctx context.Context, vpcID string, routeTableID string) ([]vpc.RouteRule, error) {
 	return nil, nil
 }

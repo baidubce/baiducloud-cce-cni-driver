@@ -14,14 +14,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apimachinery/networking"
 	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	k8sutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 )
 
 func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
@@ -78,18 +82,16 @@ func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
 		return err
 	}
 
-	// list all weps whose owner is sts
-	requirement, _ := labels.NewRequirement(ipamgeneric.WepLabelStsOwnerKey, selection.Exists, nil)
-	selector := labels.NewSelector().Add(*requirement)
-	stsWeps, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(v1.NamespaceAll).List(selector)
+	// list all weps
+	weps, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(v1.NamespaceAll).List(labels.Everything())
 	if err != nil {
-		log.Errorf(ctx, "gc: failed to list wep with selector: %v: %v", selector.String(), err)
+		log.Errorf(ctx, "gc: failed to list wep: %v", err)
 		return err
 	}
 
 	var (
-		podIPSet    = sets.NewString()
-		stsPodIPSet = sets.NewString()
+		podIPSet      = sets.NewString()
+		reservedIPSet = sets.NewString()
 	)
 
 	// store pod ip temporarily
@@ -115,13 +117,15 @@ func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
 		}
 	}
 
-	// store sts pod ip temporarily
-	for _, wep := range stsWeps {
-		stsPodIPSet.Insert(wep.Spec.IP)
+	// store ip which needs to be reused temporarily
+	for _, wep := range weps {
+		if networking.IsFixIPStatefulSetPodWep(wep) || networking.ISCustomReuseModeWEP(wep) {
+			reservedIPSet.Insert(wep.Spec.IP)
+		}
 	}
 
 	// build leaked ip cache
-	ipam.buildPossibleLeakedIPCache(ctx, podIPSet, stsPodIPSet)
+	ipam.buildPossibleLeakedIPCache(ctx, podIPSet, reservedIPSet)
 
 	// prune leaked ip
 	ipam.pruneExpiredLeakedIP(ctx)
@@ -129,49 +133,55 @@ func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
 	return nil
 }
 
-func (ipam *IPAM) buildPossibleLeakedIPCache(ctx context.Context, podIPSet, stsPodIPSet sets.String) {
+func (ipam *IPAM) buildPossibleLeakedIPCache(ctx context.Context, podIPSet, reservedIPSet sets.String) {
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
 
-	for nodeName, enis := range ipam.eniCache {
-		idleIPs, err := ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
-		if err != nil {
-			log.Errorf(ctx, "gc: failed to get idle ips in datastore of node %v: %v", nodeName, err)
+	var (
+		nodeName  string
+		idleIPSet sets.String
+	)
+	ipam.eniCache.ForEachSubItem(func(key string, index int, eni *enisdk.Eni) bool {
+		if key != nodeName {
+			nodeName = key
+			idleIPs, err := ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+			if err != nil {
+				log.Errorf(ctx, "gc: failed to get idle ips in datastore of node %v: %v", nodeName, err)
+			}
+			idleIPSet = sets.NewString(idleIPs...)
 		}
-		idleIPSet := sets.NewString(idleIPs...)
 
-		for _, eni := range enis {
-			for _, ip := range eni.PrivateIpSet {
-				if !ip.Primary {
-					key := eniAndIPAddrKey{nodeName, eni.EniId, ip.PrivateIpAddress}
-					// ip not in pod and neither in sts wep, nor in idle pool
-					if !podIPSet.Has(ip.PrivateIpAddress) && !stsPodIPSet.Has(ip.PrivateIpAddress) && !idleIPSet.Has(ip.PrivateIpAddress) {
-						if _, ok := ipam.possibleLeakedIPCache[key]; !ok {
-							ipam.possibleLeakedIPCache[key] = ipam.clock.Now()
-							log.Warningf(ctx, "gc: eni %v on node %v may has IP %v leaked", eni.EniId, nodeName, ip.PrivateIpAddress)
-						}
+		for _, ip := range eni.PrivateIpSet {
+			if !ip.Primary {
+				key := eniAndIPAddrKey{nodeName, eni.EniId, ip.PrivateIpAddress}
+				// ip not in pod and neither in sts wep, nor in idle pool
+				if !podIPSet.Has(ip.PrivateIpAddress) && !reservedIPSet.Has(ip.PrivateIpAddress) && !idleIPSet.Has(ip.PrivateIpAddress) {
+					if _, ok := ipam.possibleLeakedIPCache[key]; !ok {
+						ipam.possibleLeakedIPCache[key] = ipam.clock.Now()
+						log.Warningf(ctx, "gc: eni %v on node %v may has IP %v leaked", eni.EniId, nodeName, ip.PrivateIpAddress)
+					}
+				} else {
+					// if ip in pod, maybe a false positive
+					if _, ok := ipam.possibleLeakedIPCache[key]; ok {
+						delete(ipam.possibleLeakedIPCache, key)
+						log.Warningf(ctx, "gc: remove IP %v on eni %v from possibleLeakedIPCache", ip.PrivateIpAddress, eni.EniId)
 					} else {
-						// if ip in pod, maybe a false positive
-						if _, ok := ipam.possibleLeakedIPCache[key]; ok {
-							delete(ipam.possibleLeakedIPCache, key)
-							log.Warningf(ctx, "gc: remove IP %v on eni %v from possibleLeakedIPCache", ip.PrivateIpAddress, eni.EniId)
-						} else {
-							// If the eni network card bound to the IP address changes,
-							// but the private IP of eni has not been synchronized yet,
-							// and the IP has been allocated to the new Pod, the garbage
-							// collection process for the IP should be cancelled
-							for tmpKey := range ipam.possibleLeakedIPCache {
-								if tmpKey.ipAddr == ip.PrivateIpAddress {
-									log.Warningf(ctx, "gc: cancel garbage collection of inuse IP %s which bound to eni %s ", ip.PrivateIpAddress, eni.EniId)
-									delete(ipam.possibleLeakedIPCache, tmpKey)
-								}
+						// If the eni network card bound to the IP address changes,
+						// but the private IP of eni has not been synchronized yet,
+						// and the IP has been allocated to the new Pod, the garbage
+						// collection process for the IP should be cancelled
+						for tmpKey := range ipam.possibleLeakedIPCache {
+							if tmpKey.ipAddr == ip.PrivateIpAddress {
+								log.Warningf(ctx, "gc: cancel garbage collection of inuse IP %s which bound to eni %s ", ip.PrivateIpAddress, eni.EniId)
+								delete(ipam.possibleLeakedIPCache, tmpKey)
 							}
 						}
 					}
 				}
 			}
 		}
-	}
+		return true
+	})
 }
 
 func (ipam *IPAM) pruneExpiredLeakedIP(ctx context.Context) {
@@ -271,7 +281,7 @@ func (ipam *IPAM) __deleteIPFromCache(ctx context.Context, nodeName, ip, eniID s
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
 	if deleteAllocateCache {
-		ipam.removeIPFromCache(ip, true)
+		ipam.allocated.Delete(ip)
 	}
 	ipam.decPrivateIPNumCache(eniID, true)
 }
@@ -334,14 +344,6 @@ func (ipam *IPAM) tryReleaseIdleIP(ctx context.Context, nodeName, eniID string) 
 	return ipam.__tryDeleteIPByIPAndENI(ctx, nodeName, tempIP, eniID, true)
 }
 
-func (ipam *IPAM) removeIPFromCache(ipAddr string, lockless bool) {
-	if !lockless {
-		ipam.lock.Lock()
-		defer ipam.lock.Unlock()
-	}
-	delete(ipam.allocated, ipAddr)
-}
-
 func (ipam *IPAM) removeIPFromLeakedCache(node, eniID, ipAddr string) {
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
@@ -352,7 +354,7 @@ func (ipam *IPAM) removeIPFromLeakedCache(node, eniID, ipAddr string) {
 func (ipam *IPAM) gcDeletedSts(ctx context.Context, wepList []*networkingv1alpha1.WorkloadEndpoint) error {
 	for _, wep := range wepList {
 		// only delete ip if sts requires fix ip
-		if !isFixIPStatefulSetPodWep(wep) {
+		if !networking.IsFixIPStatefulSetPodWep(wep) {
 			continue
 		}
 		// don't delete ip if policy is Never
@@ -400,7 +402,7 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 			}
 			for _, wep := range weps {
 				// only delete ip if sts requires fix ip
-				if !isFixIPStatefulSetPodWep(wep) {
+				if !networking.IsFixIPStatefulSetPodWep(wep) {
 					continue
 				}
 				// don't delete ip if policy is Never
@@ -427,7 +429,7 @@ func (ipam *IPAM) gcScaledDownSts(ctx context.Context, stsList []*appv1.Stateful
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*networkingv1alpha1.WorkloadEndpoint) error {
 	for _, wep := range wepList {
 		// only gc non-fix ip pod
-		if isFixIPStatefulSetPodWep(wep) {
+		if networking.IsFixIPStatefulSetPodWep(wep) {
 			continue
 		}
 		_, err := ipam.kubeInformer.Core().V1().Pods().Lister().Pods(wep.Namespace).Get(wep.Name)
@@ -439,6 +441,11 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*networkingv1alpha1
 					Kind: "wep",
 					Name: fmt.Sprintf("%v %v", wep.Namespace, wep.Name),
 				}, v1.EventTypeWarning, "PodLeaked", msg)
+
+				// mark wep phase to deleted
+				if markWEPPodDeletedPhase(ctx, ipam.crdClient, wep) {
+					continue
+				}
 				ipam.gcIPAndDeleteWep(ctx, wep)
 			} else {
 				log.Errorf(ctx, "gc: failed to get pod (%v %v): %v", wep.Namespace, wep.Name, err)
@@ -447,6 +454,31 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*networkingv1alpha1
 	}
 
 	return nil
+}
+
+// markWEPPodDeletedPhase in custom IP reuse mode, if the pod is deleted,
+// the IP will be deleted only when the maximum TTL period is exceeded.
+func markWEPPodDeletedPhase(ctx context.Context, crdClient versioned.Interface, wep *networkingv1alpha1.WorkloadEndpoint) bool {
+	if networking.ISCustomReuseModeWEP(wep) {
+		// marking wep phase to pod deleted
+		if wep.Spec.Phase != networkingv1alpha1.WorkloadEndpointPhasePodDeleted {
+			newWep := wep.DeepCopy()
+			newWep.Spec.Phase = networkingv1alpha1.WorkloadEndpointPhasePodDeleted
+			newWep.Spec.UpdateAt = metav1.Now()
+
+			if newWep.Spec.Release == nil {
+				newWep.Spec.Release = &networkingv1alpha1.EndpointRelease{}
+			}
+			newWep.Spec.Release.PodDeletedTime = &newWep.Spec.UpdateAt
+
+			_, err := crdClient.CceV1alpha1().WorkloadEndpoints(newWep.Namespace).Update(ctx, newWep, metav1.UpdateOptions{})
+			if err != nil {
+				logger.Errorf(ctx, "mark WEP to PodDeleted phase failed %v", err)
+			}
+			logger.Infof(ctx, "mark WEP to PodDeleted phasesuccess")
+		}
+	}
+	return false
 }
 
 // gcWepAndIP and delete wep
@@ -459,26 +491,37 @@ func (ipam *IPAM) gcLeakedPod(ctx context.Context, wepList []*networkingv1alpha1
 // mark ip as unassigned in datastore, then delete wep
 // case 3. delete ip from cloud
 func (ipam *IPAM) gcIPAndDeleteWep(ctx context.Context, wep *networkingv1alpha1.WorkloadEndpoint) (err error) {
-	idle := ipam.idleIPNum(wep.Spec.Node)
-
+	// delete ip of  cross subnet
 	if wep.Spec.SubnetTopologyReference != "" {
+		_, err = ipam.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Lister().PodSubnetTopologySpreads(wep.Namespace).Get(wep.Spec.SubnetTopologyReference)
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		} else if err == nil && networking.ISCustomReuseModeWEP(wep) {
+			// should not delete wep with custom reuse mode
+			if !networking.NeedReleaseReuseModeWEP(wep) {
+				return nil
+			}
+		}
+
 		err = ipam.tryDeleteCrossSubnetIPByWep(ctx, wep)
 		if err != nil {
-			err = fmt.Errorf("gc: error delete private IP %v cross subnet for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
-			log.Errorf(ctx, "%v", err)
+			err = fmt.Errorf("delete private IP %v cross subnet for pod (%v %v) failed: %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
+			logger.Errorf(ctx, "%v", err)
 			return
 		} else {
-			goto delWep
+			return ipam.deleteWepAndRemoveCahce(ctx, wep)
 		}
 	}
 
+	// release ip to pool
+	idle := ipam.idleIPNum(wep.Spec.Node)
 	if idle < ipam.idleIPPoolMaxSize {
 		log.Infof(ctx, "gc: try to only release wep for pod (%v %v) due to idle ip (%v) less than max idle pool", wep.Namespace, wep.Name, idle)
 		err = ipam.datastore.ReleasePodPrivateIP(wep.Spec.Node, wep.Spec.ENIID, wep.Spec.IP)
 		if err != nil {
 			log.Errorf(ctx, "gc: error releasing private IP %v from datastore for pod (%v %v): %v", wep.Spec.IP, wep.Namespace, wep.Name, err)
 		} else {
-			goto delWep
+			return ipam.deleteWepAndRemoveCahce(ctx, wep)
 		}
 	}
 
@@ -488,12 +531,15 @@ func (ipam *IPAM) gcIPAndDeleteWep(ctx context.Context, wep *networkingv1alpha1.
 		log.Errorf(ctx, err.Error())
 		return
 	}
-delWep:
+	return ipam.deleteWepAndRemoveCahce(ctx, wep)
+}
+
+func (ipam *IPAM) deleteWepAndRemoveCahce(ctx context.Context, wep *networkingv1alpha1.WorkloadEndpoint) error {
 	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, wep.Spec.SubnetID).Dec()
 	log.Infof(ctx, "release private IP %v for pod (%v %v) successfully", wep.Spec.IP, wep.Name, wep.Name)
-	ipam.removeIPFromCache(wep.Spec.IP, false)
+	ipam.allocated.Delete(wep.Spec.IP)
 	ipam.removeIPFromLeakedCache(wep.Spec.Node, wep.Spec.ENIID, wep.Spec.IP)
-	err = ipam.tryDeleteWep(ctx, wep)
+	err := ipam.tryDeleteWep(ctx, wep)
 	if err != nil {
 		log.Errorf(ctx, "gc: try delete wep (%v %v) error:  %v", wep.Namespace, wep.Name, err)
 	}

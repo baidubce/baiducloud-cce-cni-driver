@@ -43,7 +43,7 @@ func NewIPAM(
 	informerResyncPeriod time.Duration,
 	eniSyncPeriod time.Duration,
 	gcPeriod time.Duration,
-	debug bool,
+	_ bool,
 ) (ipam.RoceInterface, error) {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
@@ -54,7 +54,7 @@ func NewIPAM(
 	kubeInformer := informers.NewSharedInformerFactory(kubeClient, informerResyncPeriod)
 	crdInformer := crdinformers.NewSharedInformerFactory(crdClient, informerResyncPeriod)
 
-	ipam := &IPAM{
+	ipamServer := &IPAM{
 		eventBroadcaster:      eventBroadcaster,
 		eventRecorder:         recorder,
 		kubeInformer:          kubeInformer,
@@ -71,11 +71,11 @@ func NewIPAM(
 		allocated:             make(map[string]*v1alpha1.MultiIPWorkloadEndpoint),
 		increasePoolEventChan: make(map[string]chan *event),
 	}
-	return ipam, nil
+	return ipamServer, nil
 }
 
 const (
-	// minPrivateIPLifeTime is the life time of a private ip (from allocation to release), aim to trade off db slave delay
+	// minPrivateIPLifeTime is the lifetime of a private ip (from allocation to release), aim to trade off db slave delay
 	minPrivateIPLifeTime = 5 * time.Second
 
 	rateLimitErrorSleepPeriod  = time.Millisecond * 200
@@ -116,7 +116,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 	wep := &v1alpha1.WorkloadEndpoint{}
 	roceNode := &corev1.Node{}
 
-	if node, exist := ipam.nodeCache[instanceID]; !exist {
+	node, exist := ipam.nodeCache[instanceID]
+	if !exist {
 		// get node
 		node, err = ipam.kubeInformer.Core().V1().Nodes().Lister().Get(pod.Spec.NodeName)
 		if err != nil {
@@ -125,14 +126,14 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		}
 
 		ipam.nodeCache[instanceID] = node
-		roceNode = node.DeepCopy()
 	}
+	roceNode = node.DeepCopy()
 
 	ipam.lock.Lock()
 	defer ipam.lock.Unlock()
 	mwep, err := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().MultiIPWorkloadEndpoints(namespace).Get(name)
 	if err == nil {
-		if mwep.Type != ipamgeneric.MwepType {
+		if mwep.Type != ipamgeneric.MwepTypeRoce {
 			log.Warningf(ctx, "get mwep in %v/%v type is not roce", namespace, name)
 			return nil, fmt.Errorf("get mwep in %v/%v type is not roce", namespace, name)
 		}
@@ -186,7 +187,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 				},
 			}
 		}
-		specList := []v1alpha1.MultiIPWorkloadEndpointSpec{}
+		specList := make([]v1alpha1.MultiIPWorkloadEndpointSpec, 0)
 		for _, spec := range mwepInfo {
 			specList = append(specList, spec)
 		}
@@ -227,12 +228,12 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 			Namespace:  pod.Namespace,
 			Finalizers: []string{ipamgeneric.MwepFinalizer},
 			Labels: map[string]string{
-				ipamgeneric.MwepLabelInstanceTypeKey: ipamgeneric.MwepType,
+				ipamgeneric.MwepLabelInstanceTypeKey: ipamgeneric.MwepTypeRoce,
 				v1.LabelInstanceType:                 "BBC",
 			},
 		},
 		NodeName:   roceNode.Name,
-		Type:       ipamgeneric.MwepType,
+		Type:       ipamgeneric.MwepTypeRoce,
 		InstanceID: instanceID,
 		Spec: []v1alpha1.MultiIPWorkloadEndpointSpec{
 			{
@@ -302,7 +303,7 @@ func (ipam *IPAM) tryAllocateIPForRoceIPPod(
 	return ipResult, nil
 }
 
-func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error) {
+func (ipam *IPAM) Release(ctx context.Context, name, namespace, _ string) (*v1alpha1.WorkloadEndpoint, error) {
 	log.Infof(ctx, "[Release] releasing IP for roce pod (%v/%v) starts", namespace, name)
 	defer log.Infof(ctx, "[Release] releasing IP for roce pod (%v/%v) ends", namespace, name)
 
@@ -375,7 +376,7 @@ func (ipam *IPAM) removeAddIPBackoffCache(eniID string, lockless bool) bool {
 	return ok
 }
 
-func (ipam *IPAM) Ready(ctx context.Context) bool {
+func (ipam *IPAM) Ready(_ context.Context) bool {
 	return ipam.cacheHasSynced
 }
 
@@ -432,7 +433,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		}
 	}()
 
-	// k8sr resource and ip cache are synced
+	// k8s resource and ip cache are synced
 	ipam.cacheHasSynced = true
 	log.Infof(ctx, "ipam cacheHasSynced is: %v", ipam.cacheHasSynced)
 
@@ -441,7 +442,11 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 }
 
 func (ipam *IPAM) DeleteNodeFromCache(node *v1.Node) error {
-	if _, exist := ipam.nodeCache[node.Name]; exist {
+	instanceId, err := util.GetInstanceIDFromNode(node)
+	if err != nil {
+		return fmt.Errorf("warning: cannot get instanceID of node %s", node.Name)
+	}
+	if _, exist := ipam.nodeCache[instanceId]; exist {
 		delete(ipam.nodeCache, node.Name)
 	}
 	return nil
@@ -475,7 +480,7 @@ func (ipam *IPAM) syncHpcENI(stopCh <-chan struct{}) error {
 		log.Infof(ctx, "node cache count is %v", len(ipam.nodeCache))
 
 		var hpcEni *hpc.EniList
-		for instance, _ := range ipam.nodeCache {
+		for instance := range ipam.nodeCache {
 			// get hpc eni id
 			log.Infof(ctx, "get instanceId is %v in hpcEni interface", instance)
 			hpcEni, err = ipam.cloud.GetHPCEniID(ctx, instance)
@@ -606,11 +611,16 @@ func (ipam *IPAM) rebuildNodeInfoCache(ctx context.Context, node *v1.Node, insta
 
 func mwepListerSelector() (labels.Selector, error) {
 	// for mwep owned by bcc, use selector "node.kubernetes.io/instance-type", to be compatible with old versions.
-	requirement, err := labels.NewRequirement(v1.LabelInstanceType, selection.In, []string{"BCC", "BBC", "GPU", "DCC"})
-	if err != nil {
-		return nil, err
+	requireInstanceType, insErr := labels.NewRequirement(v1.LabelInstanceType, selection.In, []string{"BCC", "BBC", "GPU", "DCC"})
+	if insErr != nil {
+		return nil, insErr
 	}
-	return labels.NewSelector().Add(*requirement), nil
+	requireMwepType, typeErr := labels.NewRequirement(ipamgeneric.MwepLabelInstanceTypeKey, selection.Equals,
+		[]string{ipamgeneric.MwepTypeRoce})
+	if typeErr != nil {
+		return nil, typeErr
+	}
+	return labels.NewSelector().Add(*requireInstanceType, *requireMwepType), nil
 }
 
 func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {

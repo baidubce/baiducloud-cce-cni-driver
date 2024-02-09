@@ -96,7 +96,7 @@ func TestExhaustPodPrivateIP(t *testing.T) {
 	assert.Equal(t, addr, "1.1.1.1")
 
 	_, err = store.AllocatePodPrivateIP(node)
-	assert.Equal(t, err, NoAvailableIPAddressInDataStoreError)
+	assert.Equal(t, err, ErrNoAvailableIPAddressInDataStore)
 
 	err = store.ReleasePodPrivateIP(node, eniID, "1.1.1.1")
 	assert.NoError(t, err)

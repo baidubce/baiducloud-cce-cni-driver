@@ -66,7 +66,8 @@ func (client *bccENIMultiIP) SetupNetwork(
 		return err
 	}
 
-	log.Infof(ctx, "pod (%v %v) with IP %v is subject to interface: %v", client.namespace, client.name, allocRespNetworkInfo.IP, eniIntf.Attrs().Name)
+	log.Infof(ctx, "pod (%v %v) with IP %v is subject to interface: %v", client.namespace, client.name,
+		allocRespNetworkInfo.IP, eniIntf.Attrs().Name)
 
 	ethIndex, err := getENIInterfaceIndex(ipamConf.ENILinkPrefix, eniIntf)
 	if err != nil {
@@ -105,6 +106,12 @@ func (client *bccENIMultiIP) SetupNetwork(
 	// del eni scope link route
 	if ipamConf.DeleteENIScopeLinkRoute {
 		_ = client.delScopeLinkRoute(eniIntf)
+	}
+
+	// check whether eni is working
+	eniErr := client.validateEni(eniIntf, rtTable)
+	if eniErr != nil {
+		return fmt.Errorf("eni isn't working: %s", eniErr)
 	}
 
 	return nil
@@ -225,5 +232,47 @@ func (client *bccENIMultiIP) delToOrFromContainerRule(isToContainer bool, addr *
 		return err
 	}
 
+	return nil
+}
+
+func (client *bccENIMultiIP) validateEni(eniIntf netlink.Link, rtTable int) error {
+	if err := client.validateEniRoute(eniIntf, rtTable); err != nil {
+		return err
+	}
+
+	if err := client.validateEniIP(eniIntf); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (client *bccENIMultiIP) validateEniRoute(eniIntf netlink.Link, rtTable int) error {
+	filter := &netlink.Route{
+		LinkIndex: eniIntf.Attrs().Index,
+		Table:     rtTable,
+	}
+	routes, listErr := client.netlink.RouteListFiltered(netlink.FAMILY_V4, filter,
+		netlink.RT_FILTER_TABLE|netlink.RT_FILTER_OIF)
+	if listErr != nil {
+		return fmt.Errorf("failed to list route of eni %s, linkIndex %d, table %d, err: %s",
+			eniIntf.Attrs().Name, filter.LinkIndex, filter.Table, listErr)
+	}
+
+	if len(routes) == 0 {
+		return fmt.Errorf("route table %d of eni %s not found", rtTable, eniIntf.Attrs().Name)
+	}
+	return nil
+}
+
+func (client *bccENIMultiIP) validateEniIP(eniIntf netlink.Link) error {
+	eniAddressList, addrErr := client.netlink.AddrList(eniIntf, netlink.FAMILY_V4)
+	if addrErr != nil {
+		return fmt.Errorf("failed to list addr of eni %s, err: %s", eniIntf.Attrs().Name, addrErr)
+	}
+
+	if len(eniAddressList) == 0 {
+		return fmt.Errorf("failed to get address of eni %s", eniIntf.Attrs().Name)
+	}
 	return nil
 }

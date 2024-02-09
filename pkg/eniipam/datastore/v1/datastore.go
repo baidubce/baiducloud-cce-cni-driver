@@ -38,20 +38,26 @@ var (
 )
 
 var (
-	UnknownNodeError = errors.New("datastore: unknown Node")
+	ErrUnknownNode = errors.New("datastore: unknown Node")
 
-	UnknownENIError = errors.New("datastore: unknown ENI")
+	ErrUnknownENI = errors.New("datastore: unknown ENI")
 
-	UnknownIPError = errors.New("datastore: unknown IP")
+	ErrUnknownIP = errors.New("datastore: unknown IP")
 
-	EmptyNodeError = errors.New("datastore: empty Node")
+	ErrEmptyNode = errors.New("datastore: empty Node")
 
-	EmptyENIError = errors.New("datastore: empty ENI")
+	ErrEmptyENI = errors.New("datastore: empty ENI")
 
-	NoAvailableIPAddressInDataStoreError = errors.New("no available ip address in datastore")
+	ErrNoAvailableIPAddressInDataStore = errors.New("no available ip address in datastore")
 
-	NoAvailableIPAddressInENIError = errors.New("no available ip address in eni")
+	ErrNoAvailableIPAddressInENI = errors.New("no available ip address in eni")
 )
+
+func ErrNoAvailableIPAddressWithInCoolingPeriodInENI(addressInfo *AddressInfo) error {
+	errStr := fmt.Sprintf("no available ip address in eni, the ip %s is in cooling period, time left %s, unassigned time is %s",
+		addressInfo.Address, addressInfo.coolingPeriodTimeLeft().String(), addressInfo.UnassignedTime.Format("2006-01-02T15:04:05Z"))
+	return errors.New(errStr)
+}
 
 type DataStore struct {
 	store map[string]*Instance
@@ -120,6 +126,15 @@ func (addr AddressInfo) inCoolingPeriod() bool {
 	return time.Since(addr.UnassignedTime) < addressCoolingPeriod
 }
 
+// coolingPeriodTimeLeft return a time.Duration for cooling period time left
+func (addr AddressInfo) coolingPeriodTimeLeft() time.Duration {
+	timeSince := time.Since(addr.UnassignedTime)
+	if timeSince < addressCoolingPeriod {
+		return addressCoolingPeriod - timeSince
+	}
+	return 0
+}
+
 // Synchronized Executing transactions in locks
 func (ds *DataStore) Synchronized(task func() error) error {
 	ds.lock.Lock()
@@ -133,7 +148,7 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, error) {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return "", UnknownNodeError
+		return "", ErrUnknownNode
 	}
 
 	for _, eni := range instance.eniPool {
@@ -153,7 +168,7 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, error) {
 		return addr.Address, nil
 	}
 
-	return "", NoAvailableIPAddressInDataStoreError
+	return "", ErrNoAvailableIPAddressInDataStore
 }
 
 func (ds *DataStore) AllocatePodPrivateIPByENI(node, eniID string) (string, error) {
@@ -162,17 +177,20 @@ func (ds *DataStore) AllocatePodPrivateIPByENI(node, eniID string) (string, erro
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return "", UnknownNodeError
+		return "", ErrUnknownNode
 	}
 
 	eni, ok := instance.eniPool[eniID]
 	if !ok {
-		return "", UnknownENIError
+		return "", ErrUnknownENI
 	}
 
 	addr, err := eni.idle.Top()
-	if err != nil || addr.Assigned || addr.inCoolingPeriod() {
-		return "", NoAvailableIPAddressInENIError
+	if err != nil || addr.Assigned {
+		return "", ErrNoAvailableIPAddressInENI
+	}
+	if addr.inCoolingPeriod() {
+		return "", ErrNoAvailableIPAddressWithInCoolingPeriodInENI(addr)
 	}
 
 	// update status
@@ -197,12 +215,12 @@ func (ds *DataStore) ReleasePodPrivateIPUnsafe(node, eniID, ip string) {
 func (ds *DataStore) __ReleasePodPrivateIPUnsafe(node, eniID, ip string, crossSubnet bool) error {
 	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	eni, ok := instance.eniPool[eniID]
 	if !ok {
-		return UnknownENIError
+		return ErrUnknownENI
 	}
 
 	addr, ok := eni.IPv4Addresses[ip]
@@ -219,22 +237,22 @@ func (ds *DataStore) __ReleasePodPrivateIPUnsafe(node, eniID, ip string, crossSu
 		return nil
 	}
 
-	return UnknownIPError
+	return ErrUnknownIP
 }
 
 // Add the IP address to the Eni cache, and mark whether the IP address is an IP address across the subnet
 func (ds *DataStore) AddPrivateIPToStoreUnsafe(node, eniID, ipAddress string, assigned, crossSubnet bool) error {
 	if node == "" {
-		return EmptyNodeError
+		return ErrEmptyNode
 	}
 
 	if eniID == "" {
-		return EmptyENIError
+		return ErrEmptyENI
 	}
 
 	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	_, ok = instance.eniPool[eniID]
@@ -297,12 +315,12 @@ func (ds *DataStore) DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress strin
 func (ds *DataStore) __DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress string, crossSubnet bool) error {
 	instance, ok := ds.getNodeInstance(node, crossSubnet)
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	eni, ok := instance.eniPool[eniID]
 	if !ok {
-		return UnknownENIError
+		return ErrUnknownENI
 	}
 
 	// decrease total
@@ -325,7 +343,7 @@ func (ds *DataStore) __DeletePrivateIPFromStoreUnsafe(node, eniID, ipAddress str
 
 func (ds *DataStore) AddNodeToStore(node, instanceID string) error {
 	if node == "" || instanceID == "" {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	ds.lock.Lock()
@@ -369,7 +387,7 @@ func (ds *DataStore) DeleteNodeFromStore(node string) error {
 
 func (ds *DataStore) AddENIToStore(node, eniID string) error {
 	if eniID == "" {
-		return EmptyENIError
+		return ErrEmptyENI
 	}
 
 	ds.lock.Lock()
@@ -377,7 +395,7 @@ func (ds *DataStore) AddENIToStore(node, eniID string) error {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	_, ok = instance.eniPool[eniID]
@@ -426,12 +444,12 @@ func (ds *DataStore) DeleteENIFromStore(node, eniID string) error {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	eni, ok := instance.eniPool[eniID]
 	if !ok {
-		return UnknownENIError
+		return ErrUnknownENI
 	}
 
 	total := eni.TotalIPv4Addresses()
@@ -464,7 +482,7 @@ func (ds *DataStore) GetNodeStats(node string) (int, int, error) {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return 0, 0, UnknownNodeError
+		return 0, 0, ErrUnknownNode
 	}
 
 	total := instance.total
@@ -484,12 +502,12 @@ func (ds *DataStore) GetENIStats(node, eniID string) (int, int, error) {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return 0, 0, UnknownNodeError
+		return 0, 0, ErrUnknownNode
 	}
 
 	eni, ok := instance.eniPool[eniID]
 	if !ok {
-		return 0, 0, UnknownENIError
+		return 0, 0, ErrUnknownENI
 	}
 
 	total := eni.TotalIPv4Addresses()
@@ -513,7 +531,7 @@ func (ds *DataStore) GetUnassignedPrivateIPByNode(node string) ([]string, error)
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return nil, UnknownNodeError
+		return nil, ErrUnknownNode
 	}
 
 	var result []string

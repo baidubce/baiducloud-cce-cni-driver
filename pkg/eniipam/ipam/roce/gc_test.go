@@ -3,6 +3,7 @@ package roce
 import (
 	"context"
 	"fmt"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"testing"
 	"time"
 
@@ -207,39 +208,87 @@ func (suite *IPAMGC) Test_gc() {
 }
 
 func (suite *IPAMGC) Test__gcLeakedIP() {
-	suite.ipam.nodeCache = map[string]*corev1.Node{"i-cdcac": &corev1.Node{
-		TypeMeta: metav1.TypeMeta{},
+	// 1. empty wep
+	suite.ipam.nodeCache = map[string]*corev1.Node{
+		"i-0": {
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-0",
+			},
+		},
+	}
+
+	cloudClient := suite.ipam.cloud.(*mockcloud.MockInterface)
+	eniList := &hpc.EniList{
+		Result: []hpc.Result{
+			{
+				EniID: "eni-0",
+				PrivateIPSet: []hpc.PrivateIP{
+					{
+						Primary:          true,
+						PrivateIPAddress: "10.1.1.0",
+					},
+					{
+						Primary:          false,
+						PrivateIPAddress: "10.1.1.1",
+					},
+					{
+						Primary:          false,
+						PrivateIPAddress: "10.1.1.2",
+					},
+				},
+			},
+		},
+	}
+	args1 := &hpc.EniBatchDeleteIPArgs{
+		EniID:              "eni-0",
+		PrivateIPAddresses: []string{"10.1.1.1"},
+	}
+	args2 := &hpc.EniBatchDeleteIPArgs{
+		EniID:              "eni-0",
+		PrivateIPAddresses: []string{"10.1.1.2"},
+	}
+	gomock.InOrder(
+		cloudClient.EXPECT().GetHPCEniID(gomock.Any(), gomock.Eq("i-0")).Return(eniList, nil),
+		cloudClient.EXPECT().BatchDeleteHpcEniPrivateIP(gomock.Any(), gomock.Eq(args1)).Return(nil),
+		cloudClient.EXPECT().BatchDeleteHpcEniPrivateIP(gomock.Any(), gomock.Eq(args2)).Return(nil),
+	)
+
+	gcErr := suite.ipam.gcLeakedIP(suite.ctx)
+	suite.Assert().Nil(gcErr)
+
+	// 2. delete leaked ip 10.1.1.2
+	gomock.InOrder(
+		cloudClient.EXPECT().GetHPCEniID(gomock.Any(), gomock.Eq("i-0")).Return(eniList, nil),
+		cloudClient.EXPECT().BatchDeleteHpcEniPrivateIP(gomock.Any(), gomock.Eq(args2)).Return(nil),
+	)
+
+	mwep0 := &networkingv1alpha1.MultiIPWorkloadEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "",
-			Namespace: "",
-		},
-	}}
-	mwep := MockMultiworkloadEndpoint()
-	suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(suite.ctx, mwep, metav1.CreateOptions{})
-
-	mwep1 := MockMultiworkloadEndpoint()
-	mwep1.Name = "busybox-1"
-	suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(suite.ctx, mwep1, metav1.CreateOptions{})
-
-	mwep2 := MockMultiworkloadEndpoint()
-	mwep2.Name = "busybox-2"
-	suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).Create(suite.ctx, mwep2, metav1.CreateOptions{})
-
-	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
-	mockInterface.GetHPCEniID(gomock.Any(), gomock.Any()).Return(&hpc.EniList{
-		Result: []hpc.Result{{
-			EniID: "eni-df8888fs",
-			PrivateIPSet: []hpc.PrivateIP{{
-				Primary:          false,
-				PrivateIPAddress: "192.168.1.179",
-			},
+			Name:       "pod-0",
+			Namespace:  corev1.NamespaceDefault,
+			Finalizers: []string{"cce-cni.cce.io"},
+			Labels: map[string]string{
+				corev1.LabelInstanceType:             "BBC",
+				ipamgeneric.MwepLabelInstanceTypeKey: ipamgeneric.MwepTypeRoce,
 			},
 		},
+		NodeName:   "",
+		InstanceID: "i-0",
+		Type:       ipamgeneric.MwepTypeRoce,
+		Spec: []networkingv1alpha1.MultiIPWorkloadEndpointSpec{
+			{
+				EniID: "eni-0",
+				IP:    "10.1.1.1",
+			},
 		},
-	}, nil).AnyTimes()
-	err := suite.ipam.gcLeakedIP(suite.ctx, []*networkingv1alpha1.MultiIPWorkloadEndpoint{mwep, mwep1, mwep2})
-	suite.Assert().NoError(err, "get mwep error")
+	}
+	_, err0 := suite.ipam.crdClient.CceV1alpha1().MultiIPWorkloadEndpoints(corev1.NamespaceDefault).
+		Create(suite.ctx, mwep0, metav1.CreateOptions{})
+	suite.Assert().Nil(err0)
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
 
+	gcErr2 := suite.ipam.gcLeakedIP(suite.ctx)
+	suite.Assert().Nil(gcErr2)
 }
 
 func TestIPAMGC(t *testing.T) {

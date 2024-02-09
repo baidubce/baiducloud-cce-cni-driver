@@ -50,6 +50,7 @@ func Test_crossVPCEniResourceManager_SyncCapacity(t *testing.T) {
 				kubeClient, _, _, _, _ := setupEnv(ctrl)
 
 				return fields{
+					ctrl: ctrl,
 					simpleIPResourceManager: &simpleIPResourceManager{
 						kubeClient:        kubeClient,
 						preAttachedENINum: 1,
@@ -86,12 +87,16 @@ func Test_crossVPCEniResourceManager_SyncCapacity(t *testing.T) {
 				}, metav1.CreateOptions{})
 
 				return fields{
+					ctrl: ctrl,
 					simpleIPResourceManager: &simpleIPResourceManager{
 						kubeClient:        kubeClient,
 						preAttachedENINum: 1,
 						node: &v1.Node{
 							ObjectMeta: metav1.ObjectMeta{
 								Name: "6.0.16.4",
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{},
 							},
 						},
 					},
@@ -121,24 +126,19 @@ func Test_crossVPCEniResourceManager_SyncCapacity(t *testing.T) {
 					},
 				}, metav1.CreateOptions{})
 
-				kubeClient.CoreV1().Nodes().UpdateStatus(context.TODO(), &v1.Node{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "6.0.16.4",
-					},
-					Status: v1.NodeStatus{
-						Capacity: v1.ResourceList{
-							"cross-vpc-eni.cce.io/eni": resource.Quantity{},
-						},
-					},
-				}, metav1.UpdateOptions{})
-
 				return fields{
+					ctrl: ctrl,
 					simpleIPResourceManager: &simpleIPResourceManager{
 						kubeClient:        kubeClient,
 						preAttachedENINum: 1,
 						node: &v1.Node{
 							ObjectMeta: metav1.ObjectMeta{
 								Name: "6.0.16.4",
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{
+									"cross-vpc-eni.cce.io/eni": resource.Quantity{},
+								},
 							},
 						},
 					},
@@ -151,6 +151,186 @@ func Test_crossVPCEniResourceManager_SyncCapacity(t *testing.T) {
 				ctx: context.TODO(),
 			},
 			wantErr: false,
+		},
+		{
+			name: "正常新增 resource 流程，node anno 自定义最大 eni 数量为 3",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				kubeClient, _, _, _, _ := setupEnv(ctrl)
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "6.0.16.4",
+					},
+					Status: v1.NodeStatus{
+						Capacity: v1.ResourceList{
+							"cross-vpc-eni.cce.io/eni": resource.Quantity{},
+						},
+					},
+				}, metav1.CreateOptions{})
+
+				return fields{
+					ctrl: ctrl,
+					simpleIPResourceManager: &simpleIPResourceManager{
+						kubeClient:        kubeClient,
+						preAttachedENINum: 1,
+						node: &v1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: "6.0.16.4",
+								Annotations: map[string]string{
+									"cross-vpc-eni.cce.io/maxEniNumber": "3",
+								},
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{
+									"cross-vpc-eni.cce.io/eni": resource.MustParse("3"),
+								},
+							},
+						},
+					},
+					bccInstance: &bccapi.InstanceModel{
+						CpuCount: 8,
+					},
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常新增 resource 流程，node anno 自定义最大 eni 错误",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				kubeClient, _, _, _, _ := setupEnv(ctrl)
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "6.0.16.4",
+					},
+					Status: v1.NodeStatus{
+						Capacity: v1.ResourceList{
+							"cross-vpc-eni.cce.io/eni": resource.Quantity{},
+						},
+					},
+				}, metav1.CreateOptions{})
+
+				return fields{
+					ctrl: ctrl,
+					simpleIPResourceManager: &simpleIPResourceManager{
+						kubeClient:        kubeClient,
+						preAttachedENINum: 1,
+						node: &v1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: "6.0.16.4",
+								Annotations: map[string]string{
+									"cross-vpc-eni.cce.io/maxEniNumber": "xxx",
+								},
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{
+									"cross-vpc-eni.cce.io/eni": resource.MustParse("3"),
+								},
+							},
+						},
+					},
+					bccInstance: &bccapi.InstanceModel{
+						CpuCount: 8,
+					},
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "正常新增 resource 流程，node label 自定义最大 eni 数量为 3",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				kubeClient, _, _, _, _ := setupEnv(ctrl)
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "6.0.16.4",
+					},
+					Status: v1.NodeStatus{
+						Capacity: v1.ResourceList{
+							"cross-vpc-eni.cce.io/eni": resource.Quantity{},
+						},
+					},
+				}, metav1.CreateOptions{})
+
+				return fields{
+					ctrl: ctrl,
+					simpleIPResourceManager: &simpleIPResourceManager{
+						kubeClient:        kubeClient,
+						preAttachedENINum: 1,
+						node: &v1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: "6.0.16.4",
+								Labels: map[string]string{
+									"cross-vpc-eni.cce.io/max-eni-number": "3",
+								},
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{
+									"cross-vpc-eni.cce.io/eni": resource.MustParse("3"),
+								},
+							},
+						},
+					},
+					bccInstance: &bccapi.InstanceModel{
+						CpuCount: 8,
+					},
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常新增 resource 流程，node label 自定义最大 eni 错误",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				kubeClient, _, _, _, _ := setupEnv(ctrl)
+				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "6.0.16.4",
+					},
+					Status: v1.NodeStatus{
+						Capacity: v1.ResourceList{
+							"cross-vpc-eni.cce.io/eni": resource.Quantity{},
+						},
+					},
+				}, metav1.CreateOptions{})
+
+				return fields{
+					ctrl: ctrl,
+					simpleIPResourceManager: &simpleIPResourceManager{
+						kubeClient:        kubeClient,
+						preAttachedENINum: 1,
+						node: &v1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: "6.0.16.4",
+								Labels: map[string]string{
+									"cross-vpc-eni.cce.io/max-eni-number": "xxx",
+								},
+							},
+							Status: v1.NodeStatus{
+								Capacity: v1.ResourceList{
+									"cross-vpc-eni.cce.io/eni": resource.MustParse("3"),
+								},
+							},
+						},
+					},
+					bccInstance: &bccapi.InstanceModel{
+						CpuCount: 8,
+					},
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+			},
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {

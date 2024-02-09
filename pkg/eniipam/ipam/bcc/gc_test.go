@@ -132,7 +132,7 @@ func (suite *IPAMGC) Test__gcScaledDownSts() {
 	mockInterface.DeletePrivateIP(gomock.Any(), "192.168.1.109", gomock.Any()).Return(nil).AnyTimes()
 	mockInterface.DeletePrivateIP(gomock.Any(), "192.168.1.110", gomock.Any()).Return(fmt.Errorf("cannot delete ip")).AnyTimes()
 
-	__waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer, suite.stopChan)
+	waitCacheSync(suite.ipam, suite.stopChan)
 	suite.ipam.gcScaledDownSts(suite.ctx, stsList)
 
 	// should not be deleted
@@ -190,7 +190,7 @@ func (suite *IPAMGC) Test__gcLeakedIPPool() {
 	ippool.Name = "ippool-10-0-0-9"
 	suite.ipam.crdClient.CceV1alpha1().IPPools(corev1.NamespaceDefault).Create(suite.ctx, ippool, metav1.CreateOptions{})
 
-	__waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer, suite.stopChan)
+	waitCacheSync(suite.ipam, suite.stopChan)
 	suite.ipam.gcLeakedIPPool(suite.ctx)
 }
 
@@ -207,5 +207,6 @@ func (suite *IPAMGC) Test__gcDeletedNode() {
 }
 
 func TestIPAMGC(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(IPAMGC))
 }

@@ -17,8 +17,9 @@ package cloud
 
 import (
 	"context"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 
+	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/baidubce/bce-sdk-go/services/bcc"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
@@ -28,6 +29,7 @@ import (
 
 type Interface interface {
 	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
+	ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string) (string, error)
 	DeletePrivateIP(ctx context.Context, privateIP string, eniID string) error
 
@@ -68,7 +70,7 @@ type Interface interface {
 
 type Client struct {
 	bccClient *bcc.Client
-	eniClient *eni.Client
+	eniClient *eniExt.Client
 	vpcClient *vpc.Client
 	hpcClient *hpc.Client
 	bbcClient *bbc.Client

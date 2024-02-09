@@ -29,11 +29,13 @@ import (
 
 func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 	type fields struct {
-		ctrl     *gomock.Controller
-		ipamd    ipam.Interface
-		eniipamd ipam.ExclusiveEniInterface
-		port     int
-		ipType   rpc.IPType
+		ctrl      *gomock.Controller
+		ipamd     ipam.Interface
+		eniipamd  ipam.ExclusiveEniInterface
+		roceipamd ipam.RoceInterface
+		eriipamd  ipam.RoceInterface
+		port      int
+		ipType    rpc.IPType
 	}
 	type args struct {
 		ctx context.Context
@@ -176,6 +178,96 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "RoCE",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				roceipamd := mockipam.NewMockRoceInterface(ctrl)
+				gomock.InOrder(
+					roceipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+						Return(&v1alpha1.WorkloadEndpoint{
+							Spec: v1alpha1.WorkloadEndpointSpec{
+								IP: "192.168.100.100",
+							},
+						}, nil),
+				)
+
+				return fields{
+					ctrl:      ctrl,
+					roceipamd: roceipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.AllocateIPRequest{
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+					IPType:                 rpc.IPType_RoceENIMultiIPType,
+					NetworkInfo: &rpc.AllocateIPRequest_ENIMultiIP{
+						ENIMultiIP: &rpc.ENIMultiIPRequest{
+							Mac: "fsfsgsg",
+						},
+					},
+				},
+			},
+			want: &rpc.AllocateIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_RoceENIMultiIPType,
+				NetworkInfo: &rpc.AllocateIPReply_ENIMultiIP{
+					ENIMultiIP: &rpc.ENIMultiIPReply{
+						IP: "192.168.100.100",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "ERI",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				eriipamd := mockipam.NewMockRoceInterface(ctrl)
+				gomock.InOrder(
+					eriipamd.EXPECT().Allocate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+						Return(&v1alpha1.WorkloadEndpoint{
+							Spec: v1alpha1.WorkloadEndpointSpec{
+								IP: "192.168.100.100",
+							},
+						}, nil),
+				)
+
+				return fields{
+					ctrl:     ctrl,
+					eriipamd: eriipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.AllocateIPRequest{
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+					IPType:                 rpc.IPType_ERIENIMultiIPType,
+					NetworkInfo: &rpc.AllocateIPRequest_ENIMultiIP{
+						ENIMultiIP: &rpc.ENIMultiIPRequest{
+							Mac: "fsfsgsg",
+						},
+					},
+				},
+			},
+			want: &rpc.AllocateIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_ERIENIMultiIPType,
+				NetworkInfo: &rpc.AllocateIPReply_ENIMultiIP{
+					ENIMultiIP: &rpc.ENIMultiIPReply{
+						IP: "192.168.100.100",
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,9 +275,11 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 				defer tt.fields.ctrl.Finish()
 			}
 			cb := &ENIIPAMGrpcServer{
-				bccipamd: tt.fields.ipamd,
-				eniipamd: tt.fields.eniipamd,
-				port:     tt.fields.port,
+				bccipamd:  tt.fields.ipamd,
+				eniipamd:  tt.fields.eniipamd,
+				roceipamd: tt.fields.roceipamd,
+				eriipamd:  tt.fields.eriipamd,
+				port:      tt.fields.port,
 			}
 			got, err := cb.AllocateIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {
@@ -201,11 +295,13 @@ func TestENIIPAMGrpcServer_AllocateIP(t *testing.T) {
 
 func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 	type fields struct {
-		ctrl     *gomock.Controller
-		ipamd    ipam.Interface
-		eniipamd ipam.ExclusiveEniInterface
-		port     int
-		ipType   rpc.IPType
+		ctrl      *gomock.Controller
+		ipamd     ipam.Interface
+		eniipamd  ipam.ExclusiveEniInterface
+		roceipamd ipam.RoceInterface
+		eriipamd  ipam.RoceInterface
+		port      int
+		ipType    rpc.IPType
 	}
 	type args struct {
 		ctx context.Context
@@ -339,6 +435,84 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "RoCE",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockRoceInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Release(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.WorkloadEndpoint{
+						Spec: v1alpha1.WorkloadEndpointSpec{
+							IP: "192.168.100.100",
+						},
+					}, nil),
+				)
+
+				return fields{
+					ctrl:      ctrl,
+					roceipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.ReleaseIPRequest{
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+					IPType:                 rpc.IPType_RoceENIMultiIPType,
+				},
+			},
+			want: &rpc.ReleaseIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_RoceENIMultiIPType,
+				NetworkInfo: &rpc.ReleaseIPReply_ENIMultiIP{
+					ENIMultiIP: &rpc.ENIMultiIPReply{
+						IP: "192.168.100.100",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "ERI",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+
+				ipamd := mockipam.NewMockRoceInterface(ctrl)
+				gomock.InOrder(
+					ipamd.EXPECT().Release(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&v1alpha1.WorkloadEndpoint{
+						Spec: v1alpha1.WorkloadEndpointSpec{
+							IP: "192.168.100.100",
+						},
+					}, nil),
+				)
+
+				return fields{
+					ctrl:     ctrl,
+					eriipamd: ipamd,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				req: &rpc.ReleaseIPRequest{
+					K8SPodName:             "busybox",
+					K8SPodNamespace:        "default",
+					K8SPodInfraContainerID: "xxxxx",
+					IPType:                 rpc.IPType_ERIENIMultiIPType,
+				},
+			},
+			want: &rpc.ReleaseIPReply{
+				IsSuccess: true,
+				IPType:    rpc.IPType_ERIENIMultiIPType,
+				NetworkInfo: &rpc.ReleaseIPReply_ENIMultiIP{
+					ENIMultiIP: &rpc.ENIMultiIPReply{
+						IP: "192.168.100.100",
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		if tt.fields.ctrl != nil {
@@ -346,9 +520,11 @@ func TestENIIPAMGrpcServer_ReleaseIP(t *testing.T) {
 		}
 		t.Run(tt.name, func(t *testing.T) {
 			cb := &ENIIPAMGrpcServer{
-				bccipamd: tt.fields.ipamd,
-				eniipamd: tt.fields.eniipamd,
-				port:     tt.fields.port,
+				bccipamd:  tt.fields.ipamd,
+				eniipamd:  tt.fields.eniipamd,
+				roceipamd: tt.fields.roceipamd,
+				eriipamd:  tt.fields.eriipamd,
+				port:      tt.fields.port,
 			}
 			got, err := cb.ReleaseIP(tt.args.ctx, tt.args.req)
 			if (err != nil) != tt.wantErr {
@@ -404,6 +580,7 @@ func Test_isRateLimitErrorMessage(t *testing.T) {
 
 func TestRunRPCServer(t *testing.T) {
 	srv := New(
+		nil,
 		nil,
 		nil,
 		nil,

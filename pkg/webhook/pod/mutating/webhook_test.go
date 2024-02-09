@@ -62,8 +62,10 @@ func TestMutatingPodHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeFixed,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeFixed,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						},
 						IPv4: []string{
 							"10.178.245.1",
 							"10.178.245.2",

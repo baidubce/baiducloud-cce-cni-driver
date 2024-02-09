@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: reuseip
+spec:
+  serviceName: reuseip
+  replicas: 3
+  selector:
+    matchLabels:
+      workloadType: sts
+      reuseIP: "true"
+      app: reuseIPApp
+  template:
+    metadata:
+      labels:
+        workloadType: sts
+        reuseIP: "true"
+        app: reuseIPApp
+    spec:
+      containers:
+        -  name: myapp
+           image: registry.baidubce.com/cce-plugin-dev/system-config-override:0.0.4
+           command:
+           - /bin/bash
+           - -c
+           - sleep 3600
+           ports:
+           - containerPort: 8068
+             name: web

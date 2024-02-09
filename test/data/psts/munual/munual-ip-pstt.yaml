@@ -5,17 +5,17 @@ metadata:
 spec:
   name: fixed-ip-psts-test
   subnets:
-    sbn-mxxvp4gfdjyv:
+    sbn-gxz5a4f0dtzp:
       type: Manual
       releaseStrategy: TTL
       ipv4Range:
-      - 192.168.78.228/32
-      - 192.168.78.229/32
-    sbn-s985prieeicc:
+      - 172.22.79.228/32
+      - 172.22.79.229/32
+    sbn-eu0hnb6g7v5z:
       type: Manual
       releaseStrategy: TTL
       ipv4Range:
-      - 192.168.79.228/31
+      - 172.22.78.228/31
 
   priority: 10    
   selector:

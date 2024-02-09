@@ -58,6 +58,9 @@ type Interface interface {
 	GetSubnetID() (string, error)
 	GetLinkGateway(string, string) (string, error)
 	GetLinkMask(string, string) (string, error)
+	GetVifFeatures(macAddress string) (string, error)
+
+	ListMacs() ([]string, error)
 }
 
 var _ Interface = &Client{}
@@ -85,12 +88,12 @@ func NewClient() *Client {
 func (c *Client) sendRequest(path string) ([]byte, error) {
 	ctx := log.NewContext()
 
-	url := url.URL{
+	reqURL := url.URL{
 		Scheme: c.scheme,
 		Host:   c.host,
 		Path:   path,
 	}
-	resp, err := http.Get(url.String())
+	resp, err := http.Get(reqURL.String())
 	if err != nil {
 		return nil, err
 	}
@@ -289,4 +292,44 @@ func (c *Client) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
 	}
 
 	return secondaryIPs, nil
+}
+
+func (c *Client) GetVifFeatures(macAddress string) (string, error) {
+	// eg. /1.0/meta-data/network/interfaces/macs/fa:26:00:01:6f:37/vif_features
+	// response:
+	// elastic_rdma
+	path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/vif_features", macAddress)
+	body, err := c.sendRequest(path)
+	if err != nil {
+		return "", err
+	}
+	vifFeatures := strings.TrimSpace(string(body))
+	return vifFeatures, nil
+}
+
+func (c *Client) ListMacs() ([]string, error) {
+	// eg. /1.0/meta-data/network/interfaces/macs
+	// response:
+	// fa:f6:00:01:7b:f4/
+	// fa:f6:00:07:f8:f4/
+	// fa:f6:00:08:13:e1/
+	// fa:f6:00:14:4c:f0/
+	path := fmt.Sprintf(metadataBasePath + "network/interfaces/macs")
+	body, err := c.sendRequest(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		macAddrs []string
+	)
+
+	reader := strings.NewReader(strings.TrimSpace(string(body)))
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		macAddrs = append(macAddrs, strings.TrimSuffix(line, "/"))
+	}
+
+	return macAddrs, nil
 }

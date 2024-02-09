@@ -289,15 +289,31 @@ func (tsc *TopologySpreadController) syncPSTSStatus(psts *networkv1alpha1.PodSub
 	return nil
 }
 
+// useDefault If there is a psts level policy, the psts level policy is directly used as the default policy.
+// If there is no PSTS level policy, the first subnet level policy is used as the default policy.
+// If there is no subnet level policy, a temporary Elastic policy will be built by default
 func useDefault(spec *networkv1alpha1.PodSubnetTopologySpreadSpec) {
-	for sbnID := range spec.Subnets {
-		sbn := spec.Subnets[sbnID]
-		if sbn.Type == "" {
-			sbn.Type = networkv1alpha1.IPAllocTypeElastic
+	if spec.Strategy == nil {
+		for sbnID := range spec.Subnets {
+			sbn := spec.Subnets[sbnID]
+			if sbn.Type == "" {
+				sbn.Type = networkv1alpha1.IPAllocTypeElastic
+			}
+			if sbn.Type == networkv1alpha1.IPAllocTypeElastic || sbn.Type == networkv1alpha1.IPAllocTypeManual {
+				sbn.ReleaseStrategy = networkv1alpha1.ReleaseStrategyTTL
+			}
+
+			tmp := spec.Subnets[sbnID].IPAllocationStrategy
+			spec.Strategy = &tmp
+
+			spec.Subnets[sbnID] = sbn
+			break
 		}
-		if sbn.Type == networkv1alpha1.IPAllocTypeElastic || sbn.Type == networkv1alpha1.IPAllocTypeManual {
-			sbn.ReleaseStrategy = networkv1alpha1.ReleaseStrategyTTL
+	} else {
+		if spec.Strategy.Type == networkv1alpha1.IPAllocTypeCustom {
+			if spec.Strategy.TTL == nil {
+				spec.Strategy.TTL = networkv1alpha1.DefaultReuseIPTTL
+			}
 		}
-		spec.Subnets[sbnID] = sbn
 	}
 }

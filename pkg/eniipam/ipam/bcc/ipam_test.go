@@ -18,6 +18,7 @@ package bcc
 import (
 	"context"
 	"fmt"
+	"github.com/baidubce/bce-sdk-go/services/vpc"
 	"reflect"
 	"testing"
 	"time"
@@ -27,8 +28,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	mockcloud "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud/testing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	mocksubnet "github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/subnet/mock"
 	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/ipcache"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdfake "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned/fake"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -81,36 +84,29 @@ func setupEnv(ctrl *gomock.Controller) (
 }
 
 func waitForCacheSync(kubeInformer informers.SharedInformerFactory, crdInformer crdinformers.SharedInformerFactory) {
-	__waitForCacheSync(kubeInformer, crdInformer, wait.NeverStop)
-}
-
-func __waitForCacheSync(kubeInformer informers.SharedInformerFactory, crdInformer crdinformers.SharedInformerFactory, stopChan <-chan struct{}) {
-	nodeInformer := kubeInformer.Core().V1().Nodes().Informer()
-	podInformer := kubeInformer.Core().V1().Pods().Informer()
-	stsInformer := kubeInformer.Apps().V1().StatefulSets().Informer()
-	wepInformer := crdInformer.Cce().V1alpha1().WorkloadEndpoints().Informer()
-	ippoolInformer := crdInformer.Cce().V1alpha1().IPPools().Informer()
-	subnetInformer := crdInformer.Cce().V1alpha1().Subnets().Informer()
-	pstsInfomer := crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()
+	stopChan := wait.NeverStop
+	kubeInformer.Core().V1().Nodes().Informer()
+	kubeInformer.Core().V1().Pods().Informer()
+	kubeInformer.Apps().V1().StatefulSets().Informer()
+	crdInformer.Cce().V1alpha1().WorkloadEndpoints().Informer()
+	crdInformer.Cce().V1alpha1().IPPools().Informer()
+	crdInformer.Cce().V1alpha1().Subnets().Informer()
+	crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()
 
 	kubeInformer.Start(stopChan)
 	crdInformer.Start(stopChan)
-	time.Sleep(time.Microsecond)
+	__waitForCacheSync(kubeInformer, crdInformer, stopChan)
+}
 
-	cache.WaitForNamedCacheSync(
-		"cce-ipam",
-		stopChan,
-		nodeInformer.HasSynced,
-		podInformer.HasSynced,
-		stsInformer.HasSynced,
-		wepInformer.HasSynced,
-		ippoolInformer.HasSynced,
-		subnetInformer.HasSynced,
-		pstsInfomer.HasSynced,
-	)
+func __waitForCacheSync(kubeInformer informers.SharedInformerFactory, crdInformer crdinformers.SharedInformerFactory, stopChan <-chan struct{}) {
+	time.Sleep(time.Microsecond)
+	kubeInformer.WaitForCacheSync(stopChan)
+	crdInformer.WaitForCacheSync(stopChan)
+	time.Sleep(time.Microsecond)
 }
 
 func Test_buildInstanceIdToNodeNameMap(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		ctx   context.Context
 		nodes []*v1.Node
@@ -164,12 +160,12 @@ func Test_buildInstanceIdToNodeNameMap(t *testing.T) {
 }
 
 func TestIPAM_Allocate(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		ctrl                  *gomock.Controller
 		eniCache              map[string][]*enisdk.Eni
 		privateIPNumCache     map[string]int
 		cacheHasSynced        bool
-		allocated             map[string]*v1alpha1.WorkloadEndpoint
 		eventBroadcaster      record.EventBroadcaster
 		eventRecorder         record.EventRecorder
 		kubeInformer          informers.SharedInformerFactory
@@ -296,7 +292,6 @@ func TestIPAM_Allocate(t *testing.T) {
 						}},
 					},
 					cacheHasSynced:    true,
-					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
 					datastore:         ds,
 					eventBroadcaster:  brdcaster,
@@ -369,17 +364,18 @@ func TestIPAM_Allocate(t *testing.T) {
 					},
 				}, metav1.CreateOptions{})
 
-				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(), &v1alpha1.WorkloadEndpoint{
-					TypeMeta: metav1.TypeMeta{},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo-0",
-					},
-					Spec: v1alpha1.WorkloadEndpointSpec{
-						SubnetID: "sbn-test",
-						IP:       "10.1.1.1",
-						Type:     ipamgeneric.WepTypeSts,
-					},
-				}, metav1.CreateOptions{})
+				crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(),
+					&v1alpha1.WorkloadEndpoint{
+						TypeMeta: metav1.TypeMeta{},
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "foo-0",
+						},
+						Spec: v1alpha1.WorkloadEndpointSpec{
+							SubnetID: "sbn-test",
+							IP:       "10.1.1.1",
+							Type:     ipamgeneric.WepTypeSts,
+						},
+					}, metav1.CreateOptions{})
 
 				waitForCacheSync(kubeInformer, crdInformer)
 
@@ -409,7 +405,6 @@ func TestIPAM_Allocate(t *testing.T) {
 						},
 					},
 					cacheHasSynced:    true,
-					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
 					datastore:         ds,
 					eventBroadcaster:  brdcaster,
@@ -456,11 +451,18 @@ func TestIPAM_Allocate(t *testing.T) {
 			if tt.fields.ctrl != nil {
 				defer tt.fields.ctrl.Finish()
 			}
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
+
 			ipam := &IPAM{
-				eniCache:              tt.fields.eniCache,
+				eniCache:              eniCache,
 				privateIPNumCache:     tt.fields.privateIPNumCache,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
-				allocated:             tt.fields.allocated,
+				allocated:             ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
+				addIPBackoffCache:     ipcache.NewCacheMap[*wait.Backoff](),
 				eventBroadcaster:      tt.fields.eventBroadcaster,
 				eventRecorder:         tt.fields.eventRecorder,
 				kubeInformer:          tt.fields.kubeInformer,
@@ -492,6 +494,7 @@ func TestIPAM_Allocate(t *testing.T) {
 }
 
 func TestIPAM_Release(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		ctrl                  *gomock.Controller
 		eniCache              map[string][]*enisdk.Eni
@@ -839,7 +842,12 @@ func TestIPAM_Release(t *testing.T) {
 			)
 			ipamServer := ipam.(*IPAM)
 			ipamServer.cacheHasSynced = true
-			ipamServer.eniCache = tt.fields.eniCache
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
+			ipamServer.eniCache = eniCache
 			ipamServer.clock = clock.NewFakeClock(time.Unix(0, 0))
 			if tt.fields.idleIPPoolMaxSize > 0 {
 				ipamServer.idleIPPoolMaxSize = tt.fields.idleIPPoolMaxSize
@@ -887,6 +895,7 @@ func startInformers(kubeInformer informers.SharedInformerFactory, crdInformer cr
 }
 
 func TestIPAM_gcLeakedIP(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		ctrl                  *gomock.Controller
 		datastore             *datastorev1.DataStore
@@ -1043,6 +1052,11 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 			if tt.fields.ctrl != nil {
 				defer tt.fields.ctrl.Finish()
 			}
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
 			ipam := &IPAM{
 				eventBroadcaster:      tt.fields.eventBroadcaster,
 				eventRecorder:         tt.fields.eventRecorder,
@@ -1055,9 +1069,9 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 				vpcID:                 tt.fields.vpcID,
 				clusterID:             tt.fields.clusterID,
 				datastore:             tt.fields.datastore,
-				eniCache:              tt.fields.eniCache,
+				eniCache:              eniCache,
 				possibleLeakedIPCache: tt.fields.possibleLeakedIPCache,
-				allocated:             tt.fields.allocated,
+				allocated:             ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
 				bucket:                tt.fields.bucket,
 				batchAddIPNum:         tt.fields.batchAddIPNum,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
@@ -1085,12 +1099,12 @@ func TestIPAM_gcLeakedIP(t *testing.T) {
 }
 
 func TestIPAM_buildAllocatedCache(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		ctrl                  *gomock.Controller
 		eniCache              map[string][]*enisdk.Eni
 		privateIPNumCache     map[string]int
 		cacheHasSynced        bool
-		allocated             map[string]*v1alpha1.WorkloadEndpoint
 		eventBroadcaster      record.EventBroadcaster
 		eventRecorder         record.EventRecorder
 		kubeInformer          informers.SharedInformerFactory
@@ -1136,7 +1150,6 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 						}},
 					},
 					cacheHasSynced:    true,
-					allocated:         map[string]*v1alpha1.WorkloadEndpoint{},
 					privateIPNumCache: map[string]int{},
 					eventBroadcaster:  brdcaster,
 					eventRecorder:     recorder,
@@ -1157,11 +1170,16 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 			if tt.fields.ctrl != nil {
 				defer tt.fields.ctrl.Finish()
 			}
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
 			ipam := &IPAM{
-				eniCache:              tt.fields.eniCache,
+				eniCache:              eniCache,
 				privateIPNumCache:     tt.fields.privateIPNumCache,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
-				allocated:             tt.fields.allocated,
+				allocated:             ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
 				eventBroadcaster:      tt.fields.eventBroadcaster,
 				eventRecorder:         tt.fields.eventRecorder,
 				kubeInformer:          tt.fields.kubeInformer,
@@ -1187,11 +1205,11 @@ func TestIPAM_buildAllocatedCache(t *testing.T) {
 }
 
 func TestIPAM_buildInuseENICache(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		eniCache              map[string][]*enisdk.Eni
 		privateIPNumCache     map[string]int
 		cacheHasSynced        bool
-		allocated             map[string]*v1alpha1.WorkloadEndpoint
 		eventBroadcaster      record.EventBroadcaster
 		eventRecorder         record.EventRecorder
 		kubeInformer          informers.SharedInformerFactory
@@ -1254,11 +1272,16 @@ func TestIPAM_buildInuseENICache(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
 			ipam := &IPAM{
-				eniCache:              tt.fields.eniCache,
+				eniCache:              eniCache,
 				privateIPNumCache:     tt.fields.privateIPNumCache,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
-				allocated:             tt.fields.allocated,
+				allocated:             ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
 				eventBroadcaster:      tt.fields.eventBroadcaster,
 				eventRecorder:         tt.fields.eventRecorder,
 				kubeInformer:          tt.fields.kubeInformer,
@@ -1284,6 +1307,7 @@ func TestIPAM_buildInuseENICache(t *testing.T) {
 }
 
 func TestIPAM_updateIPPoolStatus(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		ctrl                  *gomock.Controller
 		eniCache              map[string][]*enisdk.Eni
@@ -1385,11 +1409,16 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 			if tt.fields.ctrl != nil {
 				defer tt.fields.ctrl.Finish()
 			}
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
 			ipam := &IPAM{
-				eniCache:              tt.fields.eniCache,
+				eniCache:              eniCache,
 				privateIPNumCache:     tt.fields.privateIPNumCache,
 				cacheHasSynced:        tt.fields.cacheHasSynced,
-				allocated:             tt.fields.allocated,
+				allocated:             ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
 				eventBroadcaster:      tt.fields.eventBroadcaster,
 				eventRecorder:         tt.fields.eventRecorder,
 				kubeInformer:          tt.fields.kubeInformer,
@@ -1415,6 +1444,7 @@ func TestIPAM_updateIPPoolStatus(t *testing.T) {
 }
 
 func TestIPAM_canAllocateIP(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		eniCache                map[string][]*enisdk.Eni
 		privateIPNumCache       map[string]int
@@ -1490,13 +1520,18 @@ func TestIPAM_canAllocateIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+			for key, v := range tt.fields.eniCache {
+
+				eniCache.Append(key, v...)
+			}
 			ipam := &IPAM{
-				eniCache:                tt.fields.eniCache,
+				eniCache:                eniCache,
 				privateIPNumCache:       tt.fields.privateIPNumCache,
 				possibleLeakedIPCache:   tt.fields.possibleLeakedIPCache,
-				addIPBackoffCache:       tt.fields.addIPBackoffCache,
+				addIPBackoffCache:       ipcache.NewCacheMap[*wait.Backoff](),
 				cacheHasSynced:          tt.fields.cacheHasSynced,
-				allocated:               tt.fields.allocated,
+				allocated:               ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
 				datastore:               tt.fields.datastore,
 				idleIPPoolMinSize:       tt.fields.idleIPPoolMinSize,
 				idleIPPoolMaxSize:       tt.fields.idleIPPoolMaxSize,
@@ -1551,14 +1586,12 @@ func mockIPAM(t *testing.T, stopChan chan struct{}) *IPAM {
 	)
 	ipamServer := ipam.(*IPAM)
 	ipamServer.cacheHasSynced = true
-	ipamServer.eniCache = map[string][]*enisdk.Eni{
-		"test-node": {{
-			EniId: "eni-test",
-		}},
-	}
+	eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+	eniCache.Append("test-node", &enisdk.Eni{
+		EniId: "eni-test",
+	})
+	ipamServer.eniCache = eniCache
 	ipamServer.clock = clock.NewFakeClock(time.Unix(0, 0))
-	ipamServer.kubeInformer.Start(stopChan)
-	ipamServer.crdInformer.Start(stopChan)
 	return ipam.(*IPAM)
 }
 
@@ -1601,28 +1634,114 @@ func (suite *IPAMTest) TearDownTest() {
 func (suite *IPAMTest) TestIPAMRun() {
 	mockInterface := suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT()
 	mockInterface.ListENIs(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("list error")).AnyTimes()
-	go suite.ipam.Run(suite.ctx, suite.stopChan)
+	go func() {
+		err := suite.ipam.Run(suite.ctx, suite.stopChan)
+		suite.Assert().Nil(err)
+	}()
 	time.Sleep(3 * time.Second)
 }
 
-func (suite *IPAMTest) TestGetIPFromLocalPool() {
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-node",
-		},
-	}
-	suite.ipam.datastore.AddENIToStore(node.Name, "eni-test-1")
-	enis := []*enisdk.Eni{
-		{
-			EniId:    "eni-test-1",
-			ZoneName: "zoneF",
-		},
-	}
-	// mock cloud api
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]string{"192.168.1.109"}, nil).AnyTimes()
-	_, _, err := suite.ipam.allocateIPFromLocalPool(suite.ctx, node, enis)
-	suite.Assert().Error(err, "time out to allocate from pool")
+func (suite *IPAMTest) Test_tryToGetIPFromCache() {
+	var (
+		nodeName   = "test-node"
+		instanceID = "i-xxx"
+		eniID      = "test-eni"
+		subnetID   = "test-subnet"
+		ip         = "192.168.1.109"
+		subnetInfo = &vpc.Subnet{
+			AvailableIp: 10,
+		}
+		eniInfo = &enisdk.Eni{
+			PrivateIpSet: []enisdk.PrivateIp{
+				{
+					Primary:          true,
+					PrivateIpAddress: "192.168.1.100",
+				},
+				{
+					Primary:          false,
+					PrivateIpAddress: "192.168.1.107",
+				},
+			},
+		}
+		node = &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+			},
+		}
+		enis = []*enisdk.Eni{
+			{
+				EniId:    eniID,
+				SubnetId: subnetID,
+				ZoneName: "zoneF",
+			},
+		}
+	)
 
+	storeErr := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(storeErr)
+	storeErr = suite.ipam.datastore.AddENIToStore(node.Name, eniID)
+	suite.Assert().Nil(storeErr)
+
+	// assertEniCanIncreasePool
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil).Times(2)
+
+	_, nodeErr := suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "8",
+			},
+		},
+	}, metav1.CreateOptions{})
+	suite.Assert().Nil(nodeErr)
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
+
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().StatENI(suite.ctx, eniID).Return(eniInfo, nil).Times(2)
+	// end of assertEniCanIncreasePool
+
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Any(), gomock.Any(),
+		gomock.Any()).Return([]string{"192.168.1.109"}, nil)
+
+	allocatedIP, allocatedENI, err := suite.ipam.tryToAllocateIPFromCache(suite.ctx, node, enis, getDeadline())
+	suite.Assert().Equal(ip, allocatedIP)
+	suite.Assert().Equal(eniID, allocatedENI.EniId)
+	suite.Assert().Nil(err)
+}
+
+func (suite *IPAMTest) Test_tryToGetIPFromCache_error() {
+	var (
+		nodeName   = "test-node"
+		instanceID = "i-xxx"
+		eniID      = "test-eni"
+		subnetID   = "test-subnet"
+		subnetInfo = &vpc.Subnet{
+			AvailableIp: 0,
+		}
+		node = &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+			},
+		}
+		enis = []*enisdk.Eni{
+			{
+				EniId:    eniID,
+				SubnetId: subnetID,
+				ZoneName: "zoneF",
+			},
+		}
+	)
+
+	storeErr := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(storeErr)
+	storeErr = suite.ipam.datastore.AddENIToStore(node.Name, eniID)
+	suite.Assert().Nil(storeErr)
+
+	// assertEniCanIncreasePool
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil)
+	// end of assertEniCanIncreasePool
+
+	_, _, err := suite.ipam.tryToAllocateIPFromCache(suite.ctx, node, enis, getDeadline())
+	suite.Assert().ErrorContains(err, "has no available ip")
 }
 
 func (suite *IPAMTest) Test_tryAllocateIPForFixIPPodFailRateLimit() {
@@ -1630,43 +1749,51 @@ func (suite *IPAMTest) Test_tryAllocateIPForFixIPPodFailRateLimit() {
 		eni = &enisdk.Eni{
 			EniId: "eni-test",
 		}
-		wep          = data.MockFixedWorkloadEndpoint()
-		ipToAllocate = wep.Spec.IP
-		node         = &corev1.Node{
+		wep  = data.MockFixedWorkloadEndpoint()
+		node = &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test-node",
 			},
 		}
-		backoffCap = time.Second
 	)
 	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(fmt.Errorf("RateLimit"))
 	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(1), 0, "eni-test").Return([]string{}, fmt.Errorf("RateLimit"))
 
-	_, err := suite.ipam.tryAllocateIPForFixIPPod(suite.ctx, eni, wep, ipToAllocate, node, backoffCap)
+	_, _, err := suite.ipam.allocateFixedIPFromCloud(suite.ctx, node, []*enisdk.Eni{eni}, wep, getDeadline())
 	suite.Error(err, "allocation ip error")
 
 }
 
 func (suite *IPAMTest) Test_tryAllocateIPForFixIPPodFailSubnetHasNoMoreIpException() {
 	var (
-		eni = &enisdk.Eni{
-			EniId: "eni-test",
+		nodeName = "test-node"
+		eniID    = "test-eni"
+		subnetID = "test-subnet"
+		eni      = &enisdk.Eni{
+			EniId:    eniID,
+			SubnetId: subnetID,
 		}
-		wep          = data.MockFixedWorkloadEndpoint()
-		ipToAllocate = wep.Spec.IP
-		node         = &corev1.Node{
+		wep  = data.MockFixedWorkloadEndpoint()
+		node = &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-node",
+				Name: nodeName,
 			},
 		}
-		backoffCap = time.Second
 	)
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(fmt.Errorf("SubnetHasNoMoreIpException"))
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(1), 0, "eni-test").Return([]string{}, fmt.Errorf("SubnetHasNoMoreIpException"))
-
-	_, err := suite.ipam.tryAllocateIPForFixIPPod(suite.ctx, eni, wep, ipToAllocate, node, backoffCap)
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(fmt.Errorf("SubnetHasNoMoreIpException"))
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(1), 0,
+		eniID).Return([]string{}, fmt.Errorf("SubnetHasNoMoreIpException"))
+	// I don't know how to mock sbnCtl, because it implements multi interface
+	oldSbnCtl := suite.ipam.sbnCtl
+	suite.ipam.sbnCtl = mocksubnet.NewMockSubnetControl(gomock.NewController(suite.T()))
+	defer func() {
+		suite.ipam.sbnCtl = oldSbnCtl
+	}()
+	suite.ipam.sbnCtl.(*mocksubnet.MockSubnetControl).EXPECT().DeclareSubnetHasNoMoreIP(suite.ctx, subnetID,
+		true).Return(nil)
+	_, _, err := suite.ipam.allocateFixedIPFromCloud(suite.ctx, node, []*enisdk.Eni{eni}, wep, getDeadline())
 	suite.Error(err, "allocation ip error")
-
 }
 
 func (suite *IPAMTest) Test_tryAllocateIPForFixIPPodFailPrivateIpInUseException() {
@@ -1674,36 +1801,55 @@ func (suite *IPAMTest) Test_tryAllocateIPForFixIPPodFailPrivateIpInUseException(
 		eni = &enisdk.Eni{
 			EniId: "eni-test",
 		}
-		wep          = data.MockFixedWorkloadEndpoint()
-		ipToAllocate = wep.Spec.IP
-		node         = &corev1.Node{
+		wep  = data.MockFixedWorkloadEndpoint()
+		node = &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test-node",
 			},
 		}
-		backoffCap = time.Second
 	)
 	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(fmt.Errorf("RateLimit"))
 	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(1), 0, "eni-test").Return([]string{}, fmt.Errorf("PrivateIpInUseException")).AnyTimes()
 
-	_, err := suite.ipam.tryAllocateIPForFixIPPod(suite.ctx, eni, wep, ipToAllocate, node, backoffCap)
+	_, _, err := suite.ipam.allocateFixedIPFromCloud(suite.ctx, node, []*enisdk.Eni{eni}, wep, getDeadline())
 	suite.Error(err, "allocation ip error")
 
 }
 
+// normal case
 func (suite *IPAMTest) Test_handleIncreasePoolEvent() {
 	var (
-		e = &event{
+		nodeName   = "test-node"
+		instanceID = "i-xxx"
+		eniID      = "test-eni"
+		subnetID   = "test-subnet"
+		e          = &event{
 			node: &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-node",
+					Name: nodeName,
 				},
 			},
-			enis: []*enisdk.Eni{&enisdk.Eni{
-				EniId: "eni-test",
+			enis: []*enisdk.Eni{{
+				EniId:    eniID,
+				SubnetId: subnetID,
 			}},
 			passive: false,
 			ctx:     suite.ctx,
+		}
+		subnetInfo = &vpc.Subnet{
+			AvailableIp: 10,
+		}
+		eniInfo = &enisdk.Eni{
+			PrivateIpSet: []enisdk.PrivateIp{
+				{
+					Primary:          true,
+					PrivateIpAddress: "192.168.1.100",
+				},
+				{
+					Primary:          false,
+					PrivateIpAddress: "192.168.1.107",
+				},
+			},
 		}
 		ipam = suite.ipam
 	)
@@ -1711,62 +1857,80 @@ func (suite *IPAMTest) Test_handleIncreasePoolEvent() {
 	ipam.batchAddIPNum = 1
 	ipam.idleIPPoolMinSize = 2
 
-	suite.ipam.datastore.AddNodeToStore("test-node", "i-xxx")
-	suite.ipam.datastore.AddENIToStore("test-node", "eni-test")
-	suite.ipam.datastore.AddPrivateIPToStore("test-node", "eni-test", "192.168.1.107", false)
+	err := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddENIToStore(nodeName, eniID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddPrivateIPToStore(nodeName, eniID, "192.168.1.107", false)
+	suite.Assert().Nil(err)
 
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(fmt.Errorf("RateLimit")).AnyTimes()
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(0), 1, "eni-test").Return([]string{"192.168.1.108"}, nil).AnyTimes()
+	// assertEniCanIncreasePool
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil)
+
+	_, nodeErr := suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "8",
+			},
+		},
+	}, metav1.CreateOptions{})
+	suite.Assert().Nil(nodeErr)
+
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
+
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().StatENI(suite.ctx, eniID).Return(eniInfo, nil)
+	// end of assertEniCanIncreasePool
+
+	// batchAllocateIPWithBackoff
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().
+		BatchAddPrivateIP(suite.ctx, gomock.Len(0), ipam.batchAddIPNum, eniID).
+		Return([]string{"192.168.1.108"}, nil).AnyTimes()
 
 	ch := make(chan *event, 1)
 	ch <- e
 	close(ch)
-	ipam.handleIncreasePoolEvent(suite.ctx, e.node, ch)
+
+	ips, err := suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(1, len(ips))
+
+	ipam.handleIncreasePoolEvent(suite.ctx, nodeName, ch)
+
+	ips, err = suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(2, len(ips))
 }
 
-func (suite *IPAMTest) Test_handleIncreasePoolEventError() {
+// exception case
+func (suite *IPAMTest) Test_handleIncreasePoolEvent_canIgnoreEvent() {
 	var (
-		e = &event{
+		nodeName   = "test-node"
+		instanceID = "i-xxx"
+		eniID      = "test-eni"
+		subnetID   = "test-subnet"
+		activeEvt  = &event{
 			node: &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-node",
+					Name: nodeName,
 				},
 			},
-			enis: []*enisdk.Eni{&enisdk.Eni{
-				EniId: "eni-test",
+			enis: []*enisdk.Eni{{
+				EniId:    eniID,
+				SubnetId: subnetID,
 			}},
 			passive: false,
 			ctx:     suite.ctx,
 		}
-		ipam = suite.ipam
-	)
-
-	ipam.batchAddIPNum = 1
-	ipam.idleIPPoolMinSize = 2
-
-	suite.ipam.datastore.AddNodeToStore("test-node", "i-xxx")
-	suite.ipam.datastore.AddENIToStore("test-node", "eni-test")
-	suite.ipam.datastore.AddPrivateIPToStore("test-node", "eni-test", "192.168.1.107", false)
-
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DeletePrivateIP(gomock.Any(), gomock.Any(), gomock.Any()).Return(fmt.Errorf("RateLimit")).AnyTimes()
-	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(gomock.Any(), gomock.Len(0), 1, "eni-test").Return([]string{}, fmt.Errorf("SubnetHasNoMoreIpException")).AnyTimes()
-
-	ch := make(chan *event, 1)
-	ch <- e
-	close(ch)
-	ipam.handleIncreasePoolEvent(suite.ctx, e.node, ch)
-}
-
-func (suite *IPAMTest) Test_handleIncreasePoolEventContinue() {
-	var (
-		e = &event{
+		passiveEvt = &event{
 			node: &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-node",
+					Name: nodeName,
 				},
 			},
-			enis: []*enisdk.Eni{&enisdk.Eni{
-				EniId: "eni-test",
+			enis: []*enisdk.Eni{{
+				EniId:    eniID,
+				SubnetId: subnetID,
 			}},
 			passive: true,
 			ctx:     suite.ctx,
@@ -1775,25 +1939,285 @@ func (suite *IPAMTest) Test_handleIncreasePoolEventContinue() {
 	)
 
 	ipam.batchAddIPNum = 1
+	ipam.idleIPPoolMinSize = 1
+
+	err := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddENIToStore(nodeName, eniID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddPrivateIPToStore(nodeName, eniID, "192.168.1.107", false)
+	suite.Assert().Nil(err)
+
+	ch := make(chan *event, 10)
+	ch <- passiveEvt
+	ch <- activeEvt
+	close(ch)
+
+	ips, err := suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(1, len(ips))
+
+	ipam.handleIncreasePoolEvent(suite.ctx, nodeName, ch)
+
+	ips, err = suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(1, len(ips))
+}
+
+func (suite *IPAMTest) Test_handleIncreasePoolEvent_eniCannotIncreasePool() {
+	var (
+		nodeName   = "test-node"
+		instanceID = "i-xxx"
+		eniID      = "test-eni"
+		subnetID   = "test-subnet"
+		e          = &event{
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+				},
+			},
+			enis: []*enisdk.Eni{{
+				EniId:    eniID,
+				SubnetId: subnetID,
+			}},
+			passive: false,
+			ctx:     suite.ctx,
+		}
+		subnetInfo = &vpc.Subnet{
+			AvailableIp: 0,
+		}
+		eniInfo = &enisdk.Eni{
+			PrivateIpSet: []enisdk.PrivateIp{
+				{
+					Primary:          true,
+					PrivateIpAddress: "192.168.1.100",
+				},
+				{
+					Primary:          false,
+					PrivateIpAddress: "192.168.1.107",
+				},
+			},
+		}
+		ipam = suite.ipam
+	)
+
+	ipam.batchAddIPNum = 1
 	ipam.idleIPPoolMinSize = 2
 
-	suite.ipam.datastore.AddNodeToStore("test-node", "i-xxx")
-	suite.ipam.datastore.AddENIToStore("test-node", "eni-test")
-	suite.ipam.datastore.AddPrivateIPToStore("test-node", "eni-test", "192.168.1.107", false)
+	err := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddENIToStore(nodeName, eniID)
+	suite.Assert().Nil(err)
+	err = suite.ipam.datastore.AddPrivateIPToStore(nodeName, eniID, "192.168.1.107", false)
+	suite.Assert().Nil(err)
 
-	ch := make(chan *event, 1)
-	ch <- e
-	close(ch)
-	ipam.handleIncreasePoolEvent(suite.ctx, e.node, ch)
+	ch := make(chan *event)
+	go ipam.handleIncreasePoolEvent(suite.ctx, nodeName, ch)
 
-	e.passive = false
-	ipam.idleIPPoolMinSize = 0
-	ch = make(chan *event, 1)
+	// 1. subnet has no available ip
+	// 1.1 prepare
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil)
+
+	// 1.2 start
 	ch <- e
+
+	// 1.3 wait then check
+	time.Sleep(10 * time.Millisecond)
+	ips, err := suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(1, len(ips))
+
+	// 2. node cannot attach more ip due to memory
+	// 2.1 prepare
+	subnetInfo.AvailableIp = 2
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil)
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().StatENI(suite.ctx, eniID).Return(eniInfo, nil)
+
+	suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "1",
+			},
+		},
+	}, metav1.CreateOptions{})
+
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
+
+	// 2.2 start
+	ch <- e
+
+	// 2.3 wait then check
+	time.Sleep(10 * time.Millisecond)
+	ips, err = suite.ipam.datastore.GetUnassignedPrivateIPByNode(nodeName)
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(1, len(ips))
+
 	close(ch)
-	ipam.handleIncreasePoolEvent(suite.ctx, e.node, ch)
 }
 
 func TestIPAM(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(IPAMTest))
+}
+
+func getDeadline() time.Time {
+	return time.Now().Add(allocateIPTimeout)
+}
+
+func (suite *IPAMTest) Test_allocateIPForFixedIPPod() {
+	var (
+		nodeName    = "test-node"
+		instanceID  = "i-xxxx"
+		containerID = "test-con"
+		oldEniID    = "test-eni-1"
+		newEniID    = "test-eni-2"
+		subnetID    = "test-subnet"
+		ip          = "111.111.222.222"
+		wepName     = "test-pod"
+		node        = &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+			},
+		}
+		pod  = &corev1.Pod{}
+		enis = []*enisdk.Eni{
+			{
+				EniId:    newEniID,
+				SubnetId: subnetID,
+				ZoneName: "zoneF",
+			},
+		}
+		wep = &v1alpha1.WorkloadEndpoint{
+			TypeMeta: metav1.TypeMeta{},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      wepName,
+				Namespace: v1.NamespaceDefault,
+			},
+			Spec: networkingv1alpha1.WorkloadEndpointSpec{
+				Node:  nodeName,
+				ENIID: oldEniID,
+			},
+		}
+		subnetInfo = &vpc.Subnet{
+			AvailableIp: 10,
+		}
+	)
+	// init datastore
+	storeErr := suite.ipam.datastore.AddNodeToStore(nodeName, instanceID)
+	suite.Assert().Nil(storeErr)
+
+	// allocateFixedIPFromCloud
+	gomock.InOrder(
+		suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().
+			DeletePrivateIP(suite.ctx, gomock.Any(), oldEniID).Return(fmt.Errorf("RateLimit")),
+
+		suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().
+			BatchAddPrivateIP(gomock.Any(), gomock.Len(1), 0, newEniID).
+			Return([]string{}, fmt.Errorf("RateLimit")),
+	)
+
+	// assertEniCanIncreasePool
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(suite.ctx, subnetID).Return(subnetInfo, nil).Times(2)
+
+	_, nodeErr := suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "8",
+			},
+		},
+	}, metav1.CreateOptions{})
+	suite.Assert().Nil(nodeErr)
+
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().StatENI(suite.ctx, newEniID).Return(enis[0], nil).Times(2)
+	// end of assertEniCanIncreasePool
+
+	// handleIncreasePoolEvent
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().BatchAddPrivateIP(suite.ctx, gomock.Len(0), 1, newEniID).
+		Return([]string{ip}, nil)
+
+	_, wepErr := suite.ipam.crdClient.CceV1alpha1().WorkloadEndpoints(v1.NamespaceDefault).Create(context.TODO(),
+		&v1alpha1.WorkloadEndpoint{
+			TypeMeta: metav1.TypeMeta{},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: wepName,
+			},
+			Spec: v1alpha1.WorkloadEndpointSpec{
+				SubnetID: subnetID,
+				IP:       "10.1.1.1",
+				Type:     ipamgeneric.WepTypeSts,
+			},
+		}, metav1.CreateOptions{})
+	suite.Assert().Nil(wepErr)
+
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
+	newWep, err := suite.ipam.allocateIPForFixedIPPod(suite.ctx, node, pod, containerID, enis, wep, getDeadline())
+	suite.Assert().Nil(err)
+	suite.Assert().Equal(ip, newWep.Spec.IP)
+	suite.Assert().Equal(newEniID, newWep.Spec.ENIID)
+}
+
+func (suite *IPAMTest) Test_checkIdleIPPool() {
+	var (
+		nodeWithEni    = "test-node-1"
+		instanceID1    = "test-inst-1"
+		nodeWithoutEni = "test-node-2"
+		instanceID2    = "test-inst-2"
+		subnetID       = "test-subnet"
+		subnetInfo     = &vpc.Subnet{
+			AvailableIp: 0,
+		}
+	)
+	// init node
+	_, nodeErr1 := suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.LabelInstanceType: "BCC",
+			},
+			Name: nodeWithEni,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "8",
+			},
+		},
+	}, metav1.CreateOptions{})
+	suite.Assert().Nil(nodeErr1)
+
+	_, nodeErr2 := suite.ipam.kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.LabelInstanceType: "BCC",
+			},
+			Name: nodeWithoutEni,
+			Annotations: map[string]string{
+				"cce.io/max-ip-per-eni": "8",
+			},
+		},
+	}, metav1.CreateOptions{})
+	suite.Assert().Nil(nodeErr2)
+
+	waitForCacheSync(suite.ipam.kubeInformer, suite.ipam.crdInformer)
+	// init datastore
+	storeErr := suite.ipam.datastore.AddNodeToStore(nodeWithEni, instanceID1)
+	suite.Assert().Nil(storeErr)
+	storeErr2 := suite.ipam.datastore.AddNodeToStore(nodeWithoutEni, instanceID2)
+	suite.Assert().Nil(storeErr2)
+	// init eni cache
+	suite.ipam.eniCache.Append(nodeWithEni, &enisdk.Eni{
+		EniId:    "eni-test",
+		SubnetId: subnetID,
+	})
+	// mock cloud
+	// assertEniCanIncreasePool
+	suite.ipam.cloud.(*mockcloud.MockInterface).EXPECT().DescribeSubnet(gomock.Any(), subnetID).
+		Return(subnetInfo, nil).AnyTimes()
+
+	_, err := suite.ipam.checkIdleIPPool()
+	suite.Assert().Nil(err)
+	// wait handleIncreasePoolEvent finish
+	time.Sleep(10 * time.Millisecond)
+	_, ok1 := suite.ipam.increasePoolEventChan[nodeWithEni]
+	suite.Assert().True(ok1)
+	_, ok2 := suite.ipam.increasePoolEventChan[nodeWithoutEni]
+	suite.Assert().False(ok2)
 }

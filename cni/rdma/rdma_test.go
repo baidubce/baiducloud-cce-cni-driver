@@ -60,14 +60,14 @@ import (
 
 var (
 	stdinData = `
-{
-    "cniVersion":"0.3.1",
-    "name":"cce-cni",
-    "type":"rdma",
-	"ipam":{
-        "endpoint":"172.25.66.38:80"
-    }
-}`
+ {
+	 "cniVersion":"0.3.1",
+	 "name":"cce-cni",
+	 "type":"rdma",
+	 "ipam":{
+		 "endpoint":"172.25.66.38:80"
+	 }
+ }`
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
 )
 
@@ -161,7 +161,7 @@ func Test_cmdDel(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "异常流程",
+			name: "异常流程1",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
@@ -175,6 +175,39 @@ func Test_cmdDel(t *testing.T) {
 				grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 				rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient)
 				cniBackendClient.EXPECT().ReleaseIP(gomock.Any(), gomock.Any()).Return(&allocReply, errors.New("release ip error"))
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "异常流程2",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				ns.EXPECT().WithNetNSPath(gomock.Any(), gomock.Any()).Return(errors.New("nspath error for cmd del unit testrelease"))
 
 				return fields{
 					ctrl:    ctrl,
@@ -294,6 +327,63 @@ func Test_cmdAdd(t *testing.T) {
 				//nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
 				ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil)
 				netns.EXPECT().Fd().Return(uintptr(10))
+				netns.EXPECT().Do(gomock.Any()).Return(nil).AnyTimes()
+				netns.EXPECT().Close().Return(nil)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					exec:    &fakeExec,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "异常流程",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				fakeCmd := fakeexec.FakeCmd{
+					CombinedOutputScript: []fakeexec.FakeAction{
+						func() ([]byte, []byte, error) {
+							return []byte("ens11"), nil, errors.New("get roce device error for unit test")
+						},
+					},
+				}
+				fakeExec := getFakeExecTemplate(&fakeCmd)
+				netns := mocknetns.NewMockNetNS(ctrl)
+
+				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
+				nlink.EXPECT().AddrList(gomock.Any(), gomock.Any()).Return([]netlink.Addr{
+					{
+						IPNet: &net.IPNet{
+							IP:   net.IPv4(25, 0, 0, 45),
+							Mask: net.CIDRMask(24, 32),
+						},
+					},
+				}, nil).AnyTimes()
+
+				//nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
+				ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil)
 				netns.EXPECT().Do(gomock.Any()).Return(nil).AnyTimes()
 				netns.EXPECT().Close().Return(nil)
 
@@ -465,8 +555,10 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				fakeCmd := fakeexec.FakeCmd{
 					CombinedOutputScript: []fakeexec.FakeAction{
 						func() ([]byte, []byte, error) { return []byte("ens11"), nil, nil },
+						func() ([]byte, []byte, error) { return []byte("ens12"), nil, nil },
 					},
 					RunScript: []fakeexec.FakeAction{
+						func() ([]byte, []byte, error) { return nil, nil, nil },
 						func() ([]byte, []byte, error) { return nil, nil, nil },
 					},
 				}
@@ -488,8 +580,8 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 				nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil)
+				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil).AnyTimes()
+				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil).AnyTimes()
 				netutil.EXPECT().InterfaceByName(gomock.Any()).Return(&net.Interface{}, nil)
 				netutil.EXPECT().GratuitousArpOverIface(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -651,8 +743,10 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				fakeCmd := fakeexec.FakeCmd{
 					CombinedOutputScript: []fakeexec.FakeAction{
 						func() ([]byte, []byte, error) { return []byte("ens11"), nil, nil },
+						func() ([]byte, []byte, error) { return []byte("ens12"), nil, nil },
 					},
 					RunScript: []fakeexec.FakeAction{
+						func() ([]byte, []byte, error) { return nil, nil, nil },
 						func() ([]byte, []byte, error) { return nil, nil, nil },
 					},
 				}
@@ -679,8 +773,8 @@ func Test_rdmaPlugin_setupMacvlanNetworkInfo(t *testing.T) {
 				nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "ens11"}}, nil).AnyTimes()
 				nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil)
 				nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil)
-				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil)
+				nlink.EXPECT().RuleDel(gomock.Any()).Return(nil).AnyTimes()
+				nlink.EXPECT().RuleAdd(gomock.Any()).Return(nil).AnyTimes()
 				netutil.EXPECT().InterfaceByName(gomock.Any()).Return(&net.Interface{}, errors.New("get interface by name error"))
 				//netutil.EXPECT().GratuitousArpOverIface(gomock.Any(), gomock.Any()).Return(nil)
 

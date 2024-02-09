@@ -37,17 +37,17 @@ var (
 )
 
 var (
-	UnknownNodeError = errors.New("datastore: unknown Node")
+	ErrUnknownNode = errors.New("datastore: unknown Node")
 
 	UnknownSubnetError = errors.New("datastore: unknown subnet")
 
-	UnknownIPError = errors.New("datastore: unknown IP")
+	ErrUnknownIP = errors.New("datastore: unknown IP")
 
-	EmptyNodeError = errors.New("datastore: empty Node")
+	ErrEmptyNode = errors.New("datastore: empty Node")
 
 	EmptySubnetError = errors.New("datastore: empty subnet")
 
-	NoAvailableIPAddressInDataStoreError = errors.New("no available ip address in datastore")
+	ErrNoAvailableIPAddressInDataStore = errors.New("no available ip address in datastore")
 
 	NoAvailableIPAddressInSubnetBucketError = errors.New("no available ip address in subnet bucket")
 )
@@ -119,7 +119,7 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, string, error) {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return "", "", UnknownNodeError
+		return "", "", ErrUnknownNode
 	}
 
 	for _, sbucket := range instance.pool {
@@ -142,7 +142,7 @@ func (ds *DataStore) AllocatePodPrivateIP(node string) (string, string, error) {
 		return addr.Address, addr.SubnetID, nil
 	}
 
-	return "", "", NoAvailableIPAddressInDataStoreError
+	return "", "", ErrNoAvailableIPAddressInDataStore
 }
 
 func (ds *DataStore) AllocatePodPrivateIPBySubnet(node, subnetID string) (string, string, error) {
@@ -151,7 +151,7 @@ func (ds *DataStore) AllocatePodPrivateIPBySubnet(node, subnetID string) (string
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return "", "", UnknownNodeError
+		return "", "", ErrUnknownNode
 	}
 
 	sbucket, ok := instance.pool[subnetID]
@@ -180,7 +180,7 @@ func (ds *DataStore) ReleasePodPrivateIP(node, subnetID, ip string) error {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	sbucket, ok := instance.pool[subnetID]
@@ -205,12 +205,12 @@ func (ds *DataStore) ReleasePodPrivateIP(node, subnetID, ip string) error {
 		return nil
 	}
 
-	return UnknownIPError
+	return ErrUnknownIP
 }
 
 func (ds *DataStore) AddPrivateIPToStore(node, subnetID, ipAddress string, assigned bool) error {
 	if node == "" {
-		return EmptyNodeError
+		return ErrEmptyNode
 	}
 
 	if subnetID == "" {
@@ -222,7 +222,7 @@ func (ds *DataStore) AddPrivateIPToStore(node, subnetID, ipAddress string, assig
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	_, ok = instance.pool[subnetID]
@@ -272,7 +272,7 @@ func (ds *DataStore) DeletePrivateIPFromStore(node, subnetID, ipAddress string) 
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return UnknownNodeError
+		return ErrUnknownNode
 	}
 
 	sbucket, ok := instance.pool[subnetID]
@@ -305,7 +305,7 @@ func (ds *DataStore) DeletePrivateIPFromStore(node, subnetID, ipAddress string) 
 
 func (ds *DataStore) AddNodeToStore(node, instanceID string) error {
 	if node == "" {
-		return EmptyNodeError
+		return ErrEmptyNode
 	}
 
 	ds.lock.Lock()
@@ -355,7 +355,7 @@ func (ds *DataStore) GetNodeStats(node string) (int, int, error) {
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return 0, 0, UnknownNodeError
+		return 0, 0, ErrUnknownNode
 	}
 
 	return instance.total, instance.assigned, nil
@@ -367,7 +367,7 @@ func (ds *DataStore) GetSubnetBucketStats(node, subnetID string) (int, int, erro
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return 0, 0, UnknownNodeError
+		return 0, 0, ErrUnknownNode
 	}
 
 	sbucket, ok := instance.pool[subnetID]
@@ -384,7 +384,7 @@ func (ds *DataStore) GetUnassignedPrivateIPByNode(node string) ([]string, error)
 
 	instance, ok := ds.store[node]
 	if !ok {
-		return nil, UnknownNodeError
+		return nil, ErrUnknownNode
 	}
 
 	var result []string

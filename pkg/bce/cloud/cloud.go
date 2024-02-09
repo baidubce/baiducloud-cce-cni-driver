@@ -21,6 +21,7 @@ import (
 	"os"
 	"time"
 
+	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"github.com/baidubce/bce-sdk-go/bce"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
@@ -101,8 +102,9 @@ func New(
 	}
 	bccClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
-	eniClient := &eni.Client{
-		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
+	// todo iaas sdk 暂未支持过滤 eri 和 eni，暂时自行封装一层支持，待后续 sdk 支持过滤 eri 和 eni 后，去除这部分封装
+	eniClient := &eniExt.Client{
+		Client: &eni.Client{BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx))},
 	}
 	eniClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
@@ -124,7 +126,7 @@ func New(
 	return c, nil
 }
 
-func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
 
 	isTruncated := true
@@ -140,8 +142,39 @@ func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni,
 			Marker:     nextMarker,
 		}
 
-		res, err := c.eniClient.ListEni(listArgs)
+		res, err := c.eniClient.ListEnis(listArgs)
 		exportMetric("ListENI", t, err)
+		if err != nil {
+			return nil, err
+		}
+
+		enis = append(enis, res.Eni...)
+
+		nextMarker = res.NextMarker
+		isTruncated = res.IsTruncated
+	}
+
+	return enis, nil
+}
+
+func (c *Client) ListERIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+	var enis []eni.Eni
+
+	isTruncated := true
+	nextMarker := ""
+
+	for isTruncated {
+		t := time.Now()
+
+		listArgs := &eni.ListEniArgs{
+			VpcId:      args.VpcId,
+			Name:       args.Name,
+			InstanceId: args.InstanceId,
+			Marker:     nextMarker,
+		}
+
+		res, err := c.eniClient.ListEris(listArgs)
+		exportMetric("ListERI", t, err)
 		if err != nil {
 			return nil, err
 		}

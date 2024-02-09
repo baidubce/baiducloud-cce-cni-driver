@@ -17,6 +17,7 @@ enum IPType {
     BBCPrimaryENIMultiIPType = 1;
     CrossVPCENIIPType = 2;
     RoceENIMultiIPType = 3;
+    ERIENIMultiIPType = 4;
 }
 
 message AllocateIPRequest {

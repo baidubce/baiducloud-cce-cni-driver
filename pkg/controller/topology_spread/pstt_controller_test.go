@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
-	cache "k8s.io/client-go/tools/cache"
 
 	networkv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
@@ -38,20 +36,18 @@ func (suite *topologySpreadTableControllerTester) SetupTest() {
 }
 
 func (suite *topologySpreadTableControllerTester) assert() {
-	suite.waitForCache()
+	stopchan := make(chan struct{})
+	defer close(stopchan)
+	suite.psttc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreadTables()
+	suite.psttc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads()
+	suite.psttc.crdInformer.Start(stopchan)
+	suite.psttc.crdInformer.WaitForCacheSync(stopchan)
 	err := suite.psttc.sync(suite.key)
 	if suite.wantErr {
 		suite.Error(err, "sync error is not match")
 	} else {
 		suite.NoError(err, "sync have error")
 	}
-}
-
-func (suite *topologySpreadTableControllerTester) waitForCache() {
-	tsc := suite.psttc
-	pstsInfomer := tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()
-	psttInfomer := tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreadTables().Informer()
-	cache.WaitForNamedCacheSync("topology-spread-controller", wait.NeverStop, pstsInfomer.HasSynced, psttInfomer.HasSynced)
 }
 
 func (suite *topologySpreadTableControllerTester) TestTSCRun() {
@@ -73,8 +69,12 @@ func (suite *topologySpreadTableControllerTester) TestCreatePSTS() {
 
 	suite.psttc.crdClient.CceV1alpha1().PodSubnetTopologySpreadTables(corev1.NamespaceDefault).Create(context.TODO(), pstt, metav1.CreateOptions{})
 
-	suite.assert()
-	suite.waitForCache()
+	stopchan := make(chan struct{})
+	defer close(stopchan)
+	suite.psttc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreadTables()
+	suite.psttc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads()
+	suite.psttc.crdInformer.Start(stopchan)
+	suite.psttc.crdInformer.WaitForCacheSync(stopchan)
 
 	suite.psttc.queue.Add(corev1.NamespaceDefault)
 	suite.psttc.processNextWorkItem()
@@ -101,7 +101,6 @@ func (suite *topologySpreadTableControllerTester) TestSyncPSTSStatus() {
 
 	suite.assert()
 
-	suite.waitForCache()
 	newpstt, _ := suite.psttc.crdClient.CceV1alpha1().PodSubnetTopologySpreadTables(corev1.NamespaceDefault).Get(context.Background(), "pstt-test", metav1.GetOptions{})
 	suite.Assert().Len(newpstt.Status, 1, "len of pstt statuss")
 }
@@ -137,7 +136,6 @@ func (suite *topologySpreadTableControllerTester) TestCleanOldPSTS() {
 
 	suite.assert()
 
-	suite.waitForCache()
 	newpstt, _ := suite.psttc.crdClient.CceV1alpha1().PodSubnetTopologySpreadTables(corev1.NamespaceDefault).Get(context.Background(), "pstt-test", metav1.GetOptions{})
 	suite.Assert().Len(newpstt.Status, 1, "len of pstt statuss")
 }

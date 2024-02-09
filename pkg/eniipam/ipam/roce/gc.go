@@ -3,9 +3,9 @@ package roce
 import (
 	"context"
 	"fmt"
-
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
+	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -14,7 +14,7 @@ import (
 )
 
 func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
-	log.Infof(context.TODO(), "start gc by roce ipam,gcPeriod is %v", ipam.gcPeriod)
+	log.Infof(context.TODO(), "start gc by roce ipam, gcPeriod is %v", ipam.gcPeriod)
 	err := wait.PollImmediateUntil(wait.Jitter(ipam.gcPeriod, 0.5), func() (bool, error) {
 		ctx := log.NewContext()
 
@@ -42,7 +42,8 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 			return false, nil
 		}
 
-		err = ipam.gcLeakedIP(ctx, mwepList)
+		// release ip when ip not in mwep
+		err = ipam.gcLeakedIP(ctx)
 		if err != nil {
 			return false, nil
 		}
@@ -56,80 +57,79 @@ func (ipam *IPAM) gc(stopCh <-chan struct{}) error {
 	return nil
 }
 
-type multiIPWorkloadInfo struct {
-	PodName   string
-	EniID     string
-	Namespace string
-}
-
-func (ipam *IPAM) gcLeakedIP(ctx context.Context, mwepList []*v1alpha1.MultiIPWorkloadEndpoint) error {
-	mwepIPMap := make(map[string]multiIPWorkloadInfo)
-	if len(mwepList) == 0 {
-		log.Infof(context.TODO(), "list nodeCache count is %d ", len(ipam.nodeCache))
-		for instance, _ := range ipam.nodeCache {
-			result, err := ipam.cloud.GetHPCEniID(ctx, instance)
-			if err != nil {
-				return err
-			}
-			if err = ipam.makeHpcEniIP(ctx, result.Result, mwepIPMap); err != nil {
-				return err
-			}
-		}
-	}
-
-	for _, mwep := range mwepList {
-		for _, spec := range mwep.Spec {
-			if _, exist := mwepIPMap[spec.IP]; !exist {
-				mwepInfo := multiIPWorkloadInfo{
-					EniID:     spec.EniID,
-					PodName:   mwep.Name,
-					Namespace: mwep.Namespace,
-				}
-				mwepIPMap[spec.IP] = mwepInfo
-			}
-		}
-	}
-
-	for _, mwep := range mwepList {
-		result, err := ipam.cloud.GetHPCEniID(ctx, mwep.InstanceID)
+// release ip when ip not in mwep
+func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
+	for instanceID := range ipam.nodeCache {
+		result, err := ipam.cloud.GetHPCEniID(ctx, instanceID)
 		if err != nil {
 			log.Errorf(ctx, "gc getHPCEniID : get hPCEni privateIP has error %v", err)
 			return err
 		}
-		if err = ipam.makeHpcEniIP(ctx, result.Result, mwepIPMap); err != nil {
-			log.Errorf(ctx, "gc makeHpcEniIP : make hpcEni privateIP has error %v", err)
-			return err
+		// get mwep by instanceID
+		ipSet, ipErr := ipam.getIPSetForNode(ctx, instanceID)
+		if ipErr != nil {
+			log.Infof(ctx, "get ip set for %s failed: %s", instanceID, ipErr)
+			continue
 		}
+		// delete eri ip when ip not in mwep
+		ipam.gcOneNodeLeakedIP(ctx, result.Result, ipSet)
 	}
+
 	return nil
 }
 
-func (ipam *IPAM) makeHpcEniIP(ctx context.Context, result []hpc.Result, mwepIPMap map[string]multiIPWorkloadInfo) error {
-	for _, r := range result {
-		for _, ips := range r.PrivateIPSet {
-			if err := ipam.checkIPExist(ctx, mwepIPMap, ips.PrivateIPAddress, ips.Primary, r.EniID); err != nil {
-				log.Errorf(ctx, "gc checkIPExist : check IP exist has error %v", err)
-				return err
+func (ipam *IPAM) getIPSetForNode(ctx context.Context, instanceID string) (map[string]struct{}, error) {
+	// list mwep
+	mwepSelector, selectorErr := mwepListerSelector()
+	if selectorErr != nil {
+		log.Errorf(ctx, "make mwep lister selector has error: %v", selectorErr)
+		return nil, selectorErr
+	}
+	mwepList, mwepErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().List(mwepSelector)
+	if mwepErr != nil {
+		log.Errorf(ctx, "gc: error list mwep in cluster: %v", mwepErr)
+		return nil, mwepErr
+	}
+	log.Infof(ctx, "list mwepList count is %d ", len(mwepList))
+
+	// collect ip for instanceID
+	ipSet := make(map[string]struct{})
+	for _, mwep := range mwepList {
+		if mwep.Type != ipamgeneric.MwepTypeRoce {
+			continue
+		}
+		if mwep.InstanceID != instanceID {
+			continue
+		}
+		for _, spec := range mwep.Spec {
+			if _, exist := ipSet[spec.IP]; exist {
+				continue
 			}
+			ipSet[spec.IP] = struct{}{}
 		}
 	}
-	return nil
+	return ipSet, nil
 }
 
-func (ipam *IPAM) checkIPExist(ctx context.Context, mwepIPMap map[string]multiIPWorkloadInfo, eniPrivateIP string, primary bool, eniID string) error {
-	if info, exist := mwepIPMap[eniPrivateIP]; !exist && !primary {
-		_, err := ipam.kubeClient.CoreV1().Pods(info.Namespace).Get(ctx, info.PodName, metav1.GetOptions{})
-		if err != nil {
-			if err := ipam.deleteRocePrivateIP(ctx, eniID, eniPrivateIP); err != nil {
-				log.Errorf(ctx, "gc deleteRocePrivateIP : failed to delete private IP %v on %v for leaked pod: %v", eniPrivateIP, eniID, err)
-				return err
+func (ipam *IPAM) gcOneNodeLeakedIP(ctx context.Context, resultList []hpc.Result, ipSet map[string]struct{}) {
+	for _, hpcResult := range resultList {
+		for _, privateIP := range hpcResult.PrivateIPSet {
+			if privateIP.Primary {
+				continue
 			}
-			log.Infof(ctx, "gc deleteRocePrivateIP: delete private IP %v on %v for leaked pod successfully", eniPrivateIP, eniID)
-		} else {
-			log.Errorf(ctx, "gc checkIPExist : failed to get %s/%s pod has error %v, eniID is %s", info.Namespace, info.PodName, err, eniID)
+			if _, exist := ipSet[privateIP.PrivateIPAddress]; exist {
+				continue
+			}
+			log.Infof(ctx, "gc: privateIP %s not found in mwep, try to delete privateIP",
+				privateIP.PrivateIPAddress)
+
+			// delete ip
+			if err := ipam.deleteRocePrivateIP(ctx, hpcResult.EniID, privateIP.PrivateIPAddress); err != nil {
+				log.Errorf(ctx, "gc: failed to delete privateIP %s on %s for not found in mwep: %s",
+					privateIP.PrivateIPAddress, hpcResult.EniID, err)
+			}
 		}
 	}
-	return nil
 }
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context, mwepList []*v1alpha1.MultiIPWorkloadEndpoint) error {

@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	WepTypeSts = "StatefulSet"
-	WepTypePod = "Pod"
+	WepTypeSts        = "StatefulSet"
+	WepTypePod        = "Pod"
+	WepTypeReuseIPPod = "ReuseIPPod"
 
 	WepLabelStsOwnerKey     = "cce.io/owner"
 	WepLabelSubnetIDKey     = "cce.io/subnet-id"
@@ -34,7 +35,8 @@ const (
 	WepFinalizer            = "cce-cni.cce.io"
 
 	IPPoolCreationSourceCNI  = "cce-cni"
-	MwepType                 = "roce"
+	MwepTypeRoce             = "roce"
+	MwepTypeERI              = "eri"
 	MwepLabelInstanceTypeKey = "cce.io/instance-type"
 	MwepFinalizer            = "cce-cni-roce.cce.io"
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653

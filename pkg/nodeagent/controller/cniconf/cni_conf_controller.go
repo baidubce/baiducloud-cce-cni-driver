@@ -40,8 +40,7 @@ import (
 	v1alpha1network "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
 	utilenv "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/env"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
-	roce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
-
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -53,6 +52,9 @@ const (
 	ipvlanKernelModuleName      = "ipvlan"
 	vethDefaultMTU              = 1500
 	forceRecreatePeriod         = 60 * time.Second
+
+	pluginsConfigKey = "plugins"
+	eriVifFeatures   = "elastic_rdma"
 )
 
 func New(
@@ -76,18 +78,26 @@ func New(
 	}
 }
 
-func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister) error {
+func (c *Controller) SyncNode(nodeKey string, _ corelisters.NodeLister) error {
 	ctx := log.NewContext()
 
 	return c.syncCNIConfig(ctx, nodeKey)
 }
 
 func (c *Controller) ReconcileCNIConfig() {
-	wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
+	ctx := log.NewContext()
+
+	waitErr := wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
 		ctx := log.NewContext()
-		c.syncCNIConfig(ctx, c.nodeName)
+		syncErr := c.syncCNIConfig(ctx, c.nodeName)
+		if syncErr != nil {
+			log.Errorf(ctx, "syncCNIConfig error: %s", syncErr)
+		}
 		return false, nil
 	})
+	if waitErr != nil {
+		log.Errorf(ctx, "execute syncCNIConfig error: %s", waitErr)
+	}
 }
 
 func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
@@ -137,13 +147,13 @@ func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
 	return nil
 }
 
-func (c *Controller) getCNIConfigTemplateFilePath(ctx context.Context) (string, error) {
+func (c *Controller) getCNIConfigTemplateFilePath(_ context.Context) (string, error) {
 	if c.config.AutoDetectConfigTemplateFile {
-		filepath, ok := CCETemplateFilePathMap[c.cniMode]
+		tplFilePath, ok := CCETemplateFilePathMap[c.cniMode]
 		if !ok {
 			return "", fmt.Errorf("cannot find cni template file for cni mode %v", c.cniMode)
 		}
-		return filepath, nil
+		return tplFilePath, nil
 	}
 
 	return c.config.CNIConfigTemplateFile, nil
@@ -243,16 +253,16 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
 	}
 
-	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
-		// get instance type from meta
-		if configData.InstanceType == "" {
-			insType, err := c.getNodeInstanceTypeEx(ctx)
-			if err != nil {
-				log.Errorf(ctx, "failed to get instance type via metadata: %v", err)
-			}
-			configData.InstanceType = string(insType)
+	// get instance type from meta
+	if configData.InstanceType == "" {
+		insType, err := c.getNodeInstanceTypeEx(ctx)
+		if err != nil {
+			log.Errorf(ctx, "failed to get instance type via metadata: %v", err)
 		}
+		configData.InstanceType = string(insType)
+	}
 
+	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
 		if configData.InstanceType == string(metadata.InstanceTypeExBCC) {
 			if c.cniMode == types.CCEModeBBCSecondaryIPIPVlan {
 				c.cniMode = types.CCEModeSecondaryIPIPVlan
@@ -367,21 +377,20 @@ func renderTemplate(ctx context.Context, tplContent string, dataObject *CNIConfi
 }
 
 func (c *Controller) patchCNIConfig(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	var str string
-	var err error
-
-	str = oriYamlStr
-
-	str, err = c.patchCNIConfigForMellanox8(ctx, str, dataObject)
-	if err != nil {
-		return oriYamlStr, err
+	if dataObject.InstanceType == string(metadata.InstanceTypeExBBC) {
+		return c.patchCNIConfigForMellanox8(ctx, oriYamlStr, dataObject)
 	}
 
-	return str, nil
+	if dataObject.InstanceType == string(metadata.InstanceTypeExBCC) {
+		return c.patchCNIConfigForERI(ctx, oriYamlStr, dataObject)
+	}
+
+	log.Errorf(ctx, "unknown instance type: %s", dataObject.InstanceType)
+	return oriYamlStr, nil
 }
 
 func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	var bHasRoCEMellanox8 bool = false
+	var bHasRoCEMellanox8 = false
 	var b bool
 	var key string
 	var err error
@@ -398,20 +407,20 @@ func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr 
 	//if etc...
 	//exit if no need to update
 	if !bHasRoCEMellanox8 {
-		log.Warningf(ctx, "No RoCE Mellanox8 Available. bHasRoCEMellanox8:[%t]", bHasRoCEMellanox8)
+		log.Infof(ctx, "No RoCE Mellanox8 Available. bHasRoCEMellanox8:[%t]", bHasRoCEMellanox8)
 		goto unchanged
 	}
 
 	//  log.Infof("arrPlugins:[%+v]", arrPlugins);
 	//do Update
-	m = make(map[string](interface{}))
+	m = make(map[string]interface{})
 	err = json.Unmarshal([]byte(oriYamlStr), &m)
 	if err != nil {
 		log.Errorf(ctx, "oriYamlStr: [%s]", oriYamlStr)
 		return "", err
 	}
 
-	key = "plugins" /** optional */
+	key = pluginsConfigKey /** optional */
 	if _, b = m[key]; !b {
 		log.Errorf(ctx, ": ", "")
 		goto unchanged
@@ -427,6 +436,7 @@ func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr 
 	mR["type"] = "rdma"
 	mR["ipam"] = make(map[string]interface{})
 	mR["ipam"].(map[string]interface{})["endpoint"] = dataObject.IPAMEndPoint
+	mR["instanceType"] = dataObject.InstanceType
 
 	//arrPlugins = append(arrPlugins, mR)
 	m[key] = append(m[key].([]interface{}), mR)
@@ -437,6 +447,62 @@ func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr 
 
 unchanged:
 	return oriYamlStr, nil
+}
+
+func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
+	// has eri
+	hasERI, eriErr := c.hasERI(ctx)
+	if eriErr != nil {
+		log.Errorf(ctx, "check eri failed: %s", eriErr)
+		return oriYamlStr, nil
+	}
+
+	if !hasERI {
+		return oriYamlStr, nil
+	}
+	// patch eri info to cni config
+	oriConfigMap := make(map[string]interface{})
+	jsonErr := json.Unmarshal([]byte(oriYamlStr), &oriConfigMap)
+	if jsonErr != nil {
+		log.Errorf(ctx, "invalid format oriYamlStr: [%s]", oriYamlStr)
+		return "", jsonErr
+	}
+	if _, ok := oriConfigMap[pluginsConfigKey]; !ok {
+		oriConfigMap[pluginsConfigKey] = make([]interface{}, 0)
+	}
+
+	eriConfigMap := map[string]interface{}{
+		"type": "eri",
+		"ipam": map[string]string{
+			"endpoint": dataObject.IPAMEndPoint,
+		},
+		"instanceType": dataObject.InstanceType,
+	}
+	oriConfigMap[pluginsConfigKey] = append(oriConfigMap[pluginsConfigKey].([]interface{}), eriConfigMap)
+
+	newConfig, jsonErr := json.MarshalIndent(&oriConfigMap, "", "  ")
+	return string(newConfig), nil
+}
+
+func (c *Controller) hasERI(ctx context.Context) (bool, error) {
+	// list network interface macs
+	macList, macErr := c.metaClient.ListMacs()
+	if macErr != nil {
+		return false, macErr
+	}
+
+	// check whether there is ERI
+	for _, macAddress := range macList {
+		vifFeatures, vifErr := c.metaClient.GetVifFeatures(macAddress)
+		if vifErr != nil {
+			log.Errorf(ctx, "get mac %s vif features failed: %s", macAddress, vifErr)
+			continue
+		}
+		if vifFeatures == eriVifFeatures {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func canUseIPVlan(kernelVersion *version.Version, kernelModules []string) bool {

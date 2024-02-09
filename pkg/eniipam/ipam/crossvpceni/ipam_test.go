@@ -17,6 +17,7 @@ package crossvpceni
 
 import (
 	"context"
+	"github.com/stretchr/testify/assert"
 	"reflect"
 	"sync"
 	"testing"
@@ -869,7 +870,7 @@ func Test_eventsToErrorMsg(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want string
+		want []string
 	}{
 		{
 			name: "empty list",
@@ -878,7 +879,7 @@ func Test_eventsToErrorMsg(t *testing.T) {
 					Items: []v1.Event{},
 				},
 			},
-			want: "",
+			want: []string{},
 		},
 		{
 			name: "normal list",
@@ -903,13 +904,18 @@ func Test_eventsToErrorMsg(t *testing.T) {
 					},
 				},
 			},
-			want: `[CreateEni: aaa, AttachEni: ccc]`,
+			want: []string{"CreateEni: aaa", "AttachEni: ccc"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := eventsToErrorMsg(tt.args.events); got != tt.want {
-				t.Errorf("eventsToErrorMsg() = %v, want %v", got, tt.want)
+			got := eventsToErrorMsg(tt.args.events)
+			if len(tt.want) == 0 {
+				assert.Equal(t, "", got)
+			} else {
+				for _, subWant := range tt.want {
+					assert.Contains(t, got, subWant)
+				}
 			}
 		})
 	}

@@ -76,10 +76,11 @@ var k8sClientSet = func(c *rest.Config) (kubernetes.Interface, error) {
 
 type NetConf struct {
 	types.NetConf
-	Mode       string    `json:"mode"`
-	KubeConfig string    `json:"kubeconfig"`
-	Mask       int       `json:"mask"`
-	IPAM       *IPAMConf `json:"ipam,omitempty"`
+	Mode         string    `json:"mode"`
+	KubeConfig   string    `json:"kubeconfig"`
+	Mask         int       `json:"mask"`
+	InstanceType string    `json:"instanceType"`
+	IPAM         *IPAMConf `json:"ipam,omitempty"`
 }
 
 type IPAMConf struct {
@@ -240,7 +241,7 @@ func (p *rdmaPlugin) cmdDel(args *skel.CmdArgs) error {
 	}
 
 	ipamClient := NewRoceIPAM(p.grpc, p.rpc)
-	resp, err := ipamClient.ReleaseIP(ctx, k8sArgs, n.IPAM.Endpoint)
+	resp, err := ipamClient.ReleaseIP(ctx, k8sArgs, n.IPAM.Endpoint, n.InstanceType)
 	if err != nil {
 		msg := fmt.Sprintf("failed to delete IP for pod (%v %v): %v", k8sArgs.K8S_POD_NAMESPACE, k8sArgs.K8S_POD_NAME, err)
 		log.Error(ctx, msg)
@@ -450,7 +451,7 @@ func (p *rdmaPlugin) setupMacvlan(ctx context.Context, conf *NetConf, master, if
 	if err != nil {
 		return err
 	}
-	log.Infof(ctx, "create macvlan dev: %s successfully,master:%s", ifName, master)
+	log.Infof(ctx, "create macvlan dev: %s ,mac: %s successfully,master:%s", ifName, macvlanInterface.Mac, master)
 
 	defer func() {
 		if err != nil {
@@ -553,7 +554,7 @@ func (p *rdmaPlugin) setupMacvlanNetworkInfo(ctx context.Context, conf *NetConf,
 	}
 	name, namespace := string(k8sArgs.K8S_POD_NAME), string(k8sArgs.K8S_POD_NAMESPACE)
 
-	resp, err := ipamClient.AllocIP(ctx, k8sArgs, conf.IPAM.Endpoint, masterMac)
+	resp, err := ipamClient.AllocIP(ctx, k8sArgs, conf.IPAM.Endpoint, masterMac, conf.InstanceType)
 	if err != nil {
 		log.Errorf(ctx, "failed to allocate IP: %v", err)
 		return err
@@ -575,7 +576,7 @@ func (p *rdmaPlugin) setupMacvlanNetworkInfo(ctx context.Context, conf *NetConf,
 
 	defer func() {
 		if err != nil {
-			_, err := ipamClient.ReleaseIP(ctx, k8sArgs, conf.IPAM.Endpoint)
+			_, err := ipamClient.ReleaseIP(ctx, k8sArgs, conf.IPAM.Endpoint, conf.InstanceType)
 			if err != nil {
 				log.Errorf(ctx, "rollback: failed to delete IP for pod (%v %v): %v", namespace, name, err)
 			}
@@ -605,6 +606,13 @@ func (p *rdmaPlugin) setupMacvlanNetworkInfo(ctx context.Context, conf *NetConf,
 		return err
 	}
 	log.Infof(ctx, "add rule table: %d,src ip: %s", rtStartIdx+idx, allocRespNetworkInfo.IP)
+
+	err = p.addOIFRule(ifName, 10000, rtStartIdx+idx)
+	if err != nil {
+		log.Errorf(ctx, "add from rule failed: %v", err)
+		return err
+	}
+	log.Infof(ctx, "add rule table: %d,oif: %s", rtStartIdx+idx, ifName)
 
 	_, cidr, err := net.ParseCIDR(addr.IPNet.String())
 	if err != nil {
@@ -645,6 +653,22 @@ func (p *rdmaPlugin) addFromRule(addr *net.IPNet, priority int, rtTable int) err
 	return nil
 }
 
+func (p *rdmaPlugin) addOIFRule(oifName string, priority int, rtTable int) error {
+	rule := netlink.NewRule()
+	rule.Table = rtTable
+	rule.Priority = priority
+	rule.OifName = oifName // ip rule add oif `oifName` lookup `table` prio `xxx`
+	err := p.nlink.RuleDel(rule)
+	if err != nil && !netlinkwrapper.IsNotExistError(err) {
+		return err
+	}
+
+	if err := p.nlink.RuleAdd(rule); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (p *rdmaPlugin) addRoute(idx, rtTable int, gw, src net.IP, dst *net.IPNet) error {
 	ro := &netlink.Route{
 		LinkIndex: idx,
@@ -672,6 +696,16 @@ func (p *rdmaPlugin) addRouteByCmd(ctx context.Context, dst *net.IPNet, ifName, 
 	cmd.SetStderr(os.Stderr)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("add route failed: %v", err)
+	}
+
+	strDefaultRoute := fmt.Sprintf("ip route add default dev %s via %s src %s table %d onlink", ifName, gw, srcIP, rtable)
+	log.Infof(ctx, "add route: %s", strDefaultRoute)
+	defaultCmd := p.exec.Command("ip", "route", "add", "default", "dev", ifName,
+		"via", gw, "src", srcIP, "table", strconv.Itoa(rtable), "onlink")
+	defaultCmd.SetStdout(os.Stdout)
+	defaultCmd.SetStderr(os.Stderr)
+	if err := defaultCmd.Run(); err != nil {
+		return fmt.Errorf("add default route failed: %v", err)
 	}
 
 	return nil

@@ -16,7 +16,7 @@
 package main
 
 import (
-	"net"
+	"fmt"
 	"syscall"
 	"testing"
 
@@ -96,6 +96,12 @@ var (
 }`
 
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
+
+	tenantEni = &netlink.Bond{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: "eni0",
+		},
+	}
 )
 
 func setupEnv(ctrl *gomock.Controller) (
@@ -167,64 +173,7 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
 					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
 					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, nil),
-					netns.EXPECT().Fd().Return(uintptr(10)),
-					nlink.EXPECT().LinkSetNsFd(gomock.Any(), gomock.Any()).Return(nil),
-					netns.EXPECT().Do(gomock.Any()).Return(nil),
-					types.EXPECT().PrintResult(gomock.Any(), gomock.Any()).Return(nil),
-					netns.EXPECT().Close().Return(nil),
-				)
-
-				return fields{
-					ctrl:    ctrl,
-					nlink:   nlink,
-					ns:      ns,
-					ipam:    ipam,
-					ip:      ip,
-					types:   types,
-					netutil: netutil,
-					rpc:     rpc,
-					grpc:    grpc,
-				}
-			}(),
-			args: args{
-				args: &skel.CmdArgs{
-					ContainerID: "xxxx",
-					Netns:       "/proc/100/ns/net",
-					IfName:      "eth0",
-					Args:        envArgs,
-					Path:        "/opt/cin/bin",
-					StdinData:   []byte(stdinData),
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "Chained Plugin 正常流程，等待网卡就绪重试",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
-
-				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
-				netns := mocknetns.NewMockNetNS(ctrl)
-				allocReply := rpcdef.AllocateIPReply{
-					IsSuccess: true,
-					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
-						CrossVPCENI: &rpcdef.CrossVPCENIReply{
-							IP:      "10.10.10.10",
-							Mac:     "ff:ff:ff:ff:ff:ff",
-							VPCCIDR: "10.0.0.0/8",
-						},
-					},
-				}
-
-				gomock.InOrder(
-					grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil),
-					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
-					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
-					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, net.ErrClosed),
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					netns.EXPECT().Fd().Return(uintptr(10)),
 					nlink.EXPECT().LinkSetNsFd(gomock.Any(), gomock.Any()).Return(nil),
 					netns.EXPECT().Do(gomock.Any()).Return(nil),
@@ -280,7 +229,7 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
 					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
 					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					netns.EXPECT().Fd().Return(uintptr(10)),
 					nlink.EXPECT().LinkSetNsFd(gomock.Any(), gomock.Any()).Return(nil),
 					netns.EXPECT().Do(gomock.Any()).Return(nil),
@@ -397,6 +346,120 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "Main plugin ，查找 eni 初次失败",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
+
+				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
+				netns := mocknetns.NewMockNetNS(ctrl)
+				allocReply := rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:      "10.10.10.10",
+							Mac:     "ff:ff:ff:ff:ff:ff",
+							VPCCIDR: "10.0.0.0/8",
+						},
+					},
+				}
+
+				gomock.InOrder(
+					grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil),
+					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
+					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
+					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
+					netns.EXPECT().Fd().Return(uintptr(10)),
+					nlink.EXPECT().LinkSetNsFd(gomock.Any(), gomock.Any()).Return(nil),
+					netns.EXPECT().Do(gomock.Any()).Return(nil),
+					types.EXPECT().PrintResult(gomock.Any(), gomock.Any()).Return(nil),
+					netns.EXPECT().Close().Return(nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+				}
+			}(),
+			args: args{
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinDataMainPlugin),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Main plugin ，查找 eni 一直失败",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
+
+				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
+				netns := mocknetns.NewMockNetNS(ctrl)
+				allocReply := rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:      "10.10.10.10",
+							Mac:     "ff:ff:ff:ff:ff:ff",
+							VPCCIDR: "10.0.0.0/8",
+						},
+					},
+				}
+
+				gomock.InOrder(
+					grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil),
+					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
+					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
+					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, fmt.Errorf("link with mac ff:ff:ff:ff:ff:ff not found")),
+					netns.EXPECT().Close().Return(nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+				}
+			}(),
+			args: args{
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinDataMainPlugin),
+				},
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -451,7 +514,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
 					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
@@ -501,7 +564,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
@@ -553,7 +616,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Veth{}, nil),
 					nlink.EXPECT().LinkDel(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
@@ -607,7 +670,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
@@ -661,7 +724,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
@@ -716,7 +779,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
@@ -773,7 +836,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Veth{}, nil),
 					nlink.EXPECT().LinkDel(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
@@ -829,7 +892,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
-					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(tenantEni, nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
 					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),

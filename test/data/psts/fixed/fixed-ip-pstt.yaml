@@ -5,13 +5,13 @@ metadata:
 spec:
 - name: fixed-ip-psts-test
   subnets:
-    sbn-mxxvp4gfdjyv:
+    sbn-gxz5a4f0dtzp:
       type: Fixed
       releaseStrategy: Never
       ipv4:
-      - 192.168.78.4
-      - 192.168.78.5
-      - 192.168.78.6
+      - 172.22.79.41
+      - 172.22.79.42
+      - 172.22.79.50
   priority: 10    
   selector:
     matchLabels:
@@ -20,14 +20,14 @@ spec:
       app: fixedIPApp
 - name: fixed-ip-psts-ttl
   subnets:
-    sbn-mxxvp4gfdjyv:
+    sbn-gxz5a4f0dtzp:
       type: Fixed
       releaseStrategy: TTL
       ipv4:
-      - 192.168.78.100
-      - 192.168.78.102
-      - 192.168.78.104
-      - 192.168.78.106
+      - 172.22.79.100
+      - 172.22.79.102
+      - 172.22.79.104
+      - 172.22.79.106
   priority: 10    
   selector:
     matchLabels:

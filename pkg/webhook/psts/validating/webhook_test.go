@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
+	k8sutilnet "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -62,8 +63,10 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeFixed,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeFixed,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						},
 						IPv4: []string{
 							"10.178.245.1",
 							"10.178.245.2",
@@ -79,8 +82,10 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeFixed,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeFixed,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyNever,
+						},
 						IPv4Range: []string{
 							"10.178.245.1/25",
 						},
@@ -94,8 +99,10 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeElastic,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeElastic,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						},
 					},
 				}
 				return obj
@@ -106,8 +113,10 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeElastic,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeElastic,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						},
 						IPv4: []string{
 							"10.178.245.1",
 							"10.178.245.2",
@@ -135,8 +144,11 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				obj := MockPSTS("psts-test")
 				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 					"sbn-aaaaa": {
-						Type:            networkv1alpha1.IPAllocTypeManual,
-						ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+							Type:            networkv1alpha1.IPAllocTypeManual,
+							ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+						},
+
 						IPv4Range: []string{
 							"10.178.245.1/25",
 						},
@@ -144,6 +156,46 @@ func TestValidatingPSTSHandler_validatePstsSpec(t *testing.T) {
 				}
 				return obj
 			},
+		}, {
+			name: "range in custom ip mode",
+			psts: func() *networkv1alpha1.PodSubnetTopologySpread {
+				obj := MockPSTS("psts-test")
+				obj.Spec.Strategy = &networkv1alpha1.IPAllocationStrategy{
+					Type:                 networkv1alpha1.IPAllocTypeCustom,
+					ReleaseStrategy:      networkv1alpha1.ReleaseStrategyTTL,
+					EnableReuseIPAddress: true,
+					TTL:                  &metav1.Duration{Duration: time.Hour},
+				}
+				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
+					"sbn-aaaaa": {
+						Custom: []networkv1alpha1.CustomAllocation{
+							{Family: k8sutilnet.IPv4, CustomIPRange: []networkv1alpha1.CustomIPRange{{Start: "10.178.245.2", End: "10.178.245.5"}}},
+						},
+					},
+				}
+				return obj
+			},
+		},
+		{
+			name: "range not in custom ip mode",
+			psts: func() *networkv1alpha1.PodSubnetTopologySpread {
+				obj := MockPSTS("psts-test")
+				obj.Spec.Strategy = &networkv1alpha1.IPAllocationStrategy{
+					Type:                 networkv1alpha1.IPAllocTypeCustom,
+					ReleaseStrategy:      networkv1alpha1.ReleaseStrategyTTL,
+					EnableReuseIPAddress: true,
+					TTL:                  &metav1.Duration{Duration: time.Hour},
+				}
+				obj.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
+					"sbn-aaaaa": {
+						Custom: []networkv1alpha1.CustomAllocation{
+							{Family: k8sutilnet.IPv4, CustomIPRange: []networkv1alpha1.CustomIPRange{{Start: "10.0.245.2", End: "10.178.245.5"}}},
+						},
+					},
+				}
+				return obj
+			},
+			wantErr: 1,
 		},
 	}
 	for _, tt := range tests {
@@ -223,8 +275,10 @@ func TestValidatingPSTSHandler_Handle(t *testing.T) {
 					psts := MockPSTS("psts-test")
 					psts.Spec.Subnets = map[string]networkv1alpha1.SubnetAllocation{
 						"sbn-aaaaa": {
-							Type:            networkv1alpha1.IPAllocTypeManual,
-							ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+							IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+								Type:            networkv1alpha1.IPAllocTypeManual,
+								ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+							},
 							IPv4Range: []string{
 								"10.178.245.1/25",
 							},
@@ -253,8 +307,10 @@ func TestValidatingPSTSHandler_Handle(t *testing.T) {
 								Name: "psts-test",
 								Subnets: map[string]networkv1alpha1.SubnetAllocation{
 									"sbn-aaaaa": {
-										Type:            networkv1alpha1.IPAllocTypeManual,
-										ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+										IPAllocationStrategy: networkv1alpha1.IPAllocationStrategy{
+											Type:            networkv1alpha1.IPAllocTypeManual,
+											ReleaseStrategy: networkv1alpha1.ReleaseStrategyTTL,
+										},
 										IPv4Range: []string{
 											"10.178.245.1/25",
 										},

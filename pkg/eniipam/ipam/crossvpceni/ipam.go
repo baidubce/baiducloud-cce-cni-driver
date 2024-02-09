@@ -73,6 +73,9 @@ var (
 	PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation = "cross-vpc-eni.cce.io/defaultRouteInterfaceDelegation"
 	PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs       = "cross-vpc-eni.cce.io/defaultRouteExcludedCidrs"
 
+	NodeAnnotationMaxCrossVPCEni = "cross-vpc-eni.cce.io/maxEniNumber"
+	NodeLabelMaxCrossVPCEni      = "cross-vpc-eni.cce.io/max-eni-number"
+
 	necessaryAnnoKeyList = []string{
 		PodAnnotationCrossVPCEniUserID,
 		PodAnnotationCrossVPCEniSubnetID,

@@ -164,16 +164,16 @@ func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
 	// add/remove finalizer
 	if resource.DeletionTimestamp == nil {
 		updateFinalizer = appendRemoteRouteFinalizerToNetResourceSet(newObj)
-	} else if len(newObj.Status.IPAM.VPCRouteCIDRs) == 0 {
+	} else if resource.DeletionTimestamp != nil && len(newObj.Status.IPAM.VPCRouteCIDRs) == 0 {
 		updateFinalizer = removeRemoteRouteFinalizerFromNetResourceSet(newObj)
 	}
 	if updateFinalizer {
 		_, err = operator.updater.Update(resource, newObj)
 		if err != nil {
-			scopedLog.WithError(err).WithField("method", "Update").Error("failed to update netresourceset")
+			scopedLog.WithError(err).WithField("method", "Update").Error("failed to update netresourceset finallizer")
 			return err
 		}
-		scopedLog.Debug("add finalizer to netresourceset")
+		scopedLog.Info("add finalizer to netresourceset")
 		return nil
 	}
 
@@ -183,10 +183,11 @@ func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
 		return operator.updateVPCRouteStatus(scopedLog, resource.Name)
 	})
 	if err != nil {
-		scopedLog.WithError(err).Errorf("failed to update netresource %s", resource.Name)
+		scopedLog.WithError(err).Errorf("failed to update netresource status %s", resource.Name)
 		return err
 	}
 
+	// refresh netresourceset with latest status
 	resource, err = operator.updater.Get(resource.Name)
 	if err != nil {
 		return err
@@ -202,8 +203,13 @@ func (operator *VPCRouteOperator) updateVPCRouteStatus(scopedLog *logrus.Entry, 
 	if err != nil {
 		return false, err
 	}
-	if len(resource.Status.IPAM.VPCRouteCIDRs) == 0 {
-		resource.Status.IPAM.VPCRouteCIDRs = make(ipamTypes.VPCRouteStatuMap)
+	var (
+		ctx    = context.Background()
+		newObj = resource.DeepCopy()
+	)
+
+	if len(newObj.Status.IPAM.VPCRouteCIDRs) == 0 {
+		newObj.Status.IPAM.VPCRouteCIDRs = make(ipamTypes.VPCRouteStatuMap)
 	}
 	if operator.routeTableID == "" {
 		err = operator.doSyncVPCRouteRules(context.TODO())
@@ -215,10 +221,6 @@ func (operator *VPCRouteOperator) updateVPCRouteStatus(scopedLog *logrus.Entry, 
 		scopedLog.Warningf("failed to get route table for %s. retry later", name)
 		return false, nil
 	}
-	var (
-		ctx    = context.Background()
-		newObj = resource.DeepCopy()
-	)
 
 	toAddCIDR, toDeleteCIDR := operator.determineNodeActions(newObj)
 

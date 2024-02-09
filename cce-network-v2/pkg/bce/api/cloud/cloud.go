@@ -17,7 +17,6 @@ package cloud
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -51,7 +50,6 @@ func newBCEClientConfig(ctx context.Context,
 ) *bce.BceClientConfiguration {
 	endpoint, exist := os.LookupEnv(endpointEnv)
 	if !exist || endpoint == "" {
-		fmt.Printf("Env %v not set, using bce predefined endpoint config\n", endpointEnv)
 		endpoint = preDefinedEndpoints[region]
 	}
 

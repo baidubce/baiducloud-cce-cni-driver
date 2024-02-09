@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev1lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v1"
@@ -57,7 +58,7 @@ func StartSynchronizingSubnet(ctx context.Context, subnetManager syncer.SubnetEv
 	}
 
 	resyncPeriod := subnetManager.ResyncSubnet(ctx)
-	controller := cm.NewResyncController("cce-subnet-controller", 1,
+	controller := cm.NewResyncController("cce-subnet-controller", int(operatorOption.Config.ResourceResyncWorkers),
 		k8s.CCEClient().Informers.Cce().V1().Subnets().Informer(),
 		endpointManagerSyncHandler)
 	controller.RunWithResync(resyncPeriod)

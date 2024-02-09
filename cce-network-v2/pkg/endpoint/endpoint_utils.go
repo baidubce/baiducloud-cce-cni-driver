@@ -129,7 +129,7 @@ func DeleteEndpointAndWait(ctx context.Context, cceEndpointClient *watchers.CCEE
 		return nil
 	}
 	err = cceEndpointClient.CCEEndpoints(oldEP.Namespace).Delete(ctx, oldEP.Name, metav1.DeleteOptions{})
-	if err != nil {
+	if err != nil && !kerrors.IsNotFound(err) {
 		return fmt.Errorf("delete endpoint error: %w", err)
 	}
 	err = wait.PollImmediateUntilWithContext(ctx, time.Second/2, func(context.Context) (done bool, err error) {

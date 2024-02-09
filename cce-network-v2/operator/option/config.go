@@ -164,8 +164,9 @@ const (
 	BCECloudContry            = "bce-cloud-country"
 	BCECloudAccessKey         = "bce-cloud-access-key"
 	BCECloudSecureKey         = "bce-cloud-secure-key"
-	ResourceResyncInterval    = "resource-resync-interval"
+
 	ResourceENIResyncInterval = "resource-eni-resync-interval"
+	ResourceResyncWorkers = "resource-resync-workers"
 
 	// BCECustomerMaxENI is the max eni number of customer
 	BCECustomerMaxENI = "bce-customer-max-eni"
@@ -321,6 +322,9 @@ type OperatorConfig struct {
 	ResourceResyncInterval    time.Duration
 	ResourceENIResyncInterval time.Duration
 
+	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
+	ResourceResyncWorkers int64
+
 	// BCECustomerMaxENI is the max eni number of customer
 	BCECustomerMaxENI int
 	// BCECustomerMaxIP is the max ip number of customer
@@ -354,6 +358,10 @@ type OperatorConfig struct {
 
 	// FixedIPTTL
 	FixedIPTTL time.Duration
+
+	// FixedIPTimeout Timeout for waiting for the fixed IP assignment to succeed
+	FixedIPTimeout time.Duration
+
 	// EnableRemoteFixedIPGC gc remote fixed ip when endpoint have been deleted
 	EnableRemoteFixedIPGC bool
 
@@ -432,12 +440,14 @@ func (c *OperatorConfig) Populate() {
 	c.BCECloudContry = viper.GetString(BCECloudContry)
 	c.BCECloudAccessKey = viper.GetString(BCECloudAccessKey)
 	c.BCECloudSecureKey = viper.GetString(BCECloudSecureKey)
-	c.ResourceResyncInterval = viper.GetDuration(ResourceResyncInterval)
+	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
+	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
 	c.BCECustomerMaxENI = viper.GetInt(BCECustomerMaxENI)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
+	c.FixedIPTimeout = viper.GetDuration(option.FixedIPTimeout)
 	c.EnableRemoteFixedIPGC = viper.GetBool(EnableRemoteFixedIPGC)
 
 	c.CCEClusterID = viper.GetString(CCEClusterID)

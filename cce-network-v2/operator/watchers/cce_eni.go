@@ -18,6 +18,7 @@ package watchers
 import (
 	"context"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	ccev2lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
@@ -56,7 +57,7 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 	}
 
 	resyncPeriod := eniManager.ResyncENI(ctx)
-	controller := cm.NewResyncController("cce-eni-controller", 1,
+	controller := cm.NewResyncController("cce-eni-controller", int(operatorOption.Config.ResourceResyncWorkers),
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(),
 		endpointManagerSyncHandler)
 	controller.RunWithResync(resyncPeriod)

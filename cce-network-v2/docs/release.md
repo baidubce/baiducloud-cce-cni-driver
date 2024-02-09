@@ -2,9 +2,16 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.8 (2023/08/07)
+#### 2.8.6
+1. [BUG] 优化 EndpointManager 在更新 endpoint 对象时不会超时的逻辑，且由于资源过期等问题会出现死循环的问题
+2. [optimize] 优化 operator 工作队列，支持自定义 worker 数量，加速事件处理
+3. [optimize] EndpointManager 核心工作流日志，把关键流程日志修改为 info 级别
+4. [optimize] 优化EndpointManager gc工作流，动态 IP 分配的 gc 时间设置为一周
+
 #### 2.8.5 [20241017]
 1. [优化] 优化了 psts 分配 IP 时失败的回收机制，避免出现 IP 泄露
 2. [BUGFIX] 修复 vpc 路由模式下 nrs 标记 deleteTimeStamp 之后，由于 vpc 路由状态处于 released，nrs 的 finallizer 无法回收的问题
+3. [优化] 优化创建 cep 的逻辑，当创建 cep 失败时，尝试主动删除并重新创建 cep
 #### 2.8.4 [20230914]
 1. [BUG] vpc-eni，修复在 centos 8等使用 NetworkManager 的操作系统发行版，当 ENI 网卡被重命名后，DHCP 删除 IP 导致 ENI 无法就绪的问题
 #### 2.8.3 [20230904]

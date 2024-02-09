@@ -58,8 +58,8 @@ func registerFlags() {
 	flags.String(operatorOption.BCECloudVPCID, "", "vpc id")
 	option.BindEnv(operatorOption.BCECloudVPCID)
 
-	flags.Duration(operatorOption.ResourceResyncInterval, operatorOption.DefaultResourceResyncInterval, "synchronization cycle of vpc resources, such as subnet and ENI")
-	option.BindEnv(operatorOption.ResourceResyncInterval)
+	flags.Duration(option.ResourceResyncInterval, operatorOption.DefaultResourceResyncInterval, "synchronization cycle of vpc resources, such as subnet and ENI")
+	option.BindEnv(option.ResourceResyncInterval)
 
 	flags.String(operatorOption.CCEClusterID, "", "cluster id defined in CCE")
 	option.BindEnv(operatorOption.CCEClusterID)

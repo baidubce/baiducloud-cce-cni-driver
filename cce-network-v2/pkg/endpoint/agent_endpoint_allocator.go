@@ -445,12 +445,6 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 			return nil, fmt.Errorf("psts name is not equal for reuse ip mode, old: %s, new: %s, please delete this cep object", oldEP.Spec.Network.IPAllocation.PSTSName, psts.Name)
 		}
 		return e.createReuseIPEndpoint(ctx, newEP, oldEP)
-	} else if oldEP == nil {
-		// create endpoint spec, Waiting for status updates
-		ep, err = e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("create endpoint error: %w", err)
-		}
 	} else {
 		// cross subnet, delete old endpoint
 		err = DeleteEndpointAndWait(ctx, e.cceEndpointClient, oldEP)
@@ -458,12 +452,33 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 			return nil, fmt.Errorf("wait endpoint delete error: %w", err)
 		}
 		// create endpoint spec, Waiting for status updates
-		ep, err = e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
-		if err != nil {
+		ep, err = recreateCEP(ctx, e.cceEndpointClient, newEP)
+	}
+	return ep, err
+}
+
+func recreateCEP(ctx context.Context, cceEndpointClient *watchers.CCEEndpointClient, newEP *ccev2.CCEEndpoint) (*ccev2.CCEEndpoint, error) {
+	// create endpoint spec, Waiting for status updates
+	ep, err := cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
+	if err != nil {
+		if kerrors.IsAlreadyExists(err) {
+			goto recreate
+		} else {
 			return nil, fmt.Errorf("create endpoint error: %w", err)
 		}
 	}
 	return ep, err
+
+recreate:
+	err = DeleteEndpointAndWait(ctx, cceEndpointClient, newEP)
+	if err != nil {
+				return nil, fmt.Errorf("wait endpoint delete error: %w", err)
+			}
+	ep, err = cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("create endpoint error: %w", err)
+	}
+	return ep, nil
 }
 
 // createFixedEndpoint create or update a fixed CCEEndpoint
@@ -511,7 +526,7 @@ func (e *EndpointAllocator) createDynamicEndpoint(ctx context.Context, newEP *cc
 	newEP.Status.Networking.IPs = newEP.Status.Networking.Addressing.ToIPsString()
 
 	AppendEndpointStatus(&newEP.Status, models.EndpointStateIPAllocated, models.EndpointStatusChangeCodeOk)
-	_, err := e.cceEndpointClient.CCEEndpoints(newEP.Namespace).Create(ctx, newEP, metav1.CreateOptions{})
+	_, err := recreateCEP(ctx, e.cceEndpointClient, newEP)
 	if err != nil {
 		if ipv4Result != nil {
 			_ = e.dynamicIPAM.ReleaseIPString(ipv4Result.IP.String())

@@ -422,4 +422,7 @@ const (
 
 	// DefaultENIDescription specifies the default ENI description
 	DefaultENIDescription = "auto created by cce-cni, do not modify"
+
+	// DefaultResourceResyncWorkers specifies the default number of workers for k8s resources handler
+	DefaultResourceResyncWorkers = 8
 )

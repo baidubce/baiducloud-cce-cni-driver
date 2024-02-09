@@ -59,7 +59,7 @@ func (provider *BCEAllocatorProvider) Init(ctx context.Context) error {
 }
 
 // Start implements allocator.AllocatorProvider
-func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (allocator.NodeEventHandler, error) {
+func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater ipam.NetResourceSetGetterUpdater) (allocator.NetResourceSetEventHandler, error) {
 	var iMetrics ipam.MetricsAPI
 
 	log.Info("Starting  Baidu BCE allocator...")
@@ -71,17 +71,17 @@ func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater i
 	}
 	provider.manager.getterUpdater = getterUpdater
 
-	nodeManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, iMetrics,
+	netResourceSetManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, iMetrics,
 		operatorOption.Config.ParallelAllocWorkers, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bce instance manager: %w", err)
 	}
 
-	if err := nodeManager.Start(ctx); err != nil {
+	if err := netResourceSetManager.Start(ctx); err != nil {
 		return nil, err
 	}
 
-	return nodeManager, nil
+	return netResourceSetManager, nil
 }
 
 // StartEndpointManager implements endpoint.DirectAllocatorStarter

@@ -225,7 +225,7 @@ func (d *Daemon) configureIPAM() {
 	if option.Config.IPv4Range != AutoCIDR {
 		allocCIDR, err := cidr.ParseCIDR(option.Config.IPv4Range)
 		if err != nil {
-			log.WithError(err).WithField(logfields.V4Prefix, option.Config.IPv4Range).Fatal("Invalid IPv4 allocation prefix")
+			ipamLog.WithError(err).WithField(logfields.V4Prefix, option.Config.IPv4Range).Fatal("Invalid IPv4 allocation prefix")
 		}
 		node.SetIPv4AllocRange(allocCIDR)
 	}
@@ -233,20 +233,20 @@ func (d *Daemon) configureIPAM() {
 	if option.Config.IPv6Range != AutoCIDR {
 		allocCIDR, err := cidr.ParseCIDR(option.Config.IPv6Range)
 		if err != nil {
-			log.WithError(err).WithField(logfields.V6Prefix, option.Config.IPv6Range).Fatal("Invalid IPv6 allocation prefix")
+			ipamLog.WithError(err).WithField(logfields.V6Prefix, option.Config.IPv6Range).Fatal("Invalid IPv6 allocation prefix")
 		}
 
 		node.SetIPv6NodeRange(allocCIDR)
 	}
 
 	if err := node.AutoComplete(); err != nil {
-		log.WithError(err).Fatal("Cannot autocomplete node addresses")
+		ipamLog.WithError(err).Fatal("Cannot autocomplete node addresses")
 	}
 }
 
 func (d *Daemon) startIPAM() {
 	bootstrapStats.ipam.Start()
-	log.Info("Initializing ipam")
+	ipamLog.Info("Initializing ipam")
 	// Set up ipam conf after init() because we might be running d.conf.KVStoreIPv4Registration
 	d.ipam = endpoint.NewIPAM(d.nodeAddressing, option.Config, d.nodeDiscovery, d.k8sWatcher, nil)
 	bootstrapStats.ipam.End(true)

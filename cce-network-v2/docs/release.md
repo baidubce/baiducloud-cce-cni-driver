@@ -1,5 +1,11 @@
-# 2.0 
+# 2.0
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
+
+### 2.10 (2024/01/30)
+### 2.10.0 （2024/01/30）
+1. [Feature] VPC-ENI 支持自动获取节点 eni 配额信息，去掉了自定义 ENI 配额的参数。
+2. [Feature] VPC-ENI 支持 ebc 主网卡辅助 IP 模式 
+3. [Feature] VPC-ENI bbc 升级为主网卡辅助 IP 模式
 
 ### 2.9 (2023/11/10)
 新特性功能：
@@ -7,12 +13,14 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. CRD 字段变更: NetworkResourceSet 资源池增加了节点上 ENI 的异常状态，报错单机 IP 容量状态，整机 ENI 网卡状态。
 3. 新特性: 支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
 4. 新特性：支持 pod 级 Qos
+
 ### 2.9.1 
 1. [optimize] 优化NetResourceManager在接收事件时处理的锁，消除事件处理过程中 6 分钟延迟
 2. [optimize] 优化ENI状态机同步错误时，增加 3 次重试机会，消除因 ENI 状态延迟导致的 10 分钟就绪延迟
 3. [bug]修复 cce-network-agent 识别操作系统信息错误的问题
 4. [bug]修复cce-network-agent pod 被删除后，小概率导致 operator 空指针退出问题
 5. [bug]修复创建 eni 无法向 nrs 对象上打印 event 的问题
+
 ### 2.9.0 [20240102]
 1. [optimize] 申请 IP 失败时,支持给出失败的原因.包括:
     a. 没有可用子网
@@ -39,13 +47,14 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 11. [optimize] 优化 ENI 命名长度，限制为 64 字符
 12. [BUG] 修复VPC-ENI 并发申请和释放IP 时，Pod 可能申请到过期的 IP 地址的问题
 
-
-
 ### 2.8 (2023/08/07)
+
 #### 2.8.8 [20231227]
 1. [BUG] VPC-ENI 并发申请和释放IP 时，Pod 可能申请到过期的 IP 地址
+
 #### 2.8.7 [20231127]
 1. [BUG] 修复 cce-network-v2-config 中 --bce-customer-max-eni 及 --bce-customer-max-ip 参数配置不生效；未限制并发创建 ENI ，并发下最大 ENI 数量可能超发
+
 #### 2.8.6 [20231110]
 1. [BUG] 优化 EndpointManager 在更新 endpoint 对象时不会超时的逻辑，且由于资源过期等问题会出现死循环的问题
 2. [optimize] 优化 operator 工作队列，支持自定义 worker 数量，加速事件处理
@@ -60,13 +69,16 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 1. [优化] 优化了 psts 分配 IP 时失败的回收机制，避免出现 IP 泄露
 2. [BUGFIX] 修复 vpc 路由模式下 nrs 标记 deleteTimeStamp 之后，由于 vpc 路由状态处于 released，nrs 的 finallizer 无法回收的问题
 3. [优化] 优化创建 cep 的逻辑，当创建 cep 失败时，尝试主动删除并重新创建 cep
+
 #### 2.8.4 [20230914]
 1. [BUG] vpc-eni，修复在 centos 8等使用 NetworkManager 的操作系统发行版，当 ENI 网卡被重命名后，DHCP 删除 IP 导致 ENI 无法就绪的问题
+
 #### 2.8.3 [20230904]
 1. [Feature]支持kubelet删除cni配置文件后，重新创建配置文件
 2. [Feature]network-agent支持开启pprof，并获取mutex和block数据
 1. [优化]去掉network-agent在申请IP时的填充锁
 2. [BUG]修复network-agent的默认限流配置
+
 #### 2.8.2 [20230829]
 1. [优化]提升创建ENI的性能，缩短nrs任务管理时间
 2. [优化]增加并发预创建eni的逻辑，当单机未达到预加载eni数时，并发创建eni

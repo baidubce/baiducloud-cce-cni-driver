@@ -272,14 +272,14 @@ func (n *NetResourceSetManager) Create(resource *v2.NetResourceSet) error {
 // Kubernetes apiserver
 func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 	n.mutex.Lock()
-	node, ok := n.netResources[resource.Name]
+	netResource, ok := n.netResources[resource.Name]
 	n.mutex.Unlock()
 
 	defer func() {
-		node.UpdatedResource(resource)
+		netResource.UpdatedResource(resource)
 	}()
 	if !ok {
-		node = &NetResource{
+		netResource = &NetResource{
 			name:                resource.Name,
 			manager:             n,
 			ipsMarkedForRelease: make(map[string]time.Time),
@@ -287,20 +287,20 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 			logLimiter:          logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
 		}
 
-		node.ops = n.instancesAPI.CreateNetResource(resource, node)
+		netResource.ops = n.instancesAPI.CreateNetResource(resource, netResource)
 
 		poolMaintainer, err := trigger.NewTrigger(trigger.Parameters{
 			Name:            fmt.Sprintf("ipam-pool-maintainer-%s", resource.Name),
 			MinInterval:     10 * time.Millisecond,
 			MetricsObserver: n.metricsAPI.PoolMaintainerTrigger(),
 			TriggerFunc: func(reasons []string) {
-				if err := node.MaintainIPPool(context.TODO()); err != nil {
-					node.logger().WithError(err).Warning("Unable to maintain ip pool of node")
+				if err := netResource.MaintainIPPool(context.TODO()); err != nil {
+					netResource.logger().WithError(err).Warning("Unable to maintain ip pool of node")
 				}
 			},
 		})
 		if err != nil {
-			node.logger().WithError(err).Error("Unable to create pool-maintainer trigger")
+			netResource.logger().WithError(err).Error("Unable to create pool-maintainer trigger")
 			return err
 		}
 
@@ -310,30 +310,30 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 			TriggerFunc: func(reasons []string) { poolMaintainer.Trigger() },
 		})
 		if err != nil {
-			node.logger().WithError(err).Error("Unable to create pool-maintainer-retry trigger")
+			netResource.logger().WithError(err).Error("Unable to create pool-maintainer-retry trigger")
 			return err
 		}
-		node.retry = retry
+		netResource.retry = retry
 
 		k8sSync, err := trigger.NewTrigger(trigger.Parameters{
 			Name:            fmt.Sprintf("ipam-node-k8s-sync-%s", resource.Name),
 			MinInterval:     10 * time.Millisecond,
 			MetricsObserver: n.metricsAPI.K8sSyncTrigger(),
 			TriggerFunc: func(reasons []string) {
-				node.syncToAPIServer()
+				netResource.syncToAPIServer()
 			},
 		})
 		if err != nil {
 			poolMaintainer.Shutdown()
-			node.logger().WithError(err).Error("Unable to create k8s-sync trigger")
+			netResource.logger().WithError(err).Error("Unable to create k8s-sync trigger")
 			return err
 		}
 
-		node.poolMaintainer = poolMaintainer
-		node.k8sSync = k8sSync
+		netResource.poolMaintainer = poolMaintainer
+		netResource.k8sSync = k8sSync
 
 		n.mutex.Lock()
-		n.netResources[node.name] = node
+		n.netResources[netResource.name] = netResource
 		n.mutex.Unlock()
 
 		log.WithField(fieldName, resource.Name).Info("Discovered new NetResourceSet custom resource")

@@ -371,6 +371,9 @@ const (
 	ENISecurityGroupIDs           = "eni-security-group-ids"
 	ENIEnterpriseSecurityGroupIds = "eni-enterprise-security-group-ids"
 	ENIInstallSourceBasedRouting  = "eni-install-source-based-routing"
+	IPPoolMinAllocateIPs          = "ippool-min-allocate-ips"
+	IPPoolPreAllocate             = "ippool-pre-allocate"
+	IPPoolMaxAboveWatermark       = "ippool-max-above-watermark"
 )
 
 // Available option for DaemonConfig.Tunnel
@@ -713,7 +716,10 @@ type DaemonConfig struct {
 	IPv6PodSubnets []*net.IPNet
 
 	// IPAM is the IPAM method to use
-	IPAM string
+	IPAM                    string
+	IPPoolMinAllocateIPs    int
+	IPPoolPreAllocate       int
+	IPPoolMaxAboveWatermark int
 
 	// AutoCreateNetResourceSetResource enables automatic creation of a
 	// NetResourceSet resource for the local node
@@ -1111,6 +1117,10 @@ func (c *DaemonConfig) Populate() {
 	//c.EnableEndpointHealthChecking = viper.GetBool(EnableEndpointHealthChecking)
 	//c.EnableTracing = viper.GetBool(EnableTracing)
 	c.IPAM = viper.GetString(IPAM)
+	c.IPPoolMaxAboveWatermark = viper.GetInt(IPPoolMaxAboveWatermark)
+	c.IPPoolMinAllocateIPs = viper.GetInt(IPPoolMinAllocateIPs)
+	c.IPPoolPreAllocate = viper.GetInt(IPPoolPreAllocate)
+
 	c.IPv4Range = viper.GetString(IPv4Range)
 	c.IPv6ClusterAllocCIDR = viper.GetString(IPv6ClusterAllocCIDRName)
 	c.IPv6Range = viper.GetString(IPv6Range)

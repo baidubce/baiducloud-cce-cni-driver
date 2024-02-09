@@ -53,6 +53,20 @@ type Interface interface {
 	AttachENI(ctx context.Context, args *eni.EniInstance) error
 	DetachENI(ctx context.Context, args *eni.EniInstance) error
 	StatENI(ctx context.Context, eniID string) (*eni.Eni, error)
+	GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQuoteInfo, error)
+
+	// ListBCCInstanceEni Query the list of BCC eni network interface.
+	// Unlike the VPC interface, this interface can query the primaty network interface of BCC/EBC
+	// However, the `ListENIs`` and `StatENI`` interfaces of VPC cannot retrieve relevant information
+	// about the primary network interface of BCC/EBC.
+	ListBCCInstanceEni(ctx context.Context, instanceID string) ([]bccapi.Eni, error)
+
+	// BCCBatchAddIP batch add secondary IP to primary interface of BCC/EBC
+	BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs) (*bccapi.BatchAddIpResponse, error)
+
+	// BCCBatchDelIP batch delete secondary IP to primary interface of BCC/EBC
+	// Waring: Do not mistakenly delete the primary IP address of the main network card
+	BCCBatchDelIP(ctx context.Context, args *bccapi.BatchDelIpArgs) error
 
 	ListRouteTable(ctx context.Context, vpcID, routeTableID string) ([]vpc.RouteRule, error)
 	CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleArgs) (string, error)

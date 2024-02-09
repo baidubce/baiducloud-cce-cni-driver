@@ -33,18 +33,8 @@ data:
                     "type":"cptp",
                     "ipam":{
                         "type":"cipam",
-                        {{- if .Values.ccedConfig.ippool.enabled }}
-                        "min-allocate": {{ .Values.ccedConfig.ippool.minAllocate }},
-                        "pre-allocate": {{ .Values.ccedConfig.ippool.preAllocate }},
-                        "max-above-watermark": {{ .Values.ccedConfig.ippool.maxAboveWatermark }},
-                        {{- end }}
-                        "eni": {
-                            "routeTableOffset": 127
-                        },
-                        "pod-cidr-allocation-threshold": 1,
-                        "pod-cidr-release-threshold": 1
                     },
-                    "mtu": 1500
+                    "mtu": {{ .Values.ccedConfig.mtu }}
                 }
                 {{- range .Values.extplugins }}
                 ,{

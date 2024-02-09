@@ -22,20 +22,28 @@ import (
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/limit"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/tools/cache"
 )
 
 // bccNode is a wrapper of Node, which is used to distinguish bcc node
 type bccNode struct {
 	*bceNode
+
+	// bcc instance info
+	bccInfo *bccapi.InstanceModel
+
+	// usePrimaryENIWithSecondaryMode primary eni with secondary IP mode only use by ebc instance
+	usePrimaryENIWithSecondaryMode bool
 }
 
 func newBCCNode(super *bceNode) *bccNode {
@@ -43,11 +51,28 @@ func newBCCNode(super *bceNode) *bccNode {
 		bceNode: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExBCC)
+	node.refreshBCCInfo()
 	return node
 }
 
-func (n *bccNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceManager, error) {
-	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
+func (n *bccNode) refreshBCCInfo() error {
+	if n.bccInfo != nil {
+		return nil
+	}
+	bccInfo, err := n.manager.bceclient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	if err != nil {
+		n.log.Errorf("faild to get bcc instance detail: %v", err)
+		return err
+	}
+	n.bccInfo = bccInfo
+	if bccInfo.EniQuota == 0 {
+		n.usePrimaryENIWithSecondaryMode = true
+	}
+	return nil
+}
+
+func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
+	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "getENIQuota")
 	client := k8s.WatcherClient()
 	if client == nil {
 		scopeLog.Fatal("K8s client is nil")
@@ -58,38 +83,70 @@ func (n *bccNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceMana
 		return nil, err
 	}
 
-	bccInstance, err := n.manager.bceclient.GetBCCInstanceDetail(context.TODO(), n.k8sObj.Spec.InstanceID)
+	err = n.refreshBCCInfo()
 	if err != nil {
-		scopeLog.WithField("instanceID", n.k8sObj.Spec.InstanceID).Errorf("GetBCCInstanceDetail failed: %v", err)
 		return nil, err
 	}
-	resourceManager := limit.NewBCCIPResourceManager(client, n.k8sObj.Spec.ENI.PreAllocateENI, k8sNode, bccInstance.CpuCount, bccInstance.MemoryCapacityInGB)
-
-	n.capacity = resourceManager.CalaculateCapacity()
-	// if node use primary ENI mode, there is no need to check IP resouce
-	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
-		n.capacity.CustomerIPResource = 0
-	} else {
-		n.capacity.CustomerENIResource = 0
+	// if bcc instance is not created by cce-network-v2, there is no need to check IP resouce
+	if n.bccInfo == nil {
+		return nil, fmt.Errorf("bcc info instance is nil")
 	}
 
-	return resourceManager, nil
+	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
+	// default bbc ip quota
+	defaltENINums, defaultIPs := getDefaultBCCEniQuota(k8sNode)
+
+	// Expect all BCC models to support ENI
+	// EBC models may not support eni, and there are also some non console created
+	// BCCs that do not support this parameter
+	if n.bccInfo.EniQuota != 0 || n.k8sObj.Spec.ENI.InstanceType == string(ccev2.ENIForBCC) {
+		eniQuota.SetMaxENI(n.bccInfo.EniQuota)
+		if n.bccInfo.EniQuota == 0 {
+			eniQuota.SetMaxENI(defaltENINums)
+		}
+	}
+	eniQuota.SetMaxIP(defaultIPs)
+
+	// if node use primary ENI mode, there is no need to check IP resouce
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		eniQuota.SetMaxIP(0)
+	}
+
+	return eniQuota, nil
+}
+
+func getDefaultBCCEniQuota(k8sNode *corev1.Node) (int, int) {
+	var (
+		cpuNum, memGB int
+	)
+	if cpu, ok := k8sNode.Status.Capacity[corev1.ResourceCPU]; ok {
+		cpuNum = int(cpu.ScaledValue(resource.Milli)) / 1000
+	}
+	if mem, ok := k8sNode.Status.Capacity[corev1.ResourceMemory]; ok {
+		memGB = int(mem.Value() / 1024 / 1024 / 1024)
+	}
+	return calculateMaxENIPerNode(cpuNum), calculateMaxIPPerENI(memGB)
 }
 
 // PrepareIPAllocation is called to calculate the number of IPs that
 // can be allocated on the node and whether a new network interface
 // must be attached to the node.
-
 func (n *bccNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
+	err = n.refreshBCCInfo()
+	if err != nil {
+		scopedLog.Errorf("failed to refresh ebc info: %v", err)
+		return nil, fmt.Errorf("failed to refresh ebc info")
+	}
 	return n.__prepareIPAllocation(scopedLog, true)
 }
+
 func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet bool) (a *ipam.AllocationAction, err error) {
 	a = &ipam.AllocationAction{}
-	limiter := n.bceNode.calculateLimiter()
-	if limiter == nil {
-		return nil, fmt.Errorf("limiter is nil")
+	eniQuota := n.bceNode.getENIQuota()
+	if eniQuota == nil {
+		return nil, fmt.Errorf("eniQuota is nil")
 	}
-	eniMax := limiter.MaxENINum
+	eniMax := eniQuota.GetMaxENI()
 	eniCount := 0
 
 	n.manager.ForeachInstance(n.instanceID,
@@ -263,15 +320,15 @@ func (n *bccNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 }
 
 // GetMaximumAllocatable Impl
-func (n *bccNode) getMaximumAllocatable(capacity *limit.NodeCapacity) int {
+func (n *bccNode) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return 0
 	}
 
-	if capacity.MaxENINum == 0 {
-		return capacity.MaxIPPerENI - 1
+	if eniQuota.GetMaxENI() == 0 {
+		return eniQuota.GetMaxIP() - 1
 	}
-	max := capacity.MaxENINum * (capacity.MaxIPPerENI - 1)
+	max := eniQuota.GetMaxENI() * (eniQuota.GetMaxIP() - 1)
 	if operatorOption.Config.EnableIPv6 {
 		max = max * 2
 	}

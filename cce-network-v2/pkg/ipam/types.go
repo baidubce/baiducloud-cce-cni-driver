@@ -132,9 +132,9 @@ func (ipam *IPAM) DebugStatus() string {
 // This works only cloud provider IPAM modes and returns nil for other modes.
 // sharedNodeStore must be initialized before calling this method.
 func (ipam *IPAM) GetVpcCIDRs() (vpcCIDRs []*cidr.CIDR) {
-	sharedNodeStore.mutex.RLock()
-	defer sharedNodeStore.mutex.RUnlock()
-	primary, secondary := deriveVpcCIDRs(sharedNodeStore.ownNode)
+	sharedNetResourceSetStore.mutex.RLock()
+	defer sharedNetResourceSetStore.mutex.RUnlock()
+	primary, secondary := deriveVpcCIDRs(sharedNetResourceSetStore.ownNode)
 	if primary == nil {
 		return nil
 	}

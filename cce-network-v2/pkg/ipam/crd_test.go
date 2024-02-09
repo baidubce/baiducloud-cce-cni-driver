@@ -24,14 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
-
 	"github.com/stretchr/testify/assert"
 	. "gopkg.in/check.v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/addressing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/checker"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
@@ -87,7 +86,7 @@ func (t *testConfigurationCRD) IPv4NativeRoutingCIDR() *cidr.CIDR        { retur
 func (t *testConfigurationCRD) GetCCEEndpointGC() time.Duration          { return 0 }
 func (t *testConfigurationCRD) GetFixedIPTimeout() time.Duration         { return 0 }
 
-func newFakeNodeStore(conf Configuration, c *C) *nodeStore {
+func newFakeNetResourceSetStore(conf Configuration, c *C) *nodeStore {
 	t, err := trigger.NewTrigger(trigger.Parameters{
 		Name:        "fake-crd-allocator-node-refresher",
 		MinInterval: 3 * time.Second,
@@ -114,12 +113,12 @@ func (s *IPAMSuite) TestMarkForReleaseNoAllocate(c *C) {
 
 	fakeAddressing := linux.NewNodeAddressing()
 	conf := &testConfigurationCRD{}
-	initNodeStore.Do(func() {
-		sharedNodeStore = newFakeNodeStore(conf, c)
-		sharedNodeStore.ownNode = cn
+	initNetResourceSetStore.Do(func() {
+		sharedNetResourceSetStore = newFakeNetResourceSetStore(conf, c)
+		sharedNetResourceSetStore.ownNode = cn
 	})
 	ipam := NewIPAM(fakeAddressing, conf, &ownerMock{}, &ownerMock{}, &mtuMock)
-	sharedNodeStore.updateLocalNodeResource(cn)
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 
 	// Allocate the first 3 IPs
 	for i := 1; i <= 3; i++ {
@@ -135,11 +134,11 @@ func (s *IPAMSuite) TestMarkForReleaseNoAllocate(c *C) {
 	_, err := ipam.IPv4Allocator.Allocate(epipv4.IP(), "test")
 	c.Assert(err, NotNil)
 	// Call agent's CRD update function. status for 1.1.1.4 should change from marked for release to ready for release
-	sharedNodeStore.updateLocalNodeResource(cn)
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 	c.Assert(string(cn.Status.IPAM.ReleaseIPs["1.1.1.4"]), checker.Equals, ipamOption.IPAMReadyForRelease)
 
 	// Verify that 1.1.1.3 is denied for release, since it's already in use
 	cn.Status.IPAM.ReleaseIPs["1.1.1.3"] = ipamOption.IPAMMarkForRelease
-	sharedNodeStore.updateLocalNodeResource(cn)
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 	c.Assert(string(cn.Status.IPAM.ReleaseIPs["1.1.1.3"]), checker.Equals, ipamOption.IPAMDoNotRelease)
 }

@@ -147,7 +147,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	var (
-		limiter           = n.bceNode.calculateLimiter()
+		eniQuota          = n.bceNode.getENIQuota()
 		availableENICount = 0
 		inuseENICount     = 0
 	)
@@ -165,7 +165,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 				}
 			} else if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
 				// if the length of private ip set is greater than the MaxIPPerENI, then the ENI is in use
-				if len(e.Spec.ENI.PrivateIPSet) >= limiter.MaxIPPerENI {
+				if len(e.Spec.ENI.PrivateIPSet) >= eniQuota.GetMaxIP() {
 					inuseENICount++
 				}
 			}
@@ -173,7 +173,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 			return nil
 		})
 
-	if availableENICount >= limiter.MaxENINum {
+	if availableENICount >= eniQuota.GetMaxENI() {
 		msg = errUnableToDetermineLimits
 		err = fmt.Errorf(msg)
 		return
@@ -258,7 +258,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 			},
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-			Type:                      ccev2.ENIForBCC,
+			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
 		},
 	}
 

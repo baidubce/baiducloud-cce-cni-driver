@@ -181,7 +181,7 @@ func SearchSubnetID(vpcID, defaultSbnID, privateIPStr string) string {
 	sbn, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().Get(defaultSbnID)
 	if err != nil {
 		log.WithField(taskLogField, eniControllerName).
-			WithError(err).Errorf("get subnet %s failed:%s", defaultSbnID)
+			WithError(err).Errorf("failed to get subnet %s", defaultSbnID)
 	}
 	if ccev1.IsInSubnet(sbn, privateIPStr) {
 		return defaultSbnID

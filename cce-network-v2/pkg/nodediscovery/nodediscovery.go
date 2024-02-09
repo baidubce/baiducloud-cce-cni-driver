@@ -407,6 +407,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			nodeResource.Spec.IPAM.PodCIDRReleaseThreshold = c.IPAM.PodCIDRReleaseThreshold
 		}
 	case ipamOption.IPAMVpcEni:
+		// only generate eni spec when it is not set
 		if nodeResource.Spec.ENI == nil {
 			eni, err := agent.GenerateENISpec()
 			if err != nil {
@@ -426,37 +427,33 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			}
 		}
 
-		if c := n.NetConf; c != nil {
-			if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
-				if c.IPAM.MinAllocate != 0 {
-					nodeResource.Spec.IPAM.MinAllocate = c.IPAM.MinAllocate
-				}
-				if c.IPAM.PreAllocate != 0 {
-					nodeResource.Spec.IPAM.PreAllocate = c.IPAM.PreAllocate
-				}
-				if c.IPAM.MaxAboveWatermark != 0 {
-					nodeResource.Spec.IPAM.MaxAboveWatermark = c.IPAM.MaxAboveWatermark
-				}
+		// reset eni spec when it is restart
+		if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+			if option.Config.IPPoolMinAllocateIPs != 0 {
+				nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
 			}
-			if c.IPAM.ENI != nil {
-				if c.IPAM.ENI.RouteTableOffset > 0 {
-					nodeResource.Spec.ENI.RouteTableOffset = c.IPAM.ENI.RouteTableOffset
-				}
-				if len(c.IPAM.ENI.SecurityGroups) > 0 {
-					nodeResource.Spec.ENI.SecurityGroups = c.IPAM.ENI.SecurityGroups
-				}
-				if c.IPAM.ENI.DeleteOnTermination != nil {
-					nodeResource.Spec.ENI.DeleteOnTermination = c.IPAM.ENI.DeleteOnTermination
-				}
-				if c.IPAM.ENI.UsePrimaryAddress != nil {
-					nodeResource.Spec.ENI.UsePrimaryAddress = c.IPAM.ENI.UsePrimaryAddress
-				}
+			if option.Config.IPPoolPreAllocate != 0 {
+				nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
+			}
+			if option.Config.IPPoolMaxAboveWatermark != 0 {
+				nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
+			}
+			if option.Config.ENI.RouteTableOffset > 0 {
+				nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
 			}
 		}
 
-		// update sunet and security group ids
+		if len(option.Config.ENI.SecurityGroups) > 0 {
+			// update sunet and security group ids
+			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
+		}
+		if option.Config.ENI.DeleteOnTermination != nil {
+			nodeResource.Spec.ENI.DeleteOnTermination = option.Config.ENI.DeleteOnTermination
+		}
+		if option.Config.ENI.UsePrimaryAddress != nil {
+			nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
+		}
 		nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
-		nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
 	case ipamOption.IPAMPrivateCloudBase:
 		if c := n.NetConf; c != nil {
 			if c.IPAM.MinAllocate != 0 {

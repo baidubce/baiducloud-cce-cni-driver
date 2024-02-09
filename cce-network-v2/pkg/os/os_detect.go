@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	osReleasePath = "/etc-host/os-release"
+	osReleasePath  = "/usr-host/lib/os-release"
+	etcReleasePath = "/etc-host/os-release"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "os")
@@ -45,7 +46,10 @@ func NewOSDistribution() (*OSRelease, error) {
 	}
 	file, err := os.ReadFile(osReleasePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %v", osReleasePath, err)
+		file, err = os.ReadFile(etcReleasePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %s and %s: %v", osReleasePath, etcReleasePath, err)
+		}
 	}
 	var osRelease OSRelease
 	reader := bufio.NewReader(bytes.NewReader(file))

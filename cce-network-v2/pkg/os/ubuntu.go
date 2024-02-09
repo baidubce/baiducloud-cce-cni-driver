@@ -37,6 +37,14 @@ func (o *ubuntuOS) DisableMacPersistant() error {
 		log.Info("not ubuntu 22.04, skip disable mac persistent")
 		return nil
 	}
+	err := o.overrideSystemdDefaultLinkConfig()
+	if err != nil {
+		log.Errorf("failed to disable mac persistent, ignored os policy: %v", err)
+	}
+	return nil
+}
+
+func (o *ubuntuOS) overrideSystemdDefaultLinkConfig() error {
 	_, err := os.Open(defaultLinkPath)
 	if os.IsNotExist(err) {
 		err = os.WriteFile(defaultLinkPath, []byte(defaultLinkTemplate), 0644)

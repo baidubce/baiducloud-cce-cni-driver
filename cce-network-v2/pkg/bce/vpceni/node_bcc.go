@@ -106,17 +106,29 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 				return nil
 			}
 			eniCount++
+
+			scopedLog = scopedLog.WithFields(logrus.Fields{
+				"eniID":        interfaceID,
+				"index":        e.Status.InterfaceIndex,
+				"numAddresses": len(e.Spec.ENI.PrivateIPSet) - 1,
+			})
 			if e.Spec.UseMode == ccev2.ENIUseModePrimaryIP {
+				return nil
+			}
+
+			// Eni that is not in an in use state should be ignored, as even if the VPC interface is called to apply for an IP,
+			// the following error will be obtained
+			// [Code: EniStatusException; Message: The eni status is not allowed
+			//  to operate; RequestId: 0f4d190a-76af-4671-9f29-b954dbb47195]
+			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+				scopedLog.WithField("vpcStatus", e.Status.VPCStatus).Warnf("skip ENI which is not in use")
 				return nil
 			}
 			// The limits include the primary IP, so we need to take it into account
 			// when computing the effective number of available addresses on the ENI.
 			effectiveLimits := n.k8sObj.Spec.ENI.MaxIPsPerENI
 			scopedLog.WithFields(logrus.Fields{
-				"eniID":        interfaceID,
-				"index":        e.Status.InterfaceIndex,
 				"addressLimit": effectiveLimits,
-				"numAddresses": len(e.Spec.ENI.PrivateIPSet) - 1,
 			}).Debug("Considering ENI for allocation")
 
 			amap := ipamTypes.AllocationMap{}

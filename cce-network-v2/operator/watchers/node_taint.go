@@ -162,7 +162,7 @@ func processNextCCEPodItem(workQueue workqueue.RateLimitingInterface) bool {
 	}
 
 	pod, err := PodClient.Lister().Pods(namespace).Get(name)
-	if err != nil && !k8sErrors.IsNotFound(err) {
+	if err != nil {
 		return true
 	}
 

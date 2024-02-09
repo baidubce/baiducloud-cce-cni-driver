@@ -104,11 +104,11 @@ extplugins: {}
 # cce守护进程配置
 ccedConfig:
   # 开启debug模式(会多打日志)
-  debug: true
+  debug: false
   # 在非k8s环境运行使用
   # k8s-kubeconfig-path: /run/kubeconfig
-  k8s-client-burst: 10
-  k8s-client-qps: 5
+  k8s-client-burst: 15
+  k8s-client-qps: 10
   k8s-api-discovery: false
   leader-election-lease-duration: 60s
   leader-election-renew-deadline: 30s
@@ -162,6 +162,10 @@ ccedConfig:
   cce-cluster-id: ""
   # vpc 资源同步周期
   resource-resync-interval: 20s
+  # ipam 并发工作协程数
+  parallel-alloc-workers: 500
+  # 资源重新同步的并发协程数
+  resource-resync-workers: 64
 
   # operator BCE VPC 配置
   # vpc id

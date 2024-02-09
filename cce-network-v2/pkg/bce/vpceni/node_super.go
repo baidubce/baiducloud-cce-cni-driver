@@ -49,6 +49,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 )
 
+func init() {
+	ccev2.AddToScheme(scheme.Scheme)
+}
+
 // The following error constants represent the error conditions for
 // CreateInterface without additional context embedded in order to make them
 // usable for metrics accounting purposes.
@@ -366,7 +370,8 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 		})
 
 	if n.creatingEni.hasCreatingENI() {
-		return 0, "", fmt.Errorf("concurrent eni creating")
+		scopedLog.Debugf("skip to creating new eni, concurrent eni creating")
+		return 0, "", nil
 	}
 
 	n.creatingEni.add(1)

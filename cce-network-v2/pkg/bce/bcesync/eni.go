@@ -251,26 +251,50 @@ func (ss *eniSyncher) Create(resource *ccev2.ENI) error {
 }
 
 func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
+	var err error
 	if resource.Spec.Type != ccev2.ENIForBCC && resource.Spec.Type != ccev2.ENIDefaultBCC {
 		return nil
 	}
-	var (
-		newObj      = resource.DeepCopy()
-		eniStatus   *ccev2.ENIStatus
-		err         error
-		updateError error
-		ctx         = logfields.NewContext()
-	)
 
 	scopeLog := eniLog.WithFields(logrus.Fields{
-		"eniID":      newObj.Name,
-		"vpcID":      newObj.Spec.ENI.VpcID,
-		"eniName":    newObj.Spec.ENI.Name,
-		"instanceID": newObj.Spec.ENI.InstanceID,
-		"status":     newObj.Status.VPCStatus,
+		"eniID":      resource.Name,
+		"vpcID":      resource.Spec.ENI.VpcID,
+		"eniName":    resource.Spec.ENI.Name,
+		"instanceID": resource.Spec.ENI.InstanceID,
+		"oldStatus":  resource.Status.VPCStatus,
 		"method":     "eniSyncher.Update",
 	})
 
+	// refresh eni from vpc and retry if k8s resource is expired
+	for retry := 0; retry < 3; retry++ {
+		if retry > 0 {
+			// refresh new k8s resource when resource is expired
+			resource, err = k8s.CCEClient().CceV2().ENIs().Get(context.TODO(), resource.Name, metav1.GetOptions{})
+			if err != nil {
+				scopeLog.WithError(err).Error("get eni failed")
+				return err
+			}
+
+		}
+		scopeLog = scopeLog.WithField("retry", retry)
+		err := ss.handleENIUpdate(resource, scopeLog)
+		if kerrors.IsConflict(err) || kerrors.IsResourceExpired(err) {
+			continue
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (ss *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entry) error {
+	var (
+		newObj      = resource.DeepCopy()
+		err         error
+		ctx         = logfields.NewContext()
+		eniStatus   *ccev2.ENIStatus
+		updateError error
+	)
 	skipRefresh := ss.mangeFinalizer(newObj)
 	if !skipRefresh {
 		scopeLog.Debug("start eni machine")
@@ -284,15 +308,10 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 		err = machine.start()
 		_, isDelayError := err.(*cm.DelayEvent)
 		if err != nil {
-			if isDelayError {
+			if isDelayError && newObj.Status.VPCStatus == resource.Status.VPCStatus {
 				// if vpc status is not changed, will retry after 5s
-				if newObj.Status.VPCStatus == resource.Status.VPCStatus {
-					scopeLog.Infof("eni vpc status not changed, will retry later")
-					return err
-				} else {
-					// if vpc status is changed, will upate status on apiserver
-					goto updateAPIServer
-				}
+				scopeLog.Infof("eni vpc status not changed, will retry later")
+				return err
 			} else {
 				scopeLog.WithError(err).Error("eni machine failed")
 				return err
@@ -306,15 +325,13 @@ func (ss *eniSyncher) Update(resource *ccev2.ENI) error {
 			scopeLog.WithError(err).Error("refresh eni failed")
 			return err
 		}
+		eniStatus = &newObj.Status
 	}
 
-updateAPIServer:
-	eniStatus = &newObj.Status
 	// update spec and status
 	if !reflect.DeepEqual(&newObj.Spec, &resource.Spec) ||
 		!reflect.DeepEqual(newObj.Labels, resource.Labels) ||
 		!reflect.DeepEqual(newObj.Finalizers, resource.Finalizers) {
-		scopeLog.Debug("start update eni spec")
 		newObj, updateError = ss.updater.Update(newObj)
 		if updateError != nil {
 			scopeLog.WithError(updateError).Error("update eni spec failed")
@@ -323,9 +340,12 @@ updateAPIServer:
 		scopeLog.Info("update eni spec success")
 	}
 
-	if !reflect.DeepEqual(eniStatus, &resource.Status) {
+	if !reflect.DeepEqual(eniStatus, &resource.Status) && eniStatus != nil {
 		newObj.Status = *eniStatus
-		scopeLog.Debug("start update eni status")
+		scopeLog = scopeLog.WithFields(logrus.Fields{
+			"vpcStatus": newObj.Status.VPCStatus,
+			"cceStatus": newObj.Status.CCEStatus,
+		})
 		_, updateError = ss.updater.UpdateStatus(newObj)
 		if updateError != nil {
 			scopeLog.WithError(updateError).Error("update eni status failed")
@@ -501,7 +521,12 @@ func (esm *eniStateMachine) start() error {
 			return err
 		}
 
-		(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
+		// regresh the status of ENI
+		if esm.resource.Status.VPCStatus != ccev2.VPCENIStatus(esm.vpceni.Status) {
+			(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
+			return nil
+		}
+
 		// not the final status, will retry later
 		return cm.NewDelayEvent(esm.resource.Name, ENIReadyTimeToAttach, fmt.Sprintf("eni %s status is not final: %s", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus))
 	}

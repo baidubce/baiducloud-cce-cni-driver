@@ -22,6 +22,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud/ccegateway"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 )
 
 var (
@@ -47,7 +48,7 @@ func BCEClient() cloud.Interface {
 		operatorOption.Config.CCEClusterID,
 		operatorOption.Config.BCECloudAccessKey,
 		operatorOption.Config.BCECloudSecureKey,
-		k8s.Client(), false)
+		k8s.Client(), option.Config.Debug)
 	if err != nil {
 		log.Fatalf("[InitBCEClient] failed to init bce client %v", err)
 	}

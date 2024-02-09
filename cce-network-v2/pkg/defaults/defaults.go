@@ -313,7 +313,7 @@ const (
 	UseENIPrimaryAddress = false
 
 	// ParallelAllocWorkers is the default max number of parallel workers doing allocation in the operator
-	ParallelAllocWorkers = 50
+	ParallelAllocWorkers = 500
 
 	// CloudAPIBurst is the default burst value when rate limiting access to external APIs
 	CloudAPIBurst = 30

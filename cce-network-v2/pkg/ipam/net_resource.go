@@ -943,6 +943,7 @@ func (n *NetResource) MaintainIPPool(ctx context.Context) error {
 	n.poolMaintenanceComplete()
 	n.recalculate()
 	if instanceMutated || err != nil {
+		n.logger().Debug("MaintainIPPool triggering resync")
 		n.manager.resyncTrigger.Trigger()
 	}
 	return err

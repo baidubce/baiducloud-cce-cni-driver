@@ -7,8 +7,13 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. CRD 字段变更: NetworkResourceSet 资源池增加了节点上 ENI 的异常状态，报错单机 IP 容量状态，整机 ENI 网卡状态。
 3. 新特性: 支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
 4. 新特性：支持 pod 级 Qos
-
-### 2.9.0
+### 2.9.1 
+1. [optimize] 优化NetResourceManager在接收事件时处理的锁，消除事件处理过程中 6 分钟延迟
+2. [optimize] 优化ENI状态机同步错误时，增加 3 次重试机会，消除因 ENI 状态延迟导致的 10 分钟就绪延迟
+3. [bug]修复 cce-network-agent 识别操作系统信息错误的问题
+4. [bug]修复cce-network-agent pod 被删除后，小概率导致 operator 空指针退出问题
+5. [bug]修复创建 eni 无法向 nrs 对象上打印 event 的问题
+### 2.9.0 [20240102]
 1. [optimize] 申请 IP 失败时,支持给出失败的原因.包括:
     a. 没有可用子网
     b. IP 地址池已满

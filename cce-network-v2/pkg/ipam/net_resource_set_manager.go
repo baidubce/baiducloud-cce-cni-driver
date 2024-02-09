@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	listerv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 
 	"github.com/sirupsen/logrus"
@@ -222,7 +223,7 @@ func (n *NetResourceSetManager) Start(ctx context.Context) error {
 		mngr := controller.NewManager()
 		mngr.UpdateController("ipam-node-interval-refresh",
 			controller.ControllerParams{
-				RunInterval: 30 * time.Second,
+				RunInterval: operatorOption.Config.ResourceResyncInterval,
 				DoFunc: func(ctx context.Context) error {
 					if syncTime, ok := n.instancesAPIResync(ctx); ok {
 						n.Resync(ctx, syncTime)
@@ -270,14 +271,12 @@ func (n *NetResourceSetManager) Create(resource *v2.NetResourceSet) error {
 // Update is called whenever a NetResourceSet resource has been updated in the
 // Kubernetes apiserver
 func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
-	var nodeSynced = true
 	n.mutex.Lock()
 	node, ok := n.netResources[resource.Name]
+	n.mutex.Unlock()
+
 	defer func() {
-		n.mutex.Unlock()
-		if nodeSynced {
-			nodeSynced = node.UpdatedResource(resource)
-		}
+		node.UpdatedResource(resource)
 	}()
 	if !ok {
 		node = &NetResource{
@@ -307,7 +306,7 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 
 		retry, err := trigger.NewTrigger(trigger.Parameters{
 			Name:        fmt.Sprintf("ipam-pool-maintainer-%s-retry", resource.Name),
-			MinInterval: 30 * time.Second, // large minimal interval to not retry too often
+			MinInterval: 5 * time.Second, // large minimal interval to not retry too often
 			TriggerFunc: func(reasons []string) { poolMaintainer.Trigger() },
 		})
 		if err != nil {
@@ -332,7 +331,11 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 
 		node.poolMaintainer = poolMaintainer
 		node.k8sSync = k8sSync
+
+		n.mutex.Lock()
 		n.netResources[node.name] = node
+		n.mutex.Unlock()
+
 		log.WithField(fieldName, resource.Name).Info("Discovered new NetResourceSet custom resource")
 	}
 

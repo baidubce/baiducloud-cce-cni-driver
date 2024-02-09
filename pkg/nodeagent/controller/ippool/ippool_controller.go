@@ -130,15 +130,12 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		node *v1.Node
 		ctx  = log.NewContext()
 	)
-	log.V(6).Infof(ctx, "SyncNode for node: %v begin", nodeKey)
-	defer log.V(6).Infof(ctx, "SyncNode for node: %v end", nodeKey)
 
 	isLocalNode := nodeKey == c.nodeName
 
 	if isLocalNode {
 		node, err = nodeLister.Get(nodeKey)
 		if err != nil {
-			log.Errorf(ctx, "failed to get node: %v, err: %v", nodeKey, err)
 			return err
 		}
 
@@ -178,11 +175,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 			c.ipResourceManager = NewBCCIPResourceManager(c.kubeClient, c.preAttachedENINum, node, c.bccInstance)
 			return c.syncENISpec(ctx, nodeCopy)
 		case types.IsCCECNIModeBasedOnBBCSecondaryIP(c.cniMode):
-			if c.instanceType == metadata.InstanceTypeExBBC {
-				c.ipResourceManager = NewBBCIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
-			} else {
-				c.ipResourceManager = NewBCCIPResourceManager(c.kubeClient, c.preAttachedENINum, node, c.bccInstance)
-			}
+			c.ipResourceManager = NewBBCIPResourceManager(c.kubeClient, c.preAttachedENINum, node)
 			e1 := c.syncENISpec(ctx, nodeCopy)
 			e2 := c.syncPodSubnetSpec(ctx, nodeCopy)
 			return utilerrors.NewAggregate([]error{e1, e2})
@@ -380,13 +373,12 @@ func (c *Controller) syncRangeSpec(ctx context.Context, node *v1.Node) error {
 // createOrUpdateIPPool creates or updates node-level IPPool CR
 func (c *Controller) createOrUpdateIPPool(ctx context.Context, node *v1.Node) error {
 	poolName := c.ippoolName
-	nodeGVK := v1.SchemeGroupVersion.WithKind("Node")
 
 	// add owner reference to ippool object, ippool object will be deleted when node's ippool is deleted
 	ownerRefence := []metav1.OwnerReference{
 		{
-			APIVersion: nodeGVK.GroupVersion().String(),
-			Kind:       nodeGVK.Kind,
+			APIVersion: node.APIVersion,
+			Kind:       node.Kind,
 			Name:       node.Name,
 			UID:        node.UID,
 		},

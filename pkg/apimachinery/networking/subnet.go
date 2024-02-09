@@ -10,10 +10,12 @@
 package networking
 
 import (
+	"net"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	k8sutilnet "k8s.io/utils/net"
 
 	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )
@@ -34,53 +36,40 @@ func GetPodSubnetTopologySpreadName(pod *corev1.Pod) string {
 }
 
 func IsFixedIPMode(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
-	var strategy = GetPSTSStrategy(psts)
-	return strategy.Type == networkingv1alpha1.IPAllocTypeFixed
+	if len(psts.Spec.Subnets) != 1 {
+		return false
+	}
+	for _, sub := range psts.Spec.Subnets {
+		if sub.Type == networkingv1alpha1.IPAllocTypeFixed {
+			return true
+		}
+	}
+	return false
 }
 
 func IsManualMode(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
-	var strategy = GetPSTSStrategy(psts)
-	return strategy.Type == networkingv1alpha1.IPAllocTypeManual
+	for _, sub := range psts.Spec.Subnets {
+		if sub.Type == networkingv1alpha1.IPAllocTypeManual {
+			return true
+		}
+	}
+	return false
 }
 
 func IsElasticMode(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
-	var strategy = GetPSTSStrategy(psts)
-	return strategy.Type == networkingv1alpha1.IPAllocTypeElastic || strategy.Type == ""
-}
-
-// IsReuseIPCustomPSTS whether to enable the reuse IP mode
-func IsReuseIPCustomPSTS(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
-	return IsCustomMode(psts) && psts.Spec.Strategy.EnableReuseIPAddress
-}
-
-// IsCustomMode psts type is custom
-func IsCustomMode(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
-	return psts.Spec.Strategy != nil && psts.Spec.Strategy.Type == networkingv1alpha1.IPAllocTypeCustom
-}
-
-// GetReleaseStrategy defaults to release strategy is TTL
-func GetReleaseStrategy(psts *networkingv1alpha1.PodSubnetTopologySpread) networkingv1alpha1.ReleaseStrategy {
-	return GetPSTSStrategy(psts).ReleaseStrategy
-}
-
-// GetPSTSStrategy Recursively obtain the IP application policy
-func GetPSTSStrategy(psts *networkingv1alpha1.PodSubnetTopologySpread) *networkingv1alpha1.IPAllocationStrategy {
-	var strategy *networkingv1alpha1.IPAllocationStrategy
-	if psts.Spec.Strategy != nil {
-		strategy = psts.Spec.Strategy
-	} else {
-		for _, sub := range psts.Spec.Subnets {
-			strategy = &sub.IPAllocationStrategy
+	for _, sub := range psts.Spec.Subnets {
+		if sub.Type == networkingv1alpha1.IPAllocTypeElastic || sub.Type == "" {
+			return true
 		}
 	}
+	return false
+}
 
-	if strategy.Type == networkingv1alpha1.IPAllocTypeNil {
-		strategy.Type = networkingv1alpha1.IPAllocTypeElastic
+func GetReleaseStrategy(psts *networkingv1alpha1.PodSubnetTopologySpread) networkingv1alpha1.ReleaseStrategy {
+	for _, v := range psts.Spec.Subnets {
+		return v.ReleaseStrategy
 	}
-	if strategy.ReleaseStrategy == "" {
-		strategy.ReleaseStrategy = networkingv1alpha1.ReleaseStrategyTTL
-	}
-	return strategy
+	return networkingv1alpha1.ReleaseStrategyTTL
 }
 
 func IsEndWithNum(name string) bool {
@@ -96,15 +85,42 @@ func OwnerByPodSubnetTopologySpread(wep *networkingv1alpha1.WorkloadEndpoint, ps
 	return wep.GetNamespace() == psts.GetNamespace() && wep.Spec.SubnetTopologyReference == psts.Name
 }
 
-// PSTSContainsAvailableSubnet whatever length of the available subnet of psts greater than 0
 func PSTSContainsAvailableSubnet(psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
 	return len(psts.Status.AvailableSubnets) > 0
 }
 
-// PSTSMode slecte mod of psts and return true if a available subnet in psts
-func PSTSMode(psts *networkingv1alpha1.PodSubnetTopologySpread) (*networkingv1alpha1.IPAllocationStrategy, bool) {
-	if len(psts.Status.AvailableSubnets) == 0 {
-		return nil, false
+func PSTSContainersIP(ip string, psts *networkingv1alpha1.PodSubnetTopologySpread) bool {
+	netIP := net.ParseIP(ip)
+	for _, sbn := range psts.Spec.Subnets {
+		for _, v := range sbn.IPv4 {
+			if v == ip {
+				return true
+			}
+		}
+
+		cidrs, err := k8sutilnet.ParseCIDRs(sbn.IPv4Range)
+		if err == nil {
+			for _, cidr := range cidrs {
+				if cidr.Contains(netIP) {
+					return true
+				}
+			}
+		}
+
+		for _, v := range sbn.IPv6 {
+			if v == ip {
+				return true
+			}
+		}
+
+		cidrs, err = k8sutilnet.ParseCIDRs(sbn.IPv6Range)
+		if err == nil {
+			for _, cidr := range cidrs {
+				if cidr.Contains(netIP) {
+					return true
+				}
+			}
+		}
 	}
-	return GetPSTSStrategy(psts), true
+	return false
 }

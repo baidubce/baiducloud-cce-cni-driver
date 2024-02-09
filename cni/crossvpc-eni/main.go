@@ -19,12 +19,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -33,7 +33,6 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	"github.com/vishvananda/netlink"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/cni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
@@ -46,7 +45,6 @@ import (
 	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
 	nswrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/ns"
 	rpcwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/rpc"
-	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 )
 
 const (
@@ -69,7 +67,6 @@ type crossVpcEniPlugin struct {
 	netutil networkutil.Interface
 	rpc     rpcwrapper.Interface
 	grpc    grpcwrapper.Interface
-	sysctl  sysctlwrapper.Interface
 }
 
 func newCrossVpcEniPlugin() *crossVpcEniPlugin {
@@ -82,7 +79,6 @@ func newCrossVpcEniPlugin() *crossVpcEniPlugin {
 		netutil: networkutil.New(),
 		rpc:     rpcwrapper.New(),
 		grpc:    grpcwrapper.New(),
-		sysctl:  sysctlwrapper.New(),
 	}
 }
 
@@ -106,8 +102,15 @@ type NetConf struct {
 	Endpoint string `json:"endpoint"`
 }
 
+func initFlags() {
+	log.InitFlags(nil)
+	flag.Set("logtostderr", "false")
+	flag.Set("log_file", logFile)
+	flag.Parse()
+}
+
 func main() {
-	cni.InitFlags(logFile)
+	initFlags()
 	defer log.Flush()
 
 	logDir := filepath.Dir(logFile)
@@ -156,7 +159,6 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 		ipam       = NewCrossVpcEniIPAM(p.grpc, p.rpc)
 		netns      ns.NetNS
 		err        error
-		linkErr    error
 	)
 
 	log.Infof(ctx, "====> CmdAdd Begins <====")
@@ -183,10 +185,6 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	var (
-		isCrossVPCEniPrimaryInterface = n.IfName == args.IfName
-	)
-
 	resp, err := ipam.CreateEni(ctx, k8sArgs, n.Endpoint)
 	if err != nil {
 		return fmt.Errorf("ipam creates eni error: %v", err)
@@ -209,24 +207,9 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	// the kernel would take some time to detect eni insertion.
-	err = wait.ExponentialBackoff(wait.Backoff{
-		Duration: time.Millisecond * 500,
-		Factor:   1,
-		Steps:    6,
-	}, func() (done bool, err error) {
-		target, linkErr = p.netutil.GetLinkByMacAddress(resp.GetCrossVPCENI().Mac)
-		if linkErr != nil {
-			log.Warningf(ctx, "host netns: %v", linkErr)
-		} else {
-			log.Infof(ctx, "host netns: found link %v with mac address %v", target.Attrs().Name, resp.GetCrossVPCENI().Mac)
-			return true, nil
-		}
-
-		return false, nil
-	})
-	if err != nil && err == wait.ErrWaitTimeout {
-		return fmt.Errorf("host netns: %v", linkErr)
+	target, err = p.netutil.GetLinkByMacAddress(resp.GetCrossVPCENI().Mac)
+	if err != nil {
+		return fmt.Errorf("host netns: %v", err)
 	}
 
 	if err = p.nlink.LinkSetNsFd(target, int(netns.Fd())); err != nil {
@@ -240,11 +223,11 @@ func (p *crossVpcEniPlugin) cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	if n.PrevResult == nil || isCrossVPCEniPrimaryInterface {
-		log.Info(ctx, "crossvpc-eni is the main plugin or in exclusive mode")
+	if n.PrevResult == nil {
+		log.Info(ctx, "crossvpc-eni is the main plugin")
 		result.Interfaces = []*current.Interface{{
 			Name:    n.IfName,
-			Mac:     resp.GetCrossVPCENI().GetMac(),
+			Mac:     resp.GetCrossVPCENI().GetIP(),
 			Sandbox: args.Netns,
 		}}
 		result.IPs = []*current.IPConfig{
@@ -265,24 +248,9 @@ func (p *crossVpcEniPlugin) setupEni(
 	ifName string,
 	args *skel.CmdArgs,
 ) error {
-	var (
-		isCrossVPCEniPrimaryInterface bool = (ifName == args.IfName)
-	)
-
 	target, err := p.netutil.GetLinkByMacAddress(resp.GetCrossVPCENI().Mac)
 	if err != nil {
 		return fmt.Errorf("container netns: %v", err)
-	}
-
-	if isCrossVPCEniPrimaryInterface {
-		oldVeth, err := p.nlink.LinkByName(args.IfName)
-		if err != nil {
-			return err
-		}
-		err = p.nlink.LinkDel(oldVeth)
-		if err != nil {
-			return err
-		}
 	}
 
 	if ifName != "" {
@@ -317,6 +285,10 @@ func (p *crossVpcEniPlugin) setupEni(
 		return err
 	}
 
+	var (
+		isCrossVPCEniPrimaryInterface bool = (ifName == args.IfName)
+	)
+
 	if isCrossVPCEniPrimaryInterface {
 		_, defaultPrefix, _ := net.ParseCIDR("0.0.0.0/0")
 		err = p.nlink.RouteReplace(&netlink.Route{
@@ -324,80 +296,6 @@ func (p *crossVpcEniPlugin) setupEni(
 			LinkIndex: target.Attrs().Index,
 			Scope:     netlink.SCOPE_UNIVERSE,
 		})
-		if err != nil {
-			return err
-		}
-	}
-
-	// process user specified routes
-	if !isCrossVPCEniPrimaryInterface {
-		err = p.processUserSpecifiedRoutes(resp, target, args)
-		if err != nil {
-			return err
-		}
-	}
-
-	// for security concern, forbid ip forward
-	_, err = p.sysctl.Sysctl("net/ipv4/ip_forward", "0")
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (p *crossVpcEniPlugin) processUserSpecifiedRoutes(
-	resp *rpc.AllocateIPReply,
-	eniLink netlink.Link,
-	args *skel.CmdArgs,
-) error {
-	var (
-		eniDelegation bool
-		vethLink      netlink.Link
-		err           error
-	)
-
-	vethLink, err = p.nlink.LinkByName(args.IfName)
-	if err != nil {
-		return err
-	}
-
-	if resp.GetCrossVPCENI().GetDefaultRouteInterfaceDelegation() == "eni" {
-		eniDelegation = true
-	}
-
-	if eniDelegation {
-		_, defaultPrefix, _ := net.ParseCIDR("0.0.0.0/0")
-		err = p.nlink.RouteReplace(&netlink.Route{
-			Dst:       defaultPrefix,
-			LinkIndex: eniLink.Attrs().Index,
-			Scope:     netlink.SCOPE_UNIVERSE,
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, cidr := range resp.GetCrossVPCENI().GetDefaultRouteExcludedCidrs() {
-		_, dst, err := net.ParseCIDR(cidr)
-		if err != nil {
-			return err
-		}
-
-		if eniDelegation {
-			err = p.nlink.RouteReplace(&netlink.Route{
-				Dst:       dst,
-				LinkIndex: vethLink.Attrs().Index,
-				Gw:        net.IPv4(169, 254, 1, 1),
-			})
-		} else {
-			err = p.nlink.RouteReplace(&netlink.Route{
-				Dst:       dst,
-				LinkIndex: eniLink.Attrs().Index,
-				Scope:     netlink.SCOPE_LINK,
-			})
-		}
-
 		if err != nil {
 			return err
 		}

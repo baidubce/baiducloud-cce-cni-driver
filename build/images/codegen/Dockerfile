@@ -22,8 +22,7 @@ RUN go env -w GO111MODULE="on" && \
     go env -w GONOPROXY=\*\*.baidu.com\*\*  && \
     go env -w GONOSUMDB=\* && \
     go env -w GOPROXY=https://goproxy.baidu-int.com && \
-    go env -w GOPRIVATE=\*.baidu.com && \
-    go env -w GOFLAGS="-mod=mod"
+    go env -w GOPRIVATE=\*.baidu.com
 
 ARG K8S_VERSION=1.18.9
 

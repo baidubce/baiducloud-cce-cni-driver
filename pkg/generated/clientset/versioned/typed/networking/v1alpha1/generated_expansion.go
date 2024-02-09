@@ -6,8 +6,6 @@ type CrossVPCEniExpansion interface{}
 
 type IPPoolExpansion interface{}
 
-type MultiIPWorkloadEndpointExpansion interface{}
-
 type PodSubnetTopologySpreadExpansion interface{}
 
 type PodSubnetTopologySpreadTableExpansion interface{}

@@ -16,17 +16,12 @@
 package keymutex
 
 import (
-	"fmt"
 	"sync"
 	"time"
-
-	"github.com/alexflint/go-filemutex"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
 	waitLockSleepTime = 10 * time.Microsecond
-	fileLockTimeOut   = 10 * time.Second
 )
 
 type KeyMutex struct {
@@ -55,38 +50,4 @@ func (k *KeyMutex) WaitLock(key interface{}, timeout time.Duration) bool {
 
 func (k *KeyMutex) UnLock(key interface{}) {
 	k.m.Delete(key)
-}
-
-type Locker struct {
-	m *filemutex.FileMutex
-}
-
-// Close close
-func (l *Locker) Close() error {
-	if l.m != nil {
-		return l.m.Unlock()
-	}
-	return nil
-}
-
-// GrabFileLock get file lock with timeout 11seconds
-func GrabFileLock(lockfilePath string) (*Locker, error) {
-	var m, err = filemutex.New(lockfilePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open lock file: %s: %v", lockfilePath, err)
-	}
-
-	err = wait.PollImmediate(200*time.Millisecond, fileLockTimeOut, func() (bool, error) {
-		if err := m.Lock(); err != nil {
-			return false, nil
-		}
-		return true, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock: %v", err)
-	}
-
-	return &Locker{
-		m: m,
-	}, nil
 }

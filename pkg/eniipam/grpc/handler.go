@@ -24,14 +24,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	rpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
-
 	"google.golang.org/grpc"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
@@ -46,7 +45,6 @@ type ENIIPAMGrpcServer struct {
 	bccipamd       ipam.Interface
 	bbcipamd       ipam.Interface
 	eniipamd       ipam.ExclusiveEniInterface
-	roceipamd      ipam.RoceInterface
 	port           int
 	allocWorkers   int
 	releaseWorkers int
@@ -58,7 +56,6 @@ func New(
 	bccipam ipam.Interface,
 	bbcipam ipam.Interface,
 	eniipam ipam.ExclusiveEniInterface,
-	roceipamd ipam.RoceInterface,
 	port int,
 	allocLimit int,
 	releaseLimit int,
@@ -73,12 +70,11 @@ func New(
 	}
 
 	return &ENIIPAMGrpcServer{
-		bccipamd:  bccipam,
-		bbcipamd:  bbcipam,
-		eniipamd:  eniipam,
-		roceipamd: roceipamd,
-		port:      port,
-		debug:     debug,
+		bccipamd: bccipam,
+		bbcipamd: bbcipam,
+		eniipamd: eniipam,
+		port:     port,
+		debug:    debug,
 	}
 }
 
@@ -116,6 +112,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 	)
 	var (
 		t        = time.Now()
+		err      error
 		rpcReply = &rpc.AllocateIPReply{
 			IPType: req.IPType,
 		}
@@ -162,29 +159,18 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 	var (
 		ipamd            ipam.Interface
 		crossVpcEniIpamd ipam.ExclusiveEniInterface
-		multiIPIpamd     ipam.RoceInterface
 	)
-
 	if req.IPType == rpc.IPType_CrossVPCENIIPType {
 		crossVpcEniIpamd = cb.eniipamd
-	} else if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
-		multiIPIpamd = cb.roceipamd
 	} else {
 		ipamd = cb.getIpamByIPType(ctx, req.IPType)
 	}
 
-	// we are unlikely to hit this
-	if ipamd == nil && multiIPIpamd == nil && crossVpcEniIpamd == nil {
-		rpcReply.IsSuccess = false
-		rpcReply.ErrMsg = fmt.Sprintf("unsupported ipType %v from cni request", req.IPType)
-		return rpcReply, nil
-	}
-
 	// request comes in
 	cb.incWorker(true)
-	defer cb.decWorker(true)
 	if cb.getWorker(true) > allocateIPConcurrencyLimit {
 		// request rejected
+		cb.decWorker(true)
 		metric.RPCRejectedCounter.WithLabelValues(metric.MetaInfo.ClusterID, req.IPType.String(), rpcAPI).Inc()
 
 		rpcReply.IsSuccess = false
@@ -199,25 +185,17 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 	var (
 		crossVpcEni *v1alpha1.CrossVPCEni
 		wep         *v1alpha1.WorkloadEndpoint
-		err         error
 	)
 
 	if crossVpcEniIpamd != nil {
 		crossVpcEni, err = crossVpcEniIpamd.Allocate(ctx, name, namespace, containerID)
 	} else {
-		if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
-			mac := req.GetENIMultiIP().Mac
-			wep, err = multiIPIpamd.Allocate(ctx, name, namespace, containerID, mac, req.IPType)
-		} else {
-			wep, err = ipamd.Allocate(ctx, name, namespace, containerID)
-		}
+		wep, err = ipamd.Allocate(ctx, name, namespace, containerID)
 	}
-	rpcReply = makeAllocateRPCReply(wep, crossVpcEni, rpcReply, err)
 
-	return rpcReply, nil
-}
+	// request completes
+	cb.decWorker(true)
 
-func makeAllocateRPCReply(wep *v1alpha1.WorkloadEndpoint, crossVpcEni *v1alpha1.CrossVPCEni, rpcReply *rpc.AllocateIPReply, err error) *rpc.AllocateIPReply {
 	if err != nil {
 		rpcReply.IsSuccess = false
 		rpcReply.ErrMsg = err.Error()
@@ -226,11 +204,9 @@ func makeAllocateRPCReply(wep *v1alpha1.WorkloadEndpoint, crossVpcEni *v1alpha1.
 		if crossVpcEni != nil {
 			rpcReply.NetworkInfo = &rpc.AllocateIPReply_CrossVPCENI{
 				CrossVPCENI: &rpc.CrossVPCENIReply{
-					IP:                              crossVpcEni.Status.PrimaryIPAddress,
-					Mac:                             crossVpcEni.Status.MacAddress,
-					VPCCIDR:                         crossVpcEni.Spec.VPCCIDR,
-					DefaultRouteInterfaceDelegation: crossVpcEni.Spec.DefaultRouteInterfaceDelegation,
-					DefaultRouteExcludedCidrs:       crossVpcEni.Spec.DefaultRouteExcludedCidrs,
+					IP:      crossVpcEni.Status.PrimaryIPAddress,
+					Mac:     crossVpcEni.Status.MacAddress,
+					VPCCIDR: crossVpcEni.Spec.VPCCIDR,
 				},
 			}
 		} else {
@@ -251,7 +227,8 @@ func makeAllocateRPCReply(wep *v1alpha1.WorkloadEndpoint, crossVpcEni *v1alpha1.
 			}
 		}
 	}
-	return rpcReply
+
+	return rpcReply, nil
 }
 
 func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRequest) (*rpc.ReleaseIPReply, error) {
@@ -299,21 +276,11 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 	var (
 		ipamd            ipam.Interface
 		crossVpcEniIpamd ipam.ExclusiveEniInterface
-		multiIPIpamd     ipam.RoceInterface
 	)
 	if req.IPType == rpc.IPType_CrossVPCENIIPType {
 		crossVpcEniIpamd = cb.eniipamd
-	} else if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
-		multiIPIpamd = cb.roceipamd
 	} else {
 		ipamd = cb.getIpamByIPType(ctx, req.IPType)
-	}
-
-	// we are unlikely to hit this
-	if ipamd == nil && multiIPIpamd == nil && crossVpcEniIpamd == nil {
-		rpcReply.IsSuccess = false
-		rpcReply.ErrMsg = fmt.Sprintf("unsupported ipType %v from cni request", req.IPType)
-		return rpcReply, nil
 	}
 
 	// request comes in
@@ -339,11 +306,7 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 	if crossVpcEniIpamd != nil {
 		crossVpcEni, err = crossVpcEniIpamd.Release(ctx, name, namespace, containerID)
 	} else {
-		if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
-			wep, err = multiIPIpamd.Release(ctx, name, namespace, containerID)
-		} else {
-			wep, err = ipamd.Release(ctx, name, namespace, containerID)
-		}
+		wep, err = ipamd.Release(ctx, name, namespace, containerID)
 	}
 
 	// request completes
@@ -357,11 +320,9 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 		if crossVpcEni != nil {
 			rpcReply.NetworkInfo = &rpc.ReleaseIPReply_CrossVPCENI{
 				CrossVPCENI: &rpc.CrossVPCENIReply{
-					IP:                              crossVpcEni.Status.PrimaryIPAddress,
-					Mac:                             crossVpcEni.Status.MacAddress,
-					VPCCIDR:                         crossVpcEni.Spec.VPCCIDR,
-					DefaultRouteInterfaceDelegation: crossVpcEni.Spec.DefaultRouteInterfaceDelegation,
-					DefaultRouteExcludedCidrs:       crossVpcEni.Spec.DefaultRouteExcludedCidrs,
+					IP:      crossVpcEni.Status.PrimaryIPAddress,
+					Mac:     crossVpcEni.Status.MacAddress,
+					VPCCIDR: crossVpcEni.Spec.VPCCIDR,
 				},
 			}
 		} else {

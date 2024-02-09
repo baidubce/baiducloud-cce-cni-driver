@@ -233,10 +233,10 @@ func (suite *IPPoolTestCase) mockCloudInterface() {
 	}, nil).AnyTimes()
 }
 
-func (suite *IPPoolTestCase) TestIPv4CreateIPRange() {
+func (suite *IPPoolTestCase) TestCreateIPRange() {
 	c := suite.c
 	c.cniMode = types.CCEModeRouteVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -261,44 +261,13 @@ func (suite *IPPoolTestCase) TestIPv4CreateIPRange() {
 	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(255, resource.Value(), "eni capacity")
-}
-
-func (suite *IPPoolTestCase) TestIPv4IPv6CreateIPRange() {
-	c := suite.c
-	c.cniMode = types.CCEModeRouteVeth
-	node := mockIPv4IPv6Node(c.nodeName, c.instanceID)
-
-	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
-	suite.startInformer()
-	suite.mockCloudInterface()
-
-	// wait for cache sync
-	stopChan := make(chan struct{})
-	defer close(stopChan)
-	go func() {
-		suite.kubeInformer.Start(stopChan)
-	}()
-	cache.WaitForNamedCacheSync("controller-test", stopChan, suite.kubeInformer.Core().V1().Nodes().Informer().HasSynced)
-
-	err := c.SyncNode(c.nodeName, suite.kubeInformer.Core().V1().Nodes().Lister())
-	suite.NoError(err, "sync ip pool manager with ip range error")
-
-	node, err = c.kubeClient.CoreV1().Nodes().Get(suite.ctx, node.Name, metav1.GetOptions{})
-	suite.Assert().NoError(err, "get node error")
-
-	resource, ok := node.Status.Capacity[networking.ResourceENIForNode]
-	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
-	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
-	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(9223372036854775806, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(256, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateBCCENI() {
 	c := suite.c
 	c.cniMode = types.CCEModeSecondaryIPVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -323,13 +292,13 @@ func (suite *IPPoolTestCase) TestCreateBCCENI() {
 	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(240, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestEmptyIPPool() {
 	c := suite.c
 	c.cniMode = types.CCEModeSecondaryIPVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -371,13 +340,13 @@ func (suite *IPPoolTestCase) TestEmptyIPPool() {
 	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(240, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateBBCENI() {
 	c := suite.c
 	c.cniMode = types.CCEModeBBCSecondaryIPVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -403,45 +372,13 @@ func (suite *IPPoolTestCase) TestCreateBBCENI() {
 	suite.Assert().EqualValues(1, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(39, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(40, resource.Value(), "eni capacity")
 }
 
-func (suite *IPPoolTestCase) TestCreateBCCENIonVPCHybird() {
+func (suite *IPPoolTestCase) TestCreateBBCENIWithCustomerMaxIP() {
 	c := suite.c
 	c.cniMode = types.CCEModeBBCSecondaryIPVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
-
-	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
-	suite.startInformer()
-	suite.mockCloudInterface()
-	c.instanceType = metadata.InstanceTypeExBCC
-
-	// wait for cache sync
-	stopChan := make(chan struct{})
-	defer close(stopChan)
-	go func() {
-		suite.kubeInformer.Start(stopChan)
-	}()
-	cache.WaitForNamedCacheSync("controller-test", stopChan, suite.kubeInformer.Core().V1().Nodes().Informer().HasSynced)
-
-	err := c.SyncNode(c.nodeName, suite.kubeInformer.Core().V1().Nodes().Lister())
-	suite.NoError(err, "sync ip pool manager with ip range error")
-
-	node, err = c.kubeClient.CoreV1().Nodes().Get(suite.ctx, node.Name, metav1.GetOptions{})
-	suite.Assert().NoError(err, "get node error")
-
-	resource, ok := node.Status.Capacity[networking.ResourceENIForNode]
-	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(8, resource.Value(), "eni capacity")
-	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
-	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(232, resource.Value(), "eni capacity")
-}
-
-func (suite *IPPoolTestCase) TestCreateBBCENIonHybirdWithCustomerMaxIP() {
-	c := suite.c
-	c.cniMode = types.CCEModeBBCSecondaryIPVeth
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	customerMaxIPPerENI = 100
 	customerMaxENINum = 10
@@ -470,13 +407,13 @@ func (suite *IPPoolTestCase) TestCreateBBCENIonHybirdWithCustomerMaxIP() {
 	suite.Assert().EqualValues(10, resource.Value(), "eni capacity")
 	resource, ok = node.Status.Capacity[networking.ResourceIPForNode]
 	suite.Assert().True(ok, "node status donot contains eni resource")
-	suite.Assert().EqualValues(990, resource.Value(), "eni capacity")
+	suite.Assert().EqualValues(1000, resource.Value(), "eni capacity")
 }
 
 func (suite *IPPoolTestCase) TestCreateCrossVPCEni() {
 	c := suite.c
 	c.cniMode = types.CCEModeExclusiveCrossVPCEni
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -497,7 +434,7 @@ func (suite *IPPoolTestCase) TestCreateCrossVPCEni() {
 func (suite *IPPoolTestCase) TestUnknownMode() {
 	c := suite.c
 	c.cniMode = "foo"
-	node := mockIPv4Node(c.nodeName, c.instanceID)
+	node := mockNode(c.nodeName, c.instanceID)
 
 	c.kubeClient.CoreV1().Nodes().Create(suite.ctx, node, metav1.CreateOptions{})
 	suite.startInformer()
@@ -515,31 +452,13 @@ func (suite *IPPoolTestCase) TestUnknownMode() {
 	suite.Error(err)
 }
 
-func mockIPv4Node(name, instance string) *v1.Node {
+func mockNode(name, instance string) *v1.Node {
 	return &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
 		Spec: v1.NodeSpec{
 			PodCIDR:    "192.168.1.0/24",
-			ProviderID: "cce://i-QGUcXDdM",
-		},
-		Status: v1.NodeStatus{
-			Phase: v1.NodeRunning,
-			Capacity: v1.ResourceList{
-				v1.ResourceCPU: *resource.NewQuantity(1, resource.DecimalSI),
-			},
-		},
-	}
-}
-
-func mockIPv4IPv6Node(name, instance string) *v1.Node {
-	return &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: v1.NodeSpec{
-			PodCIDRs:   []string{"192.168.1.0/24", "2002::1234:abcd:ffff:c0a8:101/64"},
 			ProviderID: "cce://i-QGUcXDdM",
 		},
 		Status: v1.NodeStatus{

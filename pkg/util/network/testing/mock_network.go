@@ -7,7 +7,6 @@ package testing
 import (
 	net "net"
 	reflect "reflect"
-	time "time"
 
 	gomock "github.com/golang/mock/gomock"
 	netlink "github.com/vishvananda/netlink"
@@ -123,20 +122,4 @@ func (m *MockInterface) InterfaceByName(arg0 string) (*net.Interface, error) {
 func (mr *MockInterfaceMockRecorder) InterfaceByName(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InterfaceByName", reflect.TypeOf((*MockInterface)(nil).InterfaceByName), arg0)
-}
-
-// PingOverIfaceByName mocks base method.
-func (m *MockInterface) PingOverIfaceByName(arg0 net.IP, arg1 string) (net.HardwareAddr, time.Duration, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PingOverIfaceByName", arg0, arg1)
-	ret0, _ := ret[0].(net.HardwareAddr)
-	ret1, _ := ret[1].(time.Duration)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// PingOverIfaceByName indicates an expected call of PingOverIfaceByName.
-func (mr *MockInterfaceMockRecorder) PingOverIfaceByName(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PingOverIfaceByName", reflect.TypeOf((*MockInterface)(nil).PingOverIfaceByName), arg0, arg1)
 }

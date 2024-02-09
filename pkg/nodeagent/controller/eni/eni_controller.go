@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 	"regexp"
 	"strconv"
 	"time"
@@ -39,7 +38,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
-	cniconf "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/cniconf"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	utilippool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
 	cidrutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/cidr"
@@ -281,19 +279,8 @@ func (c *Controller) setupENILink(ctx context.Context, eni *enisdk.Eni) (int, er
 	}
 	eniIndex := eniIntf.Attrs().Index
 
-	mtu := 0
-	// Reflect enisdk.Eni, compatible with the absence of the MTU field
-	v := reflect.ValueOf(eni).Elem()
-	if v.FieldByName("MTU").IsValid() {
-		mtu = (int)(v.FieldByName("MTU").Int())
-		log.Infof(ctx, "eni openapi mtu seggment supported, reflect: %#v", v.FieldByName("MTU"))
-	} else {
-		mtu = cniconf.DefaultMTU
-		log.Infof(ctx, "eni openapi not fill MTU seggment. set eni default mtu to %d", mtu)
-	}
-	err = c.setLinkUP(ctx, eniIntf, mtu)
+	err = c.setLinkUP(ctx, eniIntf)
 	if err != nil {
-		log.Errorf(ctx, "eni set uplink error. index: %d, mac: %s, mtu: %d, errmsg: %v", eniIntf.Attrs().Index, eniIntf.Attrs().HardwareAddr.String(), mtu, err)
 		return eniIndex, err
 	}
 
@@ -318,19 +305,13 @@ func (c *Controller) setupENILink(ctx context.Context, eni *enisdk.Eni) (int, er
 	return eniIndex, nil
 }
 
-func (c *Controller) setLinkUP(ctx context.Context, intf netlink.Link, mtu int) error {
+func (c *Controller) setLinkUP(ctx context.Context, intf netlink.Link) error {
 	if intf.Attrs().Flags&net.FlagUp != 0 {
 		return nil
 	}
 	// if link is down, set link up
 	log.Warningf(ctx, "link %v is down, will bring it up", intf.Attrs().Name)
-	log.Infof(ctx, "setup eni: index: %d, mac: %s, mtu: %d", intf.Attrs().Index, intf.Attrs().HardwareAddr.String(), mtu)
-	err := c.netlink.LinkSetMTU(intf, mtu)
-	if err != nil {
-		return err
-	}
-
-	err = c.netlink.LinkSetUp(intf)
+	err := c.netlink.LinkSetUp(intf)
 	if err != nil {
 		return err
 	}

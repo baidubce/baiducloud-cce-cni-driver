@@ -17,6 +17,7 @@ package bcc
 
 import (
 	"context"
+	goerrors "errors"
 	"fmt"
 	"net"
 	"sort"
@@ -42,15 +43,12 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/subnet"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/topology_spread"
 	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/ipcache"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
@@ -62,18 +60,14 @@ import (
 )
 
 const (
-	// minPrivateIPLifeTime is the lifetime of a private ip (from allocation to release), aim to trade off db slave delay
+	// minPrivateIPLifeTime is the life time of a private ip (from allocation to release), aim to trade off db slave delay
 	minPrivateIPLifeTime = 5 * time.Second
-
-	minIdleIPPoolSize = 1
 
 	rateLimitErrorSleepPeriod  = time.Millisecond * 200
 	rateLimitErrorJitterFactor = 5
-
-	increasePoolSizePerNode = 10
 )
 
-func (ipam *IPAM) Ready(_ context.Context) bool {
+func (ipam *IPAM) Ready(ctx context.Context) bool {
 	return ipam.cacheHasSynced
 }
 
@@ -94,7 +88,7 @@ func NewIPAM(
 	batchAddIPNum int,
 	eniSyncPeriod time.Duration,
 	gcPeriod time.Duration,
-	_ bool,
+	debug bool,
 ) (ipamgeneric.Interface, error) {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
@@ -106,10 +100,6 @@ func NewIPAM(
 	sbnController := subnet.NewSubnetController(crdInformer, crdClient, bceClient, eventBroadcaster)
 	pstsController := topology_spread.NewTopologySpreadController(kubeInformer, crdInformer, crdClient, eventBroadcaster, sbnController)
 
-	// min size of idle ip pool must >= 1
-	if idleIPPoolMinSize < minIdleIPPoolSize {
-		idleIPPoolMinSize = minIdleIPPoolSize
-	}
 	ipam := &IPAM{
 		eventBroadcaster:        eventBroadcaster,
 		eventRecorder:           recorder,
@@ -125,12 +115,11 @@ func NewIPAM(
 		subnetSelectionPolicy:   subnetSelectionPolicy,
 		eniSyncPeriod:           eniSyncPeriod,
 		gcPeriod:                gcPeriod,
-		eniCache:                ipcache.NewCacheMapArray[*enisdk.Eni](),
+		eniCache:                make(map[string][]*enisdk.Eni),
 		privateIPNumCache:       make(map[string]int),
 		possibleLeakedIPCache:   make(map[eniAndIPAddrKey]time.Time),
-		addIPBackoffCache:       ipcache.NewCacheMap[*wait.Backoff](),
-		allocated:               ipcache.NewCacheMap[*networkingv1alpha1.WorkloadEndpoint](),
-		reusedIPs:               ipcache.NewReuseIPAndWepPool(),
+		addIPBackoffCache:       make(map[string]*wait.Backoff),
+		allocated:               make(map[string]*v1alpha1.WorkloadEndpoint),
 		datastore:               datastorev1.NewDataStore(),
 		bucket:                  ratelimit.NewBucketWithRate(ipMutatingRate, ipMutatingBurst),
 		idleIPPoolMinSize:       idleIPPoolMinSize,
@@ -167,8 +156,6 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 	subnetInformer := ipam.crdInformer.Cce().V1alpha1().Subnets().Informer()
 	pstsInformer := ipam.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()
 
-	wepInformer.AddEventHandler(ipam.reusedIPs)
-
 	ipam.kubeInformer.Start(stopCh)
 	ipam.crdInformer.Start(stopCh)
 	if !cache.WaitForNamedCacheSync(
@@ -193,11 +180,9 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
+
 	// rebuild datastore cache
-	err = ipam.buildAllocatedNodeCache(ctx)
-	if err != nil {
-		return err
-	}
+	ipam.buildAllocatedNodeCache(ctx)
 
 	group := &wait.Group{}
 
@@ -213,11 +198,7 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		}
 	})
 
-	group.Start(func() {
-		if err := ipam.checkIdleIPPoolPeriodically(); err != nil {
-			log.Errorf(ctx, "failed to start checkIdleIPPoolPeriodically: %v", err)
-		}
-	})
+	group.Start(func() { ipam.checkIdleIPPoolPeriodically() })
 
 	subsystemRun := func(sc subsystemController) {
 		sc.Run(stopCh)
@@ -230,231 +211,175 @@ func (ipam *IPAM) Run(ctx context.Context, stopCh <-chan struct{}) error {
 		subsystemRun(ipam.tsCtl.(subsystemController))
 	})
 	group.Start(func() {
-		if err := ipam.reconcileRelationOfWepEni(stopCh); err != nil {
-			log.Errorf(ctx, "failed to start reconcileRelationOfWepEni: %v", err)
-		}
+		ipam.reconcileRelationOfWepEni(stopCh)
 	})
-	// k8s resource and ip cache are synced
+	// k8sr resource and ip cache are synced
 	ipam.cacheHasSynced = true
 	group.Wait()
 	<-stopCh
 	return nil
 }
 
-func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
-	selector, err := wepListerSelector()
-	if err != nil {
-		log.Errorf(ctx, "error parsing requirement: %v", err)
-		return err
-	}
-
-	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(selector)
-	if err != nil {
-		return err
-	}
-	for _, wep := range wepList {
-		nwep := wep.DeepCopy()
-		ipam.allocated.Add(wep.Spec.IP, nwep)
-		log.Infof(ctx, "build allocated pod cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
-	}
-	return nil
-}
-
-func (ipam *IPAM) allocateIPForFixedIPPod(ctx context.Context, node *v1.Node, pod *v1.Pod, containerID string,
-	enis []*enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, deadline time.Time) (*v1alpha1.WorkloadEndpoint, error) {
-	var allocatedIP string
-	var allocatedEni *enisdk.Eni
-	var allocatedErr error
-
-	// 1.1 try to allocate fixed ip
-	allocatedIP, allocatedEni, allocatedErr = ipam.allocateFixedIPFromCloud(ctx, node, enis, wep, deadline)
-	if allocatedErr != nil {
-		log.Warningf(ctx, "allocate fixed ip %s for pod (%s %s) failed: %s",
-			wep.Spec.IP, wep.Namespace, wep.Name, allocatedErr)
-
-		// 1.2. if 1.1 failed, try to allocate new ip for sts pod
-		if timeoutErr := assertDeadline(deadline); timeoutErr != nil {
-			return nil, timeoutErr
-		}
-		log.Infof(ctx, "try to allocate new ip for pod (%s %s)", wep.Namespace, wep.Name)
-
-		allocatedIP, allocatedEni, allocatedErr = ipam.tryToAllocateIPFromCache(ctx, node, enis, deadline)
-		if allocatedErr != nil {
-			log.Errorf(ctx, "allocate ip for pod (%s %s) failed: %s", wep.Namespace, wep.Name, allocatedErr)
-			return nil, allocatedErr
-		}
-	}
-
-	// 2. update wep
-	newWep := ipam.fillFieldsToWep(wep, pod, containerID, allocatedIP, allocatedEni)
-
-	_, updateErr := ipam.crdClient.CceV1alpha1().WorkloadEndpoints(newWep.Namespace).Update(ctx, newWep, metav1.UpdateOptions{})
-	if updateErr != nil {
-		log.Errorf(ctx, "failed to update wep for pod (%s %s): %s", pod.Namespace, pod.Name, updateErr)
-		time.Sleep(minPrivateIPLifeTime)
-
-		if rollbackErr := ipam.tryDeleteSubnetIPRetainAllocateCache(ctx, newWep); rollbackErr != nil {
-			log.Errorf(ctx, "rollback wep for pod (%s %s) failed: %s", pod.Namespace, pod.Name, rollbackErr)
-		}
-		return nil, updateErr
-	}
-	log.Infof(ctx, "update wep with spec %+v for pod (%v %v) successfully", newWep.Spec, newWep.Namespace, newWep.Name)
-
-	// 3. update cache ip and wep
-	ipam.allocated.Add(allocatedIP, newWep)
-	return newWep, nil
-}
-
-func (ipam *IPAM) allocateFixedIPFromCloud(ctx context.Context, node *v1.Node, enis []*enisdk.Eni,
-	wep *v1alpha1.WorkloadEndpoint, deadline time.Time) (string, *enisdk.Eni, error) {
-	var namespace, name = wep.Namespace, wep.Name
-
+func (ipam *IPAM) tryAllocateIPForFixIPPod(ctx context.Context, eni *enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, ipToAllocate string, node *v1.Node, backoffCap time.Duration) (string, error) {
+	var namespace, name string = wep.Namespace, wep.Name
+	var ipResult []string
+	var err error
 	// Note: here DeletePrivateIP and AddPrivateIP should be atomic. we leverage a lock to do this
-	// Ensures private ip not attached to other eni
-	deleteErr := ipam.__tryDeleteIPByIPAndENI(ctx, wep.Spec.Node, wep.Spec.IP, wep.Spec.ENIID, true)
-	if deleteErr != nil && !cloud.IsErrorENIPrivateIPNotFound(deleteErr) {
-		log.Errorf(ctx, "error delete private IP %v for pod (%v %v): %v", wep.Spec.IP, namespace, name, deleteErr)
-		if cloud.IsErrorRateLimit(deleteErr) {
+	// ensure private ip not attached to other eni
+
+	err = ipam.__tryDeleteIPByIPAndENI(ctx, wep.Spec.Node, wep.Spec.IP, wep.Spec.ENIID, true)
+	if err != nil && !cloud.IsErrorENIPrivateIPNotFound(err) {
+		log.Errorf(ctx, "error delete private IP %v for pod (%v %v): %v", wep.Spec.IP, namespace, name, err)
+		if cloud.IsErrorRateLimit(err) {
 			time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 		}
 	}
 
-	// try to allocate fixed ip
-	var ipToAllocate = wep.Spec.IP
-	var backoff = ipamgeneric.CCECniTimeout / time.Duration(len(enis))
-	var addIPErrors []error
-	var successEni *enisdk.Eni
-	var successIP string
-	for _, oneEni := range enis {
-		if timeoutErr := assertDeadline(deadline); timeoutErr != nil {
-			return "", nil, timeoutErr
-		}
-		log.Infof(ctx, "try to add IP %v to %v", ipToAllocate, oneEni.EniId)
-		ipResult, addErr := ipam.batchAddPrivateIP(ctx, []string{ipToAllocate}, 0, oneEni.EniId)
-		if addErr != nil {
-			addIPErrors = append(addIPErrors, addErr)
-			ipam.handleAllocateError(ctx, addErr, oneEni, backoff)
-			if cloud.IsErrorPrivateIPInUse(addErr) {
-				break
+	allocIPMaxTry := 3
+	for i := 0; i < allocIPMaxTry; i++ {
+		log.Infof(ctx, "try to add IP %v to %v", ipToAllocate, eni.EniId)
+		ipResult, err = ipam.batchAddPrivateIP(ctx, []string{ipToAllocate}, 0, eni.EniId)
+		if err != nil {
+			log.Errorf(ctx, "error add private IP %v for pod (%v %v): %v", ipToAllocate, namespace, name, err)
+			if cloud.IsErrorSubnetHasNoMoreIP(err) {
+				if e := ipam.sbnCtl.DeclareSubnetHasNoMoreIP(ctx, eni.SubnetId, true); e != nil {
+					log.Errorf(ctx, "failed to patch subnet %v that has no more ip: %v", eni.SubnetId, e)
+				}
 			}
-
-			// failed: continue to try other eni
-			if cloud.IsErrorRateLimit(addErr) {
+			if cloud.IsErrorRateLimit(err) {
 				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 			}
-		} else {
-			// success
-			successEni = oneEni
-			successIP = ipResult[0]
+			if cloud.IsErrorPrivateIPInUse(err) {
+				log.Warningf(ctx, "fix ip %v has been mistakenly allocated to somewhere else for pod (%v %v)", ipToAllocate, namespace, name)
+				ipToAllocate = ""
+				continue
+			}
+			if isErrorNeedExponentialBackoff(err) {
+				if _, ok := ipam.addIPBackoffCache[eni.EniId]; !ok {
+					ipam.addIPBackoffCache[eni.EniId] = util.NewBackoffWithCap(backoffCap)
+					log.Infof(ctx, "add backoff with cap %v for eni %v when handling pod (%v %v) due to error: %v", backoffCap, eni.EniId, namespace, name, err)
+				}
+			}
+			return "", err
+		} else if err == nil {
 			break
 		}
 	}
 
-	if successEni == nil {
-		return "", nil, fmt.Errorf("all %d enis binded cannot add IP %s: %v",
-			len(enis), wep.Spec.IP, utilerrors.NewAggregate(addIPErrors))
+	if len(ipResult) < 1 {
+		msg := "unexpected result from eni openapi: at least one ip should be added"
+		log.Error(ctx, msg)
+		return "", goerrors.New(msg)
 	}
 
-	log.Infof(ctx, "add private IP %s for pod (%s %s) successfully", successIP, namespace, name)
+	log.Infof(ctx, "add private IP %v for pod (%v %v) successfully", ipResult, namespace, name)
 
-	ipam.incPrivateIPNumCache(successEni.EniId, false)
-	storeErr := ipam.datastore.AddPrivateIPToStore(node.Name, successEni.EniId, successIP, true)
-	if storeErr != nil {
-		log.Warningf(ctx, "add private IP %s to store failed: %s", successIP, storeErr)
+	for _, ip := range ipResult {
+		ipam.incPrivateIPNumCache(eni.EniId, false)
+		ipam.datastore.AddPrivateIPToStore(node.Name, eni.EniId, ip, true)
 	}
-	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID,
-		successEni.SubnetId).Inc()
 
-	return successIP, successEni, nil
+	metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eni.SubnetId).Inc()
+
+	return ipResult[0], nil
 }
 
-func (ipam *IPAM) allocateIPForOrdinaryPod(ctx context.Context, node *v1.Node, pod *v1.Pod, containerID string,
-	enis []*enisdk.Eni, wep *v1alpha1.WorkloadEndpoint, deadline time.Time) (*v1alpha1.WorkloadEndpoint, error) {
-	// 1. allocate ip from cache
-	allocatedIP, allocatedEni, allocatedErr := ipam.tryToAllocateIPFromCache(ctx, node, enis, deadline)
-	if allocatedErr != nil {
-		log.Errorf(ctx, "allocate ip for pod (%s %s) failed: %s", pod.Namespace, pod.Name, allocatedErr)
-		return nil, allocatedErr
-	}
+func (ipam *IPAM) tryAllocateIP(
+	ctx context.Context,
+	eni *enisdk.Eni,
+	node *v1.Node,
+	batchAddNum int,
+	backoffCap time.Duration,
+) ([]string, error) {
+	var ipResult []string
+	var err error
 
-	// 2. update or create wep
-	newWep := ipam.fillFieldsToWep(wep, pod, containerID, allocatedIP, allocatedEni)
-	if wep == nil {
-		// create wep
-		_, createErr := ipam.crdClient.CceV1alpha1().WorkloadEndpoints(newWep.Namespace).
-			Create(ctx, newWep, metav1.CreateOptions{})
-		if createErr != nil {
-			if rollbackErr := ipam.tryDeleteIPByWep(ctx, newWep); rollbackErr != nil {
-				log.Errorf(ctx, "rollback wep for pod (%s %s) failed: %s", pod.Namespace, pod.Name, rollbackErr)
+	for batchAddNum > 0 {
+		ipResult, err = ipam.batchAddPrivateIPWithExponentialBackoff(ctx, ipResult, batchAddNum, eni, node)
+		if err == nil {
+			log.Infof(ctx, "batch add %v private ip(s) for %v on eni %s successfully, %v", batchAddNum, node.Name, eni.EniId, ipResult)
+			ipam.removeAddIPBackoffCache(eni.EniId, false)
+			break
+		}
+
+		if err != nil {
+			log.Warningf(ctx, "warn: batch add %v private ip(s) for node %v failed: %v", batchAddNum, node.Name, err)
+
+			if cloud.IsErrorSubnetHasNoMoreIP(err) {
+				if e := ipam.sbnCtl.DeclareSubnetHasNoMoreIP(ctx, eni.SubnetId, true); e != nil {
+					log.Errorf(ctx, "failed to patch subnet %v that has no more ip: %v", eni.SubnetId, e)
+				}
 			}
-			return nil, createErr
-		}
-	} else {
-		// update wep
-		_, updateErr := ipam.crdClient.CceV1alpha1().WorkloadEndpoints(newWep.Namespace).
-			Update(ctx, newWep, metav1.UpdateOptions{})
-		if updateErr != nil {
-			time.Sleep(minPrivateIPLifeTime)
-			if rollbackErr := ipam.tryDeleteSubnetIPRetainAllocateCache(ctx, newWep); rollbackErr != nil {
-				log.Errorf(ctx, "rollback wep for pod (%s %s) failed: %s", pod.Namespace, pod.Name, rollbackErr)
+			if cloud.IsErrorRateLimit(err) {
+				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
 			}
-			return nil, updateErr
+
+			if batchAddNum == 1 && cloud.IsErrorSubnetHasNoMoreIP(err) {
+				ipam.sbnCtl.DeclareSubnetHasNoMoreIP(ctx, eni.SubnetId, true)
+			}
+
+			if isErrorNeedExponentialBackoff(err) {
+				if batchAddNum == 1 {
+					ipam.lock.Lock()
+					if _, ok := ipam.addIPBackoffCache[eni.EniId]; !ok {
+						ipam.addIPBackoffCache[eni.EniId] = util.NewBackoffWithCap(backoffCap)
+						log.Infof(ctx, "add backoff with cap %v for eni %v  due to error: %v", backoffCap, eni.EniId, err)
+					}
+					ipam.lock.Unlock()
+				}
+
+				// decrease batchAddNum then retry
+				batchAddNum = batchAddNum >> 1
+				continue
+			}
+
+			msg := fmt.Sprintf("error batch add %v private ip(s): %v", batchAddNum, err)
+			log.Error(ctx, msg)
+			return nil, goerrors.New(msg)
 		}
 	}
-	log.Infof(ctx, "update or create wep with spec %+v for pod (%v %v) successfully",
-		newWep.Spec, newWep.Namespace, newWep.Name)
 
-	// 3. update cache ip and wep
-	ipam.allocated.Add(allocatedIP, newWep)
-	return newWep, nil
+	if len(ipResult) == 0 {
+		msg := fmt.Sprintf("cannot batch add more ip to eni on node %s instance %s", node.Name, eni.EniId)
+		log.Error(ctx, msg)
+		return nil, goerrors.New(msg)
+	}
+
+	for _ = range ipResult {
+		ipam.incPrivateIPNumCache(eni.EniId, false)
+		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eni.SubnetId).Inc()
+	}
+
+	return ipResult, nil
 }
 
-// tryToAllocateIPFromCache get ip from local cache
-// increasing the pool if datastore has no available ip
-func (ipam *IPAM) tryToAllocateIPFromCache(ctx context.Context, node *v1.Node, enis []*enisdk.Eni, deadline time.Time) (
-	ipResult string, eni *enisdk.Eni, err error) {
-	firstEvent := true
-
-	// it takes 1s to allocate ip from cloud, retry 5 and wait 200ms+ per times
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 200 * time.Millisecond,
-		Factor:   1.0,
-		Jitter:   0.1,
-	}
-
-	err = wait.ExponentialBackoff(backoff, func() (done bool, err error) {
-		if timeoutErr := assertDeadline(deadline); timeoutErr != nil {
-			return false, timeoutErr
-		}
-		if ipam.canAllocateIP(ctx, node.Name, enis) {
-			return true, nil
-		}
-
-		if err := ipam.assertNodeCanIncreasePool(ctx, node, enis); err != nil {
-			return true, err
-		}
-		// only send one increase pool event for one ctx
-		if firstEvent {
-			ipam.sendIncreasePoolEvent(ctx, node, enis, true)
-			firstEvent = false
-		}
-		return false, nil
-	})
-	if err == wait.ErrWaitTimeout {
-		return "", nil, fmt.Errorf("allocate ip for node %v error", node.Name)
-	}
-	if err != nil {
-		return "", nil, err
-	}
-
-	return ipam.allocateIPFromCache(ctx, node.Name, enis)
-}
-
-func (ipam *IPAM) canAllocateIP(_ context.Context, nodeName string, enis []*enisdk.Eni) bool {
+func (ipam *IPAM) tryAllocateIPByENIs(ctx context.Context, node string, enis []*enisdk.Eni) (string, *enisdk.Eni, error) {
 	var (
-		total = 0
-		used  = 0
+		eniList []string
+	)
+
+	ipam.sortENIByDatastoreStats(node, enis, false)
+
+	// iterate each subnet, try to allocate
+	for _, eni := range enis {
+		ipResult, err := ipam.datastore.AllocatePodPrivateIPByENI(node, eni.EniId)
+		if err == nil {
+			// allocate one successfully
+			return ipResult, eni, nil
+		} else {
+			log.Warningf(ctx, "datastore try allocate ip for node %v in eni %v failed: %v", node, eni.EniId, err)
+		}
+
+		eniList = append(eniList, eni.EniId)
+	}
+
+	return "", nil, fmt.Errorf("no available ip address in datastore for node %v in enis: %v", node, eniList)
+}
+
+func (ipam *IPAM) canAllocateIP(ctx context.Context, nodeName string, enis []*enisdk.Eni) bool {
+	var (
+		total int = 0
+		used  int = 0
 	)
 
 	for _, eni := range enis {
@@ -468,148 +393,76 @@ func (ipam *IPAM) canAllocateIP(_ context.Context, nodeName string, enis []*enis
 	return total > used
 }
 
-func (ipam *IPAM) allocateIPFromCache(ctx context.Context, node string, enis []*enisdk.Eni) (string, *enisdk.Eni, error) {
-	var (
-		failedEniList []string
-	)
-
-	ipam.sortENIByDatastoreStats(node, enis, false)
-
-	// iterate each subnet, try to allocate
-	for _, eni := range enis {
-		ipResult, err := ipam.datastore.AllocatePodPrivateIPByENI(node, eni.EniId)
-		if err == nil {
-			// allocate one successfully
-			return ipResult, eni, nil
-		}
-		log.Warningf(ctx, "datastore try allocate ip for node %v in eni %v failed: %v", node, eni.EniId, err)
-		failedEniList = append(failedEniList, eni.EniId)
-	}
-
-	return "", nil, fmt.Errorf("no available ip address in datastore for node %v in enis: %v", node, failedEniList)
-}
-
-func (ipam *IPAM) batchAllocateIPFromCloud(
-	ctx context.Context,
-	eni *enisdk.Eni,
-	node *v1.Node,
-	batchAddNum int,
-	backoffCap time.Duration,
-) ([]string, error) {
-	var ipResult []string
-	var err error
-
-	for batchAddNum > 0 {
-		if err = ipam.assertEniCanIncreasePool(ctx, node, eni); err != nil {
-			break
-		}
-
-		ipResult, err = ipam.batchAllocateIPWithBackoff(ctx, batchAddNum, eni)
-		if err == nil {
-			log.Infof(ctx, "batch add %d private ip(s) for %s on eni %s successfully, %v",
-				batchAddNum, node.Name, eni.EniId, ipResult)
-			break
-		}
-
-		if err != nil {
-			// retry condition: batchAddNum > 1 && isErrorNeedExponentialBackoff
-			log.Warningf(ctx, "batch add %d private ip(s) for node %s failed: %s", batchAddNum, node.Name, err)
-
-			if batchAddNum == 1 {
-				ipam.handleAllocateError(ctx, err, eni, backoffCap)
-			}
-
-			if isErrorNeedExponentialBackoff(err) {
-				// decrease batchAddNum then retry
-				batchAddNum = batchAddNum >> 1
-				continue
-			}
-
-			// don't retry for other errors
-			break
-		}
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	for _, allocatedIP := range ipResult {
-		ipam.incPrivateIPNumCache(eni.EniId, false)
-		err := ipam.datastore.AddPrivateIPToStore(node.Name, eni.EniId, allocatedIP, false)
-		if err != nil {
-			log.Errorf(ctx, "add private ip %s to datastore failed: %v", allocatedIP, err)
-		}
-		metric.MultiEniMultiIPEniIPCount.WithLabelValues(metric.MetaInfo.ClusterID, metric.MetaInfo.VPCID, eni.SubnetId).Inc()
-	}
-
-	return ipResult, nil
-}
-
-// handleAllocateError
-//
-//	isErrorSubnetHasNoMoreIP: declare subnet = no more ip
-//	isErrorNeedExponentialBackoff: add backoff to addIPBackoffCache
-func (ipam *IPAM) handleAllocateError(ctx context.Context, allocateErr error, eni *enisdk.Eni, backoffCap time.Duration) {
-	if cloud.IsErrorSubnetHasNoMoreIP(allocateErr) {
-		if e := ipam.sbnCtl.DeclareSubnetHasNoMoreIP(ctx, eni.SubnetId, true); e != nil {
-			log.Errorf(ctx, "failed to patch subnet %v that has no more ip: %v", eni.SubnetId, e)
-		}
-	}
-	if isErrorNeedExponentialBackoff(allocateErr) {
-		if _, ok := ipam.addIPBackoffCache.Get(eni.EniId); !ok {
-			ipam.addIPBackoffCache.Add(eni.EniId, util.NewBackoffWithCap(backoffCap))
-			log.Infof(ctx, "add backoff with cap %s for eni %s due to error: %v",
-				backoffCap, eni.EniId, allocateErr)
-		}
-	}
-}
-
-func (ipam *IPAM) handleIncreasePoolEvent(ctx context.Context, nodeName string, ch chan *event) {
-	log.Infof(ctx, "start increase pool goroutine for node %v", nodeName)
+func (ipam *IPAM) handleIncreasePoolEvent(ctx context.Context, node *v1.Node, ch chan *event) {
+	log.Infof(ctx, "start increase pool goroutine for node %v", node.Name)
 	for e := range ch {
 		var (
-			enis = e.enis
-			node = e.node
-			ctx  = e.ctx
-			err  error
+			enis           = e.enis
+			node           = e.node
+			ctx            = e.ctx
+			ipAddedENI     *enisdk.Eni
+			ipResult       []string
+			suitableENINum = len(enis)
+			err            error
+			addIPErrors    []error
 		)
-
-		if len(enis) == 0 {
-			log.Warningf(ctx, "no eni in node %s, skip increase pool", nodeName)
+		if e.passive && ipam.canAllocateIP(ctx, e.node.Name, e.enis) {
 			continue
 		}
-		if ipam.canIgnoreIncreasingEvent(ctx, e) {
+
+		if !e.passive && ipam.idleIPNum(e.node.Name) >= ipam.idleIPPoolMinSize {
 			continue
 		}
 
 		ipam.sortENIByDatastoreStats(node.Name, enis, true)
 
-		backoff := ipamgeneric.CCECniTimeout / time.Duration(len(enis))
 		for _, eni := range enis {
-			_, err = ipam.batchAllocateIPFromCloud(ctx, eni, node, ipam.batchAddIPNum, backoff)
+			ipResult, err = ipam.tryAllocateIP(ctx, eni, node, ipam.batchAddIPNum, ipamgeneric.CCECniTimeout/time.Duration(suitableENINum))
 			if err == nil {
+				ipAddedENI = eni
 				break
+			} else {
+				addErr := fmt.Errorf("error ENI: %v, %v", eni.EniId, err.Error())
+				addIPErrors = append(addIPErrors, addErr)
 			}
-			if cloud.IsErrorRateLimit(err) {
-				// wait to try other eni
-				time.Sleep(wait.Jitter(rateLimitErrorSleepPeriod, rateLimitErrorJitterFactor))
+		}
+
+		if ipAddedENI == nil {
+			msg := fmt.Sprintf("all %d enis bound to node %v cannot add IP: %v", len(enis), node.Name, utilerrors.NewAggregate(addIPErrors))
+			log.Error(ctx, msg)
+		}
+
+		for _, ip := range ipResult {
+			err := ipam.datastore.AddPrivateIPToStore(e.node.Name, ipAddedENI.EniId, ip, false)
+			if err != nil {
+				msg := fmt.Sprintf("add private ip %v to datastore failed: %v", ip, err)
+				log.Error(ctx, msg)
 			}
-			log.Warningf(ctx, "failed to batch add ip on eni %s: %s", eni.EniId, err)
 		}
 	}
-	log.Infof(ctx, "closed channel for node %s, exit...", nodeName)
+	log.Infof(ctx, "closed channel for node %v, exit...", node.Name)
 }
 
-func (ipam *IPAM) canIgnoreIncreasingEvent(ctx context.Context, evt *event) bool {
-	if evt.passive && ipam.canAllocateIP(ctx, evt.node.Name, evt.enis) {
-		return true
+func (ipam *IPAM) buildAllocatedCache(ctx context.Context) error {
+	ipam.lock.Lock()
+	defer ipam.lock.Unlock()
+
+	selector, err := wepListerSelector()
+	if err != nil {
+		log.Errorf(ctx, "error parsing requirement: %v", err)
+		return err
 	}
 
-	if !evt.passive && ipam.idleIPNum(evt.node.Name) >= ipam.idleIPPoolMinSize {
-		return true
+	wepList, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().List(selector)
+	if err != nil {
+		return err
 	}
-	return false
+	for _, wep := range wepList {
+		nwep := wep.DeepCopy()
+		ipam.allocated[wep.Spec.IP] = nwep
+		log.Infof(ctx, "build allocated pod cache: found IP %v assigned to pod (%v %v)", wep.Spec.IP, wep.Namespace, wep.Name)
+	}
+	return nil
 }
 
 func (ipam *IPAM) buildAllocatedNodeCache(ctx context.Context) error {
@@ -706,7 +559,10 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 		for _, ip := range eni.PrivateIpSet {
 			if !ip.Primary {
 				// ipam will sync all weps to build allocated cache when it starts
-				assigned := ipam.allocated.Exists(ip.PrivateIpAddress)
+				assigned := false
+				if _, ok := ipam.allocated[ip.PrivateIpAddress]; ok {
+					assigned = true
+				}
 
 				// If the private IP is not in the CIDR of Eni, it means that it is a cross subnet IP
 				crossSubnet := !ipNet.Contains(net.ParseIP(ip.PrivateIpAddress))
@@ -714,7 +570,7 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 					assigned = true
 				}
 
-				syncErr := ipam.datastore.Synchronized(func() error {
+				ipam.datastore.Synchronized(func() error {
 					err := ipam.datastore.AddPrivateIPToStoreUnsafe(node.Name, eni.EniId, ip.PrivateIpAddress, assigned, crossSubnet)
 					if err != nil {
 						msg := fmt.Sprintf("add private ip %v to datastore failed: %v", ip.PrivateIpAddress, err)
@@ -724,9 +580,7 @@ func (ipam *IPAM) rebuildNodeDataStoreCache(ctx context.Context, node *v1.Node, 
 					}
 					return err
 				})
-				if syncErr != nil {
-					log.Warningf(ctx, "datastore Synchronized failed: %s", syncErr)
-				}
+
 			}
 		}
 	}
@@ -780,11 +634,23 @@ func (ipam *IPAM) handleRebuildNodeDatastoreEvent(ctx context.Context, node *v1.
 }
 
 func (ipam *IPAM) addIPBackoff(eniID string, cap time.Duration) {
-	ipam.addIPBackoffCache.AddIfNotExists(eniID, util.NewBackoffWithCap(cap))
+	ipam.lock.Lock()
+	if _, ok := ipam.addIPBackoffCache[eniID]; !ok {
+		ipam.addIPBackoffCache[eniID] = util.NewBackoffWithCap(cap)
+	}
+	ipam.lock.Unlock()
 }
 
-func (ipam *IPAM) removeAddIPBackoffCache(eniID string, _ bool) bool {
-	return ipam.addIPBackoffCache.Delete(eniID)
+func (ipam *IPAM) removeAddIPBackoffCache(eniID string, lockless bool) bool {
+	if !lockless {
+		ipam.lock.Lock()
+		defer ipam.lock.Unlock()
+	}
+	_, ok := ipam.addIPBackoffCache[eniID]
+	if ok {
+		delete(ipam.addIPBackoffCache, eniID)
+	}
+	return ok
 }
 
 func (ipam *IPAM) updateIPPoolStatus(ctx context.Context, node *v1.Node, instanceID string, enis []enisdk.Eni) error {
@@ -884,11 +750,10 @@ func (ipam *IPAM) checkIdleIPPool() (bool, error) {
 			if idle < ipam.idleIPPoolMinSize {
 				log.Infof(ctx, "ipam will increase pool due to idle ip num %v less than --idle-ip-pool-min-size %v", idle, ipam.idleIPPoolMinSize)
 
-				enis, ok := ipam.eniCache.Get(node.Name)
-				if !ok {
-					log.Warningf(ctx, "no eni in node %s", node.Name)
-					return
-				}
+				ipam.lock.Lock()
+				enis := ipam.eniCache[node.Name]
+				ipam.lock.Unlock()
+
 				ipam.sendIncreasePoolEvent(ctx, node, enis, false)
 			}
 
@@ -901,7 +766,7 @@ func (ipam *IPAM) checkIdleIPPool() (bool, error) {
 }
 
 // sendIncreasePoolEvent send increase poll event to cache chan
-// create chan if not exists
+// create chan if not exsit
 func (ipam *IPAM) sendIncreasePoolEvent(ctx context.Context, node *v1.Node, enis []*enisdk.Eni, passive bool) {
 	var (
 		evt = &event{
@@ -917,19 +782,13 @@ func (ipam *IPAM) sendIncreasePoolEvent(ctx context.Context, node *v1.Node, enis
 	ipam.lock.Lock()
 	ch, ok = ipam.increasePoolEventChan[evt.node.Name]
 	if !ok {
-		ch = make(chan *event, increasePoolSizePerNode)
+		ch = make(chan *event)
 		ipam.increasePoolEventChan[node.Name] = ch
-		go ipam.handleIncreasePoolEvent(ctx, node.Name, ch)
+		go ipam.handleIncreasePoolEvent(ctx, evt.node, ch)
 	}
 	ipam.lock.Unlock()
 
-	select {
-	case ch <- evt:
-		return
-	default:
-		log.Warningf(ctx, "node %s increase pool is full", node.Name)
-		return
-	}
+	ch <- evt
 }
 
 func (ipam *IPAM) checkIdleIPPoolPeriodically() error {
@@ -941,21 +800,25 @@ func (ipam *IPAM) batchAddPrivateIP(ctx context.Context, privateIPs []string, ba
 	return ipam.cloud.BatchAddPrivateIP(ctx, privateIPs, batchAddNum, eniID)
 }
 
-// batchAllocateIPWithBackoff allocate ip by eni from cloud with backoff if exists
-func (ipam *IPAM) batchAllocateIPWithBackoff(ctx context.Context, batchAddNum int, eni *enisdk.Eni) ([]string, error) {
+func (ipam *IPAM) batchAddPrivateIPWithExponentialBackoff(
+	ctx context.Context,
+	privateIPs []string,
+	batchAddNum int,
+	eni *enisdk.Eni,
+	node *v1.Node,
+) ([]string, error) {
 	var backoffWaitPeriod time.Duration
 	var backoff *wait.Backoff
 	var ok bool
 	const waitPeriodNum = 10
 
 	ipam.lock.Lock()
-	backoff, ok = ipam.addIPBackoffCache.Get(eni.EniId)
+	backoff = ipam.addIPBackoffCache[eni.EniId]
 	if backoff != nil && backoff.Steps >= 0 {
 		backoffWaitPeriod = backoff.Step()
 	}
 	ipam.lock.Unlock()
 
-	// backoff wait
 	if backoffWaitPeriod != 0 {
 		log.Infof(ctx, "backoff: wait %v to allocate private ip on %v", backoffWaitPeriod, eni.EniId)
 
@@ -963,7 +826,7 @@ func (ipam *IPAM) batchAllocateIPWithBackoff(ctx context.Context, batchAddNum in
 		for i := 0; i < waitPeriodNum; i++ {
 			time.Sleep(backoffWaitPeriod / waitPeriodNum)
 			ipam.lock.RLock()
-			backoff, ok = ipam.addIPBackoffCache.Get(eni.EniId)
+			backoff, ok = ipam.addIPBackoffCache[eni.EniId]
 			ipam.lock.RUnlock()
 			if !ok {
 				log.Warningf(ctx, "found backoff on eni %v removed", eni.EniId)
@@ -972,11 +835,40 @@ func (ipam *IPAM) batchAllocateIPWithBackoff(ctx context.Context, batchAddNum in
 		}
 	}
 
-	ipResults, batchErr := ipam.batchAddPrivateIP(ctx, []string{}, batchAddNum, eni.EniId)
-	if batchErr == nil {
-		ipam.removeAddIPBackoffCache(eni.EniId, false)
+	// if have reached backoff cap, first check then add ip
+	if backoff != nil && backoffWaitPeriod >= backoff.Cap {
+		// 1. check if subnet still has available ip
+		subnetID := eni.SubnetId
+		subnet, err := ipam.cloud.DescribeSubnet(ctx, subnetID)
+		if err == nil && subnet.AvailableIp <= 0 {
+			msg := fmt.Sprintf("backoff short-circuit: subnet %v has no available ip", subnetID)
+			log.Warning(ctx, msg)
+			return nil, goerrors.New(msg)
+		}
+		if err != nil {
+			log.Errorf(ctx, "failed to describe subnet %v: %v", subnetID, err)
+		}
+
+		// 2. check if node cannot attach more ip due to memory
+		node, err := ipam.kubeInformer.Core().V1().Nodes().Lister().Get(node.Name)
+		if err == nil {
+			maxIPPerENI, err := utileni.GetMaxIPPerENIFromNodeAnnotations(node)
+			if err == nil {
+				resp, err := ipam.cloud.StatENI(ctx, eni.EniId)
+				if err == nil && len(resp.PrivateIpSet) >= maxIPPerENI {
+					msg := fmt.Sprintf("backoff short-circuit: eni %v cannot add more ip due to memory", eni.EniId)
+					log.Warning(ctx, msg)
+					return nil, goerrors.New(msg)
+				}
+
+				if err != nil {
+					log.Errorf(ctx, "failed to get stat eni %v: %v", eni.EniId, err)
+				}
+			}
+		}
 	}
-	return ipResults, batchErr
+
+	return ipam.batchAddPrivateIP(ctx, privateIPs, batchAddNum, eni.EniId)
 }
 
 func (ipam *IPAM) sortENIByDatastoreStats(node string, enis []*enisdk.Eni, byTotal bool) {
@@ -1022,6 +914,17 @@ func isErrorNeedExponentialBackoff(err error) bool {
 	return cloud.IsErrorVmMemoryCanNotAttachMoreIpException(err) || cloud.IsErrorSubnetHasNoMoreIP(err)
 }
 
+func isFixIPStatefulSetPodWep(wep *v1alpha1.WorkloadEndpoint) bool {
+	return wep.Spec.Type == ipamgeneric.WepTypeSts && wep.Spec.EnableFixIP == EnableFixIPTrue
+}
+
+func isFixIPStatefulSetPod(pod *v1.Pod) bool {
+	if pod.Annotations == nil || !k8sutil.IsStatefulSetPod(pod) {
+		return false
+	}
+	return pod.Annotations[StsPodAnnotationEnableFixIP] == EnableFixIPTrue
+}
+
 func buildInstanceIdToNodeNameMap(ctx context.Context, nodes []*v1.Node) map[string]string {
 	instanceIdToNodeNameMap := make(map[string]string, len(nodes))
 	for _, n := range nodes {
@@ -1050,107 +953,4 @@ func bccNodeListerSelector() (labels.Selector, error) {
 		return nil, err
 	}
 	return labels.NewSelector().Add(*requirement), nil
-}
-
-func (ipam *IPAM) fillFieldsToWep(wep *v1alpha1.WorkloadEndpoint, pod *v1.Pod, containerID,
-	allocatedIP string, allocatedEni *enisdk.Eni) *v1alpha1.WorkloadEndpoint {
-	if wep == nil {
-		wep = &v1alpha1.WorkloadEndpoint{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:       pod.Name,
-				Namespace:  pod.Namespace,
-				Finalizers: []string{ipamgeneric.WepFinalizer},
-			},
-			Spec: v1alpha1.WorkloadEndpointSpec{
-				Type: ipamgeneric.WepTypePod,
-			},
-		}
-	}
-	if wep.Labels == nil {
-		wep.Labels = make(map[string]string)
-	}
-	wep.Spec.ContainerID = containerID
-	wep.Spec.IP = allocatedIP
-	wep.Spec.ENIID = allocatedEni.EniId
-	wep.Spec.Mac = allocatedEni.MacAddress
-	wep.Spec.Node = pod.Spec.NodeName
-	wep.Spec.SubnetID = allocatedEni.SubnetId
-	wep.Spec.UpdateAt = metav1.Time{Time: time.Unix(0, 0)}
-	wep.Labels[ipamgeneric.WepLabelSubnetIDKey] = allocatedEni.SubnetId
-	wep.Labels[ipamgeneric.WepLabelInstanceTypeKey] = string(metadata.InstanceTypeExBCC)
-	if k8sutil.IsStatefulSetPod(pod) {
-		wep.Spec.Type = ipamgeneric.WepTypeSts
-		wep.Labels[ipamgeneric.WepLabelStsOwnerKey] = util.GetStsName(wep)
-	}
-	if pod.Annotations != nil {
-		wep.Spec.EnableFixIP = pod.Annotations[StsPodAnnotationEnableFixIP]
-		wep.Spec.FixIPDeletePolicy = pod.Annotations[StsPodAnnotationFixIPDeletePolicy]
-	}
-	return wep
-}
-
-func (ipam *IPAM) assertNodeCanIncreasePool(ctx context.Context, node *v1.Node, enis []*enisdk.Eni) error {
-	var lastErr error
-	canIncrease := false
-
-	for _, eni := range enis {
-		oneErr := ipam.assertEniCanIncreasePool(ctx, node, eni)
-		if oneErr == nil {
-			canIncrease = true
-			break
-		}
-		lastErr = oneErr
-	}
-	if canIncrease {
-		return nil
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("node doesn't have eni")
-}
-
-func (ipam *IPAM) assertEniCanIncreasePool(ctx context.Context, node *v1.Node, eni *enisdk.Eni) error {
-	// 1. check if subnet still has available ip
-	subnetID := eni.SubnetId
-	subnetInfo, err := ipam.cloud.DescribeSubnet(ctx, subnetID)
-	if err == nil && subnetInfo.AvailableIp <= 0 {
-		log.Warningf(ctx, "assertEniCanIncreasePool: subnet %s has no available ip", subnetID)
-		return fmt.Errorf("subnet %s has no available ip", subnetID)
-	}
-	if err != nil {
-		log.Warningf(ctx, "assertEniCanIncreasePool: failed to describe subnet %s: %s", subnetID, err)
-	}
-
-	// 2. check if node cannot attach more ip due to memory
-	nodeFromKube, nodeErr := ipam.kubeInformer.Core().V1().Nodes().Lister().Get(node.Name)
-	if nodeErr != nil {
-		log.Warningf(ctx, "assertEniCanIncreasePool: failed to get node %s: %s", node.Name, nodeErr)
-		return nil
-	}
-
-	maxIPPerENI, annoErr := utileni.GetMaxIPPerENIFromNodeAnnotations(nodeFromKube)
-	if annoErr != nil {
-		log.Warningf(ctx, "assertEniCanIncreasePool: failed to get MaxIPPerENI of node %s: %s", node.Name, annoErr)
-		return nil
-	}
-
-	resp, eniErr := ipam.cloud.StatENI(ctx, eni.EniId)
-	if eniErr != nil {
-		log.Errorf(ctx, "assertEniCanIncreasePool: failed to get stat eni %v: %v", eni.EniId, eniErr)
-		return nil
-	}
-
-	if len(resp.PrivateIpSet) >= maxIPPerENI {
-		log.Warningf(ctx, "assertEniCanIncreasePool: eni %s cannot add more ip due to memory", eni.EniId)
-		return fmt.Errorf("eni %s cannot add more ip due to memory", eni.EniId)
-	}
-	return nil
-}
-
-func assertDeadline(deadline time.Time) error {
-	if time.Now().After(deadline) {
-		return fmt.Errorf(errorMsgAllocateTimeout)
-	}
-	return nil
 }

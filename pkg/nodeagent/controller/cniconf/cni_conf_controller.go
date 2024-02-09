@@ -18,7 +18,6 @@ package cniconf
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,17 +48,8 @@ import (
 const (
 	ipvlanRequiredKernelVersion = "4.9"
 	ipvlanKernelModuleName      = "ipvlan"
+	vethDefaultMTU              = 1500
 	forceRecreatePeriod         = 60 * time.Second
-
-	pluginsConfigKey = "plugins"
-	localDNSAddress  = "169.254.20.10"
-)
-
-var (
-	roceVF = map[string]struct{}{
-		"elastic_rdma": {},
-		"rdma_roce":    {},
-	}
 )
 
 func New(
@@ -82,31 +72,21 @@ func New(
 	}
 }
 
-func (c *Controller) SyncNode(nodeKey string, _ corelisters.NodeLister) error {
+func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister) error {
 	ctx := log.NewContext()
 
 	return c.syncCNIConfig(ctx, nodeKey)
 }
 
 func (c *Controller) ReconcileCNIConfig() {
-	ctx := log.NewContext()
-
-	waitErr := wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
+	wait.PollImmediateInfinite(forceRecreatePeriod, func() (bool, error) {
 		ctx := log.NewContext()
-		syncErr := c.syncCNIConfig(ctx, c.nodeName)
-		if syncErr != nil {
-			log.Errorf(ctx, "syncCNIConfig error: %s", syncErr)
-		}
+		c.syncCNIConfig(ctx, c.nodeName)
 		return false, nil
 	})
-	if waitErr != nil {
-		log.Errorf(ctx, "execute syncCNIConfig error: %s", waitErr)
-	}
 }
 
 func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
-	log.V(6).Infof(ctx, "syncCNIConfig for node: %v begin", nodeName)
-	defer log.V(6).Infof(ctx, "syncCNIConfig for node: %v end", nodeName)
 	if nodeName != c.nodeName {
 		return nil
 	}
@@ -126,21 +106,15 @@ func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
 	}
 
 	// read cni config template
-	rawTemplateContent, err := c.filesystem.ReadFile(templateFilePath)
+	templateContent, err := c.filesystem.ReadFile(templateFilePath)
 	if err != nil {
 		log.Errorf(ctx, "failed to read cni config template file %v: %v", c.config.CNIConfigTemplateFile, err)
 		return err
 	}
 
 	// render cni config template with data to get final rendered content
-	renderedContent, err := renderTemplate(ctx, string(rawTemplateContent), dataObj)
+	renderedContent, err := renderTemplate(ctx, string(templateContent), dataObj)
 	if err != nil {
-		return err
-	}
-
-	renderedContent, err = c.patchCNIConfig(ctx, renderedContent, dataObj)
-	if err != nil {
-		log.Errorf(ctx, "failed to patch CNI config template. err:[%+v]", err)
 		return err
 	}
 
@@ -153,13 +127,13 @@ func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
 	return nil
 }
 
-func (c *Controller) getCNIConfigTemplateFilePath(_ context.Context) (string, error) {
+func (c *Controller) getCNIConfigTemplateFilePath(ctx context.Context) (string, error) {
 	if c.config.AutoDetectConfigTemplateFile {
-		tplFilePath, ok := CCETemplateFilePathMap[c.cniMode]
+		filepath, ok := CCETemplateFilePathMap[c.cniMode]
 		if !ok {
 			return "", fmt.Errorf("cannot find cni template file for cni mode %v", c.cniMode)
 		}
-		return tplFilePath, nil
+		return filepath, nil
 	}
 
 	return c.config.CNIConfigTemplateFile, nil
@@ -250,25 +224,25 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	// assemble ipam endpoint from clusterip
-	svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(ctx, IPAMServiceName, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if len(svc.Spec.Ports) != 0 {
-		configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
-	}
-
-	// get instance type from meta
-	if configData.InstanceType == "" {
-		insType, err := c.getNodeInstanceTypeEx(ctx)
-		if err != nil {
-			log.Errorf(ctx, "failed to get instance type via metadata: %v", err)
-		}
-		configData.InstanceType = string(insType)
-	}
-
 	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
+		// assemble ipam endpoint from clusterip
+		svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(ctx, IPAMServiceName, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if len(svc.Spec.Ports) != 0 {
+			configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
+		}
+
+		// get instance type from meta
+		if configData.InstanceType == "" {
+			insType, err := c.getNodeInstanceTypeEx(ctx)
+			if err != nil {
+				log.Errorf(ctx, "failed to get instance type via metadata: %v", err)
+			}
+			configData.InstanceType = string(insType)
+		}
+
 		if configData.InstanceType == string(metadata.InstanceTypeExBCC) {
 			if c.cniMode == types.CCEModeBBCSecondaryIPIPVlan {
 				c.cniMode = types.CCEModeSecondaryIPIPVlan
@@ -280,7 +254,7 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
+	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || c.cniMode == types.CCEModeCrossVPCEni {
 		ipPoolName := utilpool.GetNodeIPPoolName(c.nodeName)
 		ipPool, err := c.ippoolLister.IPPools(v1.NamespaceDefault).Get(ipPoolName)
 		if err != nil {
@@ -309,9 +283,9 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 
 	configData.VethMTU, err = c.netutil.DetectInterfaceMTU(configData.MasterInterface)
 	if err != nil {
-		configData.VethMTU = DefaultMTU
+		configData.VethMTU = vethDefaultMTU
 	}
-	configData.LocalDNSAddress = localDNSAddress
+
 	return &configData, nil
 }
 
@@ -380,62 +354,6 @@ func renderTemplate(ctx context.Context, tplContent string, dataObject *CNIConfi
 	}
 
 	return buf.String(), nil
-}
-
-func (c *Controller) patchCNIConfig(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	// has roce?
-	if c.hasRoCE(ctx) {
-		return c.patchCNIConfigForRoCE(ctx, oriYamlStr, dataObject)
-	}
-	return oriYamlStr, nil
-}
-
-func (c *Controller) patchCNIConfigForRoCE(ctx context.Context, oriYamlStr string,
-	dataObject *CNIConfigData) (string, error) {
-	// patch eri info to cni config
-	oriConfigMap := make(map[string]interface{})
-	jsonErr := json.Unmarshal([]byte(oriYamlStr), &oriConfigMap)
-	if jsonErr != nil {
-		log.Errorf(ctx, "invalid format oriYamlStr: [%s]", oriYamlStr)
-		return "", jsonErr
-	}
-	if _, ok := oriConfigMap[pluginsConfigKey]; !ok {
-		oriConfigMap[pluginsConfigKey] = make([]interface{}, 0)
-	}
-
-	eriConfigMap := map[string]interface{}{
-		"type": "roce",
-		"ipam": map[string]string{
-			"endpoint": dataObject.IPAMEndPoint,
-		},
-		"instanceType": dataObject.InstanceType,
-	}
-	oriConfigMap[pluginsConfigKey] = append(oriConfigMap[pluginsConfigKey].([]interface{}), eriConfigMap)
-
-	newConfig, jsonErr := json.MarshalIndent(&oriConfigMap, "", "  ")
-	return string(newConfig), nil
-}
-
-func (c *Controller) hasRoCE(ctx context.Context) bool {
-	// list network interface macs
-	macList, macErr := c.metaClient.ListMacs()
-	if macErr != nil {
-		log.Errorf(ctx, "list mac failed: %w", macErr)
-		return false
-	}
-
-	// check whether there is ERI
-	for _, macAddress := range macList {
-		vifFeatures, vifErr := c.metaClient.GetVifFeatures(macAddress)
-		if vifErr != nil {
-			log.Errorf(ctx, "get mac %s vif features failed: %w", macAddress, vifErr)
-			continue
-		}
-		if _, ok := roceVF[vifFeatures]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func canUseIPVlan(kernelVersion *version.Version, kernelModules []string) bool {

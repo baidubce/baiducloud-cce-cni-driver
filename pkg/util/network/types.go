@@ -16,10 +16,8 @@
 package network
 
 import (
-	"net"
-	"time"
-
 	"github.com/vishvananda/netlink"
+	"net"
 
 	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
 	nswrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/ns"
@@ -32,7 +30,6 @@ type Interface interface {
 	GetLinkByMacAddress(macAddress string) (netlink.Link, error)
 	InterfaceByName(name string) (*net.Interface, error)
 	GratuitousArpOverIface(srcIP net.IP, iface net.Interface) error
-	PingOverIfaceByName(dstIP net.IP, ifaceName string) (net.HardwareAddr, time.Duration, error)
 }
 
 type linuxNetwork struct {

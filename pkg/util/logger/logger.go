@@ -20,13 +20,11 @@ import (
 	"flag"
 	"fmt"
 
-	"k8s.io/klog/v2"
+	"k8s.io/klog"
 )
 
 // ContextKeyType context key
 type ContextKeyType string
-
-var enabled bool
 
 const (
 	// TraceID context key name
@@ -106,20 +104,18 @@ func EnsureTraceIDInCtx(ctx context.Context) context.Context {
 type Verbose klog.Verbose
 
 func V(level klog.Level) Verbose {
-	verbose := klog.V(level)
-	enabled = verbose.Enabled()
-	return Verbose(verbose)
+	return Verbose(klog.V(level))
 }
 
 func (v Verbose) Info(ctx context.Context, args ...interface{}) {
-	if enabled {
+	if v {
 		prefix := buildFormat(ctx, "")
 		klog.InfoDepth(1, prefix+fmt.Sprint(args...))
 	}
 }
 
 func (v Verbose) Infof(ctx context.Context, format string, args ...interface{}) {
-	if enabled {
+	if v {
 		format = buildFormat(ctx, format)
 		klog.InfoDepth(1, fmt.Sprintf(format, args...))
 	}

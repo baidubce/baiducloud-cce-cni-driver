@@ -21,8 +21,6 @@ import (
 	"os"
 	"time"
 
-	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/eni"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"github.com/baidubce/bce-sdk-go/bce"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/baidubce/bce-sdk-go/services/bcc"
@@ -102,9 +100,8 @@ func New(
 	}
 	bccClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
-	// todo iaas sdk 暂未支持过滤 eri 和 eni，暂时自行封装一层支持，待后续 sdk 支持过滤 eri 和 eni 后，去除这部分封装
-	eniClient := &eniExt.Client{
-		Client: &eni.Client{BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx))},
+	eniClient := &eni.Client{
+		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
 	}
 	eniClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
@@ -113,12 +110,8 @@ func New(
 	}
 	bbcClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
-	hpcClient := &hpc.Client{
-		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
-	}
 	c := &Client{
 		vpcClient: vpcClient,
-		hpcClient: hpcClient,
 		bccClient: bccClient,
 		eniClient: eniClient,
 		bbcClient: bbcClient,
@@ -126,7 +119,7 @@ func New(
 	return c, nil
 }
 
-func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
 
 	isTruncated := true
@@ -142,39 +135,8 @@ func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, e
 			Marker:     nextMarker,
 		}
 
-		res, err := c.eniClient.ListEnis(listArgs)
+		res, err := c.eniClient.ListEni(listArgs)
 		exportMetric("ListENI", t, err)
-		if err != nil {
-			return nil, err
-		}
-
-		enis = append(enis, res.Eni...)
-
-		nextMarker = res.NextMarker
-		isTruncated = res.IsTruncated
-	}
-
-	return enis, nil
-}
-
-func (c *Client) ListERIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
-	var enis []eni.Eni
-
-	isTruncated := true
-	nextMarker := ""
-
-	for isTruncated {
-		t := time.Now()
-
-		listArgs := &eni.ListEniArgs{
-			VpcId:      args.VpcId,
-			Name:       args.Name,
-			InstanceId: args.InstanceId,
-			Marker:     nextMarker,
-		}
-
-		res, err := c.eniClient.ListEris(listArgs)
-		exportMetric("ListERI", t, err)
 		if err != nil {
 			return nil, err
 		}
@@ -424,26 +386,5 @@ func (c *Client) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAd
 	t := time.Now()
 	resp, err := c.bbcClient.BatchAddIPCrossSubnet(args)
 	exportMetricAndLog(ctx, "BBCBatchAddIPCrossSubnet", t, err)
-	return resp, err
-}
-
-func (c *Client) GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error) {
-	t := time.Now()
-	resp, err := c.hpcClient.GetHPCEniID(instanceID)
-	exportMetricAndLog(ctx, "GetHPCEniID", t, err)
-	return resp, err
-}
-
-func (c *Client) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
-	t := time.Now()
-	err := c.hpcClient.BatchDeletePrivateIPByHpc(args)
-	exportMetricAndLog(ctx, "BatchDeleteHpcEniPrivateIP", t, err)
-	return err
-}
-
-func (c *Client) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
-	t := time.Now()
-	resp, err := c.hpcClient.BatchAddPrivateIPByHpc(args)
-	exportMetricAndLog(ctx, "BatchAddHpcEniPrivateIP", t, err)
 	return resp, err
 }

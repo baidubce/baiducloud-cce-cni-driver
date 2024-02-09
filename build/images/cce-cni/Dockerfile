@@ -1,4 +1,4 @@
-FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0-slim
+FROM registry.baidubce.com/cce-plugin-pro/cce-cni-base:v1.0.0
 
 LABEL maintainer="Chen Yaqi<chenyaqi01@baidu.com>"
 
@@ -11,9 +11,6 @@ COPY output/cni-bin/ptp /ptp
 COPY output/cni-bin/eni-ipam /eni-ipam
 COPY output/cni-bin/sysctl /sysctl
 COPY output/cni-bin/crossvpc-eni /crossvpc-eni
-COPY output/cni-bin/rdma /rdma
-COPY output/cni-bin/eri /eri
-COPY output/cni-bin/roce /roce
 
 # install cce ipam binary
 COPY output/cce-ipam /bin/cce-ipam
@@ -24,6 +21,4 @@ COPY output/cni-node-agent /bin/cni-node-agent
 # install cce node agent binary
 COPY output/ip-masq-agent /bin/cce-ip-masq-agent
 
-COPY build/images/cce-cni/entrypoint.sh /entrypoint.sh
-
-CMD ["/bin/sh", "/entrypoint.sh"]
+CMD ["/bin/bash", "/entrypoint.sh"]

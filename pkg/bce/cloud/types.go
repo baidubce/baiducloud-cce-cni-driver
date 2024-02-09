@@ -18,8 +18,6 @@ package cloud
 import (
 	"context"
 
-	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/eni"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/baidubce/bce-sdk-go/services/bcc"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
@@ -29,7 +27,6 @@ import (
 
 type Interface interface {
 	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
-	ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string) (string, error)
 	DeletePrivateIP(ctx context.Context, privateIP string, eniID string) error
 
@@ -62,17 +59,12 @@ type Interface interface {
 	BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error)
 	BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error
 	BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error)
-
-	GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error)
-	BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error
-	BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error)
 }
 
 type Client struct {
 	bccClient *bcc.Client
-	eniClient *eniExt.Client
+	eniClient *eni.Client
 	vpcClient *vpc.Client
-	hpcClient *hpc.Client
 	bbcClient *bbc.Client
 }
 

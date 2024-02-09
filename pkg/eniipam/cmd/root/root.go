@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	componentbaseconfig "k8s.io/component-base/config"
+	"k8s.io/kubernetes/pkg/client/leaderelectionconfig"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
@@ -40,11 +41,9 @@ import (
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	eniipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
-	rdmaipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
@@ -93,7 +92,6 @@ func NewRootCommand() *cobra.Command {
 
 	options.addFlags(cmd.Flags())
 	webhook.RegisterWebhookFlags(cmd.Flags())
-	cidr.RegisterCIDRFlags(cmd.Flags())
 
 	cmd.AddCommand(version.NewVersionCommand())
 
@@ -187,18 +185,6 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			log.Fatalf(ctx, "failed to create cross vpc eni ipamd: %v", err)
 		}
 
-		roceipamd, err := rdmaipam.NewIPAM(
-			opts.VPCID,
-			kubeClient,
-			crdClient,
-			bceClient,
-			opts.ResyncPeriod,
-			opts.GCPeriod,
-		)
-		if err != nil {
-			log.Fatalf(ctx, "failed to create bbc roce ipamd: %v", err)
-		}
-
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
 
 		switch {
@@ -212,8 +198,6 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 					log.Fatalf(ctx, "eni ipamd failed to run: %v", err)
 				}
 			}()
-		case types.IsCCECNIModeBasedOnVPCRoute(opts.CNIMode):
-			ipamds = [2]ipam.Interface{}
 		default:
 			log.Fatalf(ctx, "unsupported cni mode: %v", opts.CNIMode)
 		}
@@ -229,33 +213,18 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			}
 		}
 
-		if roceipamd != nil {
-			go func(rdmaipamd ipam.RoceInterface) {
-				ctx := log.NewContext()
-				if err := rdmaipamd.Run(ctx, opts.stopCh); err != nil {
-					log.Fatalf(ctx, "bbc roce ipamd failed to run: %v", err)
-				}
-			}(roceipamd)
-		}
-
 		ipamGrpcBackend := grpc.New(
 			ipamds[0],
 			ipamds[1],
 			eniipamd,
-			roceipamd,
 			opts.Port,
 			opts.AllocateIPConcurrencyLimit,
 			opts.ReleaseIPConcurrencyLimit,
 			opts.Debug)
 
-		// Run metric server
+		// run metric server
 		go func() {
 			runMetricServer(ctx, opts)
-		}()
-
-		// Update the memory usage percent metric every second in a separate goroutine.
-		go func() {
-			metric.RunMemUsagePercentMetric(ctx)
 		}()
 
 		go func() {
@@ -319,7 +288,7 @@ func runMetricServer(ctx context.Context, opts *Options) {
 
 	metric.SetMetricMetaInfo(opts.ClusterID, opts.VPCID)
 
-	metric.RegisterPrometheusMetrics(ctx)
+	metric.RegisterPrometheusMetrics()
 	http.Handle("/metrics", promhttp.Handler())
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
@@ -352,7 +321,7 @@ func (o *Options) addFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.IdleIPPoolMaxSize, "idle-ip-pool-max-size", o.IdleIPPoolMaxSize, "Idle IP Pool Max Size")
 	fs.IntVar(&o.IdleIPPoolMinSize, "idle-ip-pool-min-size", o.IdleIPPoolMinSize, "Idle IP Pool Min Size")
 	fs.BoolVar(&o.Debug, "debug", o.Debug, "Debug mode")
-	bindLeaderFlags(&o.LeaderElection, fs)
+	leaderelectionconfig.BindFlags(&o.LeaderElection, fs)
 }
 
 func (o *Options) validate() error {
@@ -388,34 +357,4 @@ func printFlags(flags *pflag.FlagSet) {
 	flags.VisitAll(func(flag *pflag.Flag) {
 		log.Infof(context.TODO(), "FLAG: --%s=%q", flag.Name, flag.Value)
 	})
-}
-
-// BindFlags binds the LeaderElectionConfiguration struct fields to a flagset
-func bindLeaderFlags(l *componentbaseconfig.LeaderElectionConfiguration, fs *pflag.FlagSet) {
-	fs.BoolVar(&l.LeaderElect, "leader-elect", l.LeaderElect, ""+
-		"Start a leader election client and gain leadership before "+
-		"executing the main loop. Enable this when running replicated "+
-		"components for high availability.")
-	fs.DurationVar(&l.LeaseDuration.Duration, "leader-elect-lease-duration", l.LeaseDuration.Duration, ""+
-		"The duration that non-leader candidates will wait after observing a leadership "+
-		"renewal until attempting to acquire leadership of a led but unrenewed leader "+
-		"slot. This is effectively the maximum duration that a leader can be stopped "+
-		"before it is replaced by another candidate. This is only applicable if leader "+
-		"election is enabled.")
-	fs.DurationVar(&l.RenewDeadline.Duration, "leader-elect-renew-deadline", l.RenewDeadline.Duration, ""+
-		"The interval between attempts by the acting master to renew a leadership slot "+
-		"before it stops leading. This must be less than or equal to the lease duration. "+
-		"This is only applicable if leader election is enabled.")
-	fs.DurationVar(&l.RetryPeriod.Duration, "leader-elect-retry-period", l.RetryPeriod.Duration, ""+
-		"The duration the clients should wait between attempting acquisition and renewal "+
-		"of a leadership. This is only applicable if leader election is enabled.")
-	fs.StringVar(&l.ResourceLock, "leader-elect-resource-lock", l.ResourceLock, ""+
-		"The type of resource object that is used for locking during "+
-		"leader election. Supported options are `endpoints` (default) and `configmaps`.")
-	fs.StringVar(&l.ResourceName, "leader-elect-resource-name", l.ResourceName, ""+
-		"The name of resource object that is used for locking during "+
-		"leader election.")
-	fs.StringVar(&l.ResourceNamespace, "leader-elect-resource-namespace", l.ResourceNamespace, ""+
-		"The namespace of resource object that is used for locking during "+
-		"leader election.")
 }

@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apimachinery/networking"
@@ -28,8 +29,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	ipamgeneric "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/iprange"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
@@ -44,9 +45,7 @@ func (ipam *IPAM) subnetTopologyAllocates(ctx context.Context, pod *corev1.Pod, 
 		log.Errorf(ctx, "failed to get PodSubnetTopologySpread of pod (%v/%v): %v", pod.Namespace, pod.Name, err)
 		return nil, err
 	}
-
-	strategy, available := networking.PSTSMode(psts)
-	if !available {
+	if !networking.PSTSContainsAvailableSubnet(psts) {
 		return nil, fmt.Errorf("PodSubnetTopologySpread (%s/%s) have none available subnet", psts.GetNamespace(), psts.GetName())
 	}
 	log.Infof(ctx, "try to use PodSubnetTopologySpread (%s/%s) for pod (%v/%v)", psts.GetNamespace(), psts.GetName(), pod.GetNamespace(), pod.GetName())
@@ -63,36 +62,27 @@ func (ipam *IPAM) subnetTopologyAllocates(ctx context.Context, pod *corev1.Pod, 
 		return nil, fmt.Errorf("PodSubnetTopologySpread (%s/%s) no available subnet", psts.GetNamespace(), psts.GetName())
 	}
 
-	needSubnetLock := true
+	needSubnetLock := false
 	defer func() {
 		if needSubnetLock {
 			ipam.unlockExclusiveSubnet(toAllocate.candidateSubnets)
 		}
 	}()
-	switch strategy.Type {
-	case networkingv1alpha1.IPAllocTypeNil:
-		fallthrough
-	case networkingv1alpha1.IPAllocTypeElastic:
-		// allocate ip with auto mode
-		needSubnetLock = false
-		err = ipam.elasticAllocateIPCrossSubnet(ctx, toAllocate, enis)
-	case networkingv1alpha1.IPAllocTypeFixed:
-		// fixed ip mode and suffix of pod name is number
-		if networking.IsEndWithNum(pod.GetName()) {
-			ipam.lockExclusiveSubnet(toAllocate.candidateSubnets)
-			err = ipam.fixedAllocateIPCrossSubnet(ctx, toAllocate, oldWep)
-		}
-	case networkingv1alpha1.IPAllocTypeManual:
+	// fixed ip mode and suffix of pod name is number
+	if networking.IsFixedIPMode(psts) && networking.IsEndWithNum(pod.GetName()) {
+		needSubnetLock = true
 		ipam.lockExclusiveSubnet(toAllocate.candidateSubnets)
-		toAllocate.iprange, err = iprange.NewCIDRRangePool(toAllocate.psts, ipam)
-		if err == nil {
-			err = ipam.manualAllocateIPCrossSubnet(ctx, toAllocate)
-		}
-	case networkingv1alpha1.IPAllocTypeCustom:
-		ipam.lockExclusiveSubnet(toAllocate.candidateSubnets)
-		err = ipam.customAllocateIPCrossSubnet(ctx, toAllocate, oldWep)
+		err = ipam.fixedAllocateIPCrossSubnet(ctx, toAllocate, oldWep)
 	}
-
+	if networking.IsManualMode(psts) {
+		needSubnetLock = true
+		ipam.lockExclusiveSubnet(toAllocate.candidateSubnets)
+		err = ipam.manualAllocateIPCrossSubnet(ctx, toAllocate)
+	}
+	// allocate ip with auto mode
+	if networking.IsElasticMode(psts) {
+		err = ipam.elasticAllocateIPCrossSubnet(ctx, toAllocate, enis)
+	}
 	if err != nil {
 		log.Errorf(ctx, "%s error : %v", toAllocate.info(), err)
 		return nil, err
@@ -135,7 +125,6 @@ func (ipam *IPAM) __saveIPAllocationToWEP(ctx context.Context, toAllocate *ipToA
 			FixIPDeletePolicy:       string(networking.GetReleaseStrategy(psts)),
 			ENISubnetID:             toAllocate.eni.SubnetId,
 			SubnetTopologyReference: psts.GetName(),
-			Phase:                   networkingv1alpha1.WorkloadEndpointPhasePodRuning,
 		},
 	}
 
@@ -144,18 +133,6 @@ func (ipam *IPAM) __saveIPAllocationToWEP(ctx context.Context, toAllocate *ipToA
 		newWep.Spec.Type = ipamgeneric.WepTypeSts
 		newWep.Spec.EnableFixIP = EnableFixIPTrue
 		newWep.Labels[ipamgeneric.WepLabelStsOwnerKey] = util.GetStsName(newWep)
-	} else if networking.IsReuseIPCustomPSTS(psts) {
-		newWep.Spec.Type = ipamgeneric.WepTypeReuseIPPod
-		newWep.Spec.EnableFixIP = EnableFixIPTrue
-		if psts.Spec.Strategy.TTL != nil {
-			newWep.Spec.Release = &networkingv1alpha1.EndpointRelease{
-				TTL: *psts.Spec.Strategy.TTL,
-			}
-		} else {
-			newWep.Spec.Release = &networkingv1alpha1.EndpointRelease{
-				TTL: *networkingv1alpha1.DefaultReuseIPTTL,
-			}
-		}
 	}
 
 	// to rollback if update wep error
@@ -177,8 +154,12 @@ func (ipam *IPAM) __saveIPAllocationToWEP(ctx context.Context, toAllocate *ipToA
 	if ipam.removeAddIPBackoffCache(newWep.Spec.ENIID, true) {
 		log.Infof(ctx, "remove backoff for eni %v when handling pod (%v %v) due to successful ip allocate", newWep.Spec.ENIID, pod.GetNamespace(), pod.GetName())
 	}
-	ipam.allocated.Add(toAllocate.ipv4Result, newWep)
-	ipam.allocated.Add(toAllocate.ipv6Result, newWep)
+	if toAllocate.ipv4Result != "" {
+		ipam.allocated[toAllocate.ipv4Result] = newWep
+	}
+	if toAllocate.ipv6Result != "" {
+		ipam.allocated[toAllocate.ipv6Result] = newWep
+	}
 	return newWep, nil
 
 	// update wep error
@@ -204,18 +185,14 @@ func (ipam *IPAM) rollbackIPAllocated(ctx context.Context, toAllocate *ipToAlloc
 // The previous fixed IP is no longer in the latest list.
 // At this time, try to allocate IP again
 func (ipam *IPAM) fixedAllocateIPCrossSubnet(ctx context.Context, toAllocate *ipToAllocate, oldWep *networkingv1alpha1.WorkloadEndpoint) error {
-	var err error
-	toAllocate.iprange, err = iprange.NewCIDRRangePool(toAllocate.psts, ipam)
-	if err != nil {
-		return err
-	}
 	if networking.OwnerByPodSubnetTopologySpread(oldWep, toAllocate.psts) {
 		ipam.tryDeleteSubnetIPRetainAllocateCache(ctx, oldWep)
-		if toAllocate.iprange.IPInRange(oldWep.Spec.IP) {
-			toAllocate.ipv4 = oldWep.Spec.IP
-			toAllocate.sbnID = oldWep.Spec.SubnetID
-		} else {
-			log.Warningf(ctx, "old ip (%s) not in psts range %s", oldWep.Spec.IP, toAllocate.iprange.String())
+
+		toAllocate.ipv4 = oldWep.Spec.IP
+		toAllocate.sbnID = oldWep.Spec.SubnetID
+
+		if !networking.PSTSContainersIP(toAllocate.ipv4, toAllocate.psts) {
+			toAllocate.ipv4 = ""
 		}
 	}
 	return ipam.manualAllocateIPCrossSubnet(ctx, toAllocate)
@@ -312,13 +289,33 @@ func (ipam *IPAM) tryAllocateIPsCrossSubnet(ctx context.Context, toAllocate *ipT
 // multiple subnets according to the sorting rules. The rule
 // of preferred IP is to select the first unused IP under the subnet
 func (ipam *IPAM) priorityIPAndSubnet(ctx context.Context, toAllocate *ipToAllocate) {
-	for _, sbnID := range toAllocate.candidateSubnets {
-		ip := toAllocate.iprange.FirstAvailableIP(sbnID)
-		if ip != nil {
-			toAllocate.sbnID = sbnID
-			toAllocate.ipv4 = ip.String()
-			return
+	ipam.lock.RLock()
+	defer ipam.lock.RUnlock()
+
+	var (
+		ips []string
+	)
+
+	ipv4Map := ipam.filterCandidateIPs(ctx, toAllocate.psts, toAllocate.candidateSubnets, 4)
+	for id, arr := range ipv4Map {
+		if len(arr) > len(ips) {
+			toAllocate.sbnID = id
+			ips = arr
 		}
+	}
+	if len(ips) > 0 {
+		toAllocate.ipv4 = ips[0]
+	}
+
+	ips = make([]string, 0)
+	ipv6Map := ipam.filterCandidateIPs(ctx, toAllocate.psts, toAllocate.candidateSubnets, 6)
+	for _, arr := range ipv6Map {
+		if len(arr) > len(ips) {
+			ips = arr
+		}
+	}
+	if len(ips) > 0 {
+		toAllocate.ipv6 = ips[0]
 	}
 }
 
@@ -381,12 +378,60 @@ func filterAvailableSubnet(ctx context.Context, eni *enisdk.Eni, availableSubnet
 	return candidateSubnets
 }
 
+// filtercindidateIPs
+// origin: all of subnet and ip
+// candidateSubnets: subnet to filter
+// return: ip can be allocated
+func (ipam *IPAM) filterCandidateIPs(ctx context.Context, psts *networkingv1alpha1.PodSubnetTopologySpread, candidateSubnets []string, version int) map[string][]string {
+	var condidateIPs map[string][]string = make(map[string][]string)
+
+	for _, sbnID := range candidateSubnets {
+		set := sets.NewString()
+		if sa, ok := psts.Spec.Subnets[sbnID]; ok {
+			var (
+				ipArray []string = sa.IPv4
+				ipRange []string = sa.IPv4Range
+				sbnCIDR string   = ""
+			)
+			sbn, _ := ipam.sbnCtl.Get(sbnID)
+			if sbn != nil {
+				sbnCIDR = sbn.Spec.CIDR
+			} else {
+				continue
+			}
+
+			if version == 6 {
+				ipArray = sa.IPv6
+				ipRange = sa.IPv6Range
+			}
+			for _, ranges := range ipRange {
+				ips := cidr.ListIPsFromCIDRString(ranges)
+				for _, ip := range ips {
+					if cidr.IsUnicastIP(ip, sbnCIDR) {
+						ipArray = append(ipArray, ip.String())
+					}
+				}
+			}
+
+			for _, ip := range ipArray {
+				if _, ok := ipam.allocated[ip]; !ok {
+					set.Insert(ip)
+				}
+			}
+
+		}
+		condidateIPs[sbnID] = set.List()
+	}
+	return condidateIPs
+}
+
 func (ipam *IPAM) __allocateIPCrossSubnet(ctx context.Context, eni *enisdk.Eni, ipToAllocate, subnetID string, backoffCap time.Duration, nodeName string) (string, error) {
 	var (
 		ipResult []string
 		err      error
 	)
-	for i := 0; i < 3; i++ {
+	allocIPMaxTry := 3
+	for i := 0; i < allocIPMaxTry; i++ {
 		ipam.tryBackoff(eni.EniId)
 		log.Infof(ctx, "try to add IP %v to %v cross subnet", ipToAllocate, eni.EniId)
 		if ipToAllocate != "" {
@@ -431,10 +476,6 @@ func (ipam *IPAM) __allocateIPCrossSubnet(ctx context.Context, eni *enisdk.Eni, 
 		return "", errors.New(msg)
 	}
 
-	if err != nil {
-		return "", err
-	}
-
 	log.Infof(ctx, "add private IP cross subnet %v successfully", ipResult)
 
 	ipam.datastore.Synchronized(func() error {
@@ -454,8 +495,8 @@ func (ipam *IPAM) __allocateIPCrossSubnet(ctx context.Context, eni *enisdk.Eni, 
 func (ipam *IPAM) tryBackoff(eniid string) {
 	var toSleep time.Duration
 	ipam.lock.RLock()
-	if v, ok := ipam.addIPBackoffCache.Get(eniid); ok {
-		toSleep = (*wait.Backoff)(v).Step()
+	if v, ok := ipam.addIPBackoffCache[eniid]; ok {
+		toSleep = v.Step()
 	}
 	ipam.lock.RUnlock()
 	if toSleep != 0 {
@@ -483,29 +524,30 @@ func (ipam *IPAM) syncRelationOfWepEni() {
 
 	var toUpdateWeps []*networkingv1alpha1.WorkloadEndpoint
 
-	ipam.eniCache.ForEachSubItem(func(key string, index int, eni *enisdk.Eni) bool {
-		for _, addr := range eni.PrivateIpSet {
-			if wep, ok := ipam.allocated.Get(addr.PrivateIpAddress); ok {
-				wep, err := wepLister.WorkloadEndpoints(wep.Namespace).Get(wep.Name)
-				if err != nil {
-					continue
-				}
-				if wep.Spec.ENIID != eni.EniId &&
-					wep.Spec.UpdateAt.Add(2*ipam.eniSyncPeriod).Before(time.Now()) {
-					wep = wep.DeepCopy()
-					wep.Spec.ENIID = eni.EniId
-					wep.Spec.UpdateAt = metav1.Now()
-					toUpdateWeps = append(toUpdateWeps, wep)
+	ipam.lock.RLock()
+	for _, enis := range ipam.eniCache {
+		for _, eni := range enis {
+			for _, addr := range eni.PrivateIpSet {
+				if wep, ok := ipam.allocated[addr.PrivateIpAddress]; ok {
+					wep, err := wepLister.WorkloadEndpoints(wep.Namespace).Get(wep.Name)
+					if err != nil {
+						continue
+					}
+					if wep.Spec.ENIID != eni.EniId &&
+						wep.Spec.UpdateAt.Add(2*ipam.eniSyncPeriod).Before(time.Now()) {
+						wep = wep.DeepCopy()
+						wep.Spec.ENIID = eni.EniId
+						wep.Spec.UpdateAt = metav1.Now()
+						toUpdateWeps = append(toUpdateWeps, wep)
+					}
 				}
 			}
 		}
-
-		// continue
-		return true
-	})
+	}
+	ipam.lock.RUnlock()
 
 	for _, wep := range toUpdateWeps {
-		if !(networking.IsFixIPStatefulSetPodWep(wep) || networking.ISCustomReuseModeWEP(wep)) {
+		if !isFixIPStatefulSetPodWep(wep) {
 			continue
 		}
 		ipam.crdClient.CceV1alpha1().WorkloadEndpoints(wep.Namespace).Update(ctx, wep, metav1.UpdateOptions{})
@@ -534,9 +576,6 @@ type ipToAllocate struct {
 	// ip allocate result
 	ipv4Result string
 	ipv6Result string
-
-	// iprange manager available IP of range
-	iprange *iprange.RangePool
 }
 
 func (toAllocate *ipToAllocate) info() string {

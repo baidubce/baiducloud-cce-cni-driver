@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
@@ -185,20 +184,16 @@ func TestIPAM_Allocate(t *testing.T) {
 				waitForCacheSync(kubeInformer, crdInformer)
 
 				go func() {
-					var (
-						ctx = log.NewContext()
-					)
-
 					time.Sleep(3 * time.Second)
 					cveni, err := crdClient.CceV1alpha1().CrossVPCEnis().Get(context.TODO(), containerID, metav1.GetOptions{})
 					if err != nil {
-						log.Fatalf(ctx, "Get cveni %v failed: %v", containerID, err)
+						log.Fatalf(context.TODO(), "Get cveni %v failed: %v", containerID, err)
 					}
 					cveni.Status.EniStatus = v1alpha1.EniStatusInuse
 
 					_, err = crdClient.CceV1alpha1().CrossVPCEnis().UpdateStatus(context.TODO(), cveni, metav1.UpdateOptions{})
 					if err != nil {
-						log.Fatalf(ctx, "UpdateStatus cveni %v failed: %v", containerID, err)
+						log.Fatalf(context.TODO(), "UpdateStatus cveni %v failed: %v", containerID, err)
 					}
 				}()
 
@@ -228,18 +223,16 @@ func TestIPAM_Allocate(t *testing.T) {
 						PodLabelOwnerName:      "busybox",
 						PodLabelOwnerNamespace: "default",
 						PodLabelOwnerNode:      "test-node",
-						PodLabelOwnerInstance:  "i-xxx",
 					},
 					Finalizers: []string{ipamgeneric.WepFinalizer},
 				},
 				Spec: v1alpha1.CrossVPCEniSpec{
-					UserID:                    "userid",
-					SubnetID:                  "sbn-bbb",
-					SecurityGroupIDs:          []string{"g-xxx"},
-					VPCCIDR:                   "10.0.0.0/8",
-					PrivateIPAddress:          "",
-					BoundInstanceID:           "i-xxx",
-					DefaultRouteExcludedCidrs: make([]string, 0),
+					UserID:           "userid",
+					SubnetID:         "sbn-bbb",
+					SecurityGroupIDs: []string{"g-xxx"},
+					VPCCIDR:          "10.0.0.0/8",
+					PrivateIPAddress: "",
+					BoundInstanceID:  "i-xxx",
 				},
 				Status: v1alpha1.CrossVPCEniStatus{
 					EniID:               "",
@@ -285,10 +278,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				crdClient.CceV1alpha1().CrossVPCEnis().Create(context.TODO(), &v1alpha1.CrossVPCEni{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "ooops",
-						Labels: map[string]string{
-							PodLabelOwnerNode:     "test-node",
-							PodLabelOwnerInstance: "i-xxx",
-						},
 					},
 					Status: v1alpha1.CrossVPCEniStatus{
 						EniStatus: v1alpha1.EniStatusAttaching,
@@ -317,118 +306,6 @@ func TestIPAM_Allocate(t *testing.T) {
 				containerID: containerID,
 			},
 			wantErr: true,
-		},
-		{
-			name: "node 存在 unstable eni，存量 cveni 没有 ownnerinstance label",
-			fields: func() fields {
-				ctrl := gomock.NewController(t)
-				kubeClient, kubeInformer, crdClient, crdInformer, eventBroadcaster, recorder := setupEnv(ctrl)
-
-				kubeClient.CoreV1().Pods("default").Create(context.TODO(), &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:           "userid",
-							PodAnnotationCrossVPCEniSubnetID:         "sbn-bbb",
-							PodAnnotationCrossVPCEniSecurityGroupIDs: "g-xxx",
-							PodAnnotationCrossVPCEniVPCCIDR:          "10.0.0.0/8",
-						},
-					},
-					Spec: v1.PodSpec{
-						NodeName: "test-node",
-					},
-				}, metav1.CreateOptions{})
-
-				kubeClient.CoreV1().Nodes().Create(context.TODO(), &v1.Node{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test-node",
-					},
-					Spec: v1.NodeSpec{
-						ProviderID: "cce://i-xxx",
-					},
-				}, metav1.CreateOptions{})
-
-				crdClient.CceV1alpha1().CrossVPCEnis().Create(context.TODO(), &v1alpha1.CrossVPCEni{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "ooops",
-						Labels: map[string]string{
-							PodLabelOwnerNode: "test-node",
-						},
-					},
-					Status: v1alpha1.CrossVPCEniStatus{
-						EniStatus: v1alpha1.EniStatusAttaching,
-					},
-				}, metav1.CreateOptions{})
-
-				waitForCacheSync(kubeInformer, crdInformer)
-
-				go func() {
-					var (
-						ctx = log.NewContext()
-					)
-
-					time.Sleep(6 * time.Second)
-					cveni, err := crdClient.CceV1alpha1().CrossVPCEnis().Get(context.TODO(), containerID, metav1.GetOptions{})
-					if err != nil {
-						log.Fatalf(ctx, "Get cveni %v failed: %v", containerID, err)
-					}
-					cveni.Status.EniStatus = v1alpha1.EniStatusInuse
-
-					_, err = crdClient.CceV1alpha1().CrossVPCEnis().UpdateStatus(context.TODO(), cveni, metav1.UpdateOptions{})
-					if err != nil {
-						log.Fatalf(ctx, "UpdateStatus cveni %v failed: %v", containerID, err)
-					}
-				}()
-
-				return fields{
-					ctrl:             ctrl,
-					debug:            false,
-					cacheHasSynced:   true,
-					eventBroadcaster: eventBroadcaster,
-					eventRecorder:    recorder,
-					kubeInformer:     kubeInformer,
-					kubeClient:       kubeClient,
-					crdInformer:      crdInformer,
-					crdClient:        crdClient,
-					clock:            clock.NewFakeClock(time.Unix(0, 0)),
-				}
-			}(),
-			args: args{
-				ctx:         context.TODO(),
-				name:        "busybox",
-				namespace:   "default",
-				containerID: containerID,
-			},
-			want: &v1alpha1.CrossVPCEni{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: containerID,
-					Labels: map[string]string{
-						PodLabelOwnerName:      "busybox",
-						PodLabelOwnerNamespace: "default",
-						PodLabelOwnerNode:      "test-node",
-						PodLabelOwnerInstance:  "i-xxx",
-					},
-					Finalizers: []string{ipamgeneric.WepFinalizer},
-				},
-				Spec: v1alpha1.CrossVPCEniSpec{
-					UserID:                    "userid",
-					SubnetID:                  "sbn-bbb",
-					SecurityGroupIDs:          []string{"g-xxx"},
-					VPCCIDR:                   "10.0.0.0/8",
-					PrivateIPAddress:          "",
-					BoundInstanceID:           "i-xxx",
-					DefaultRouteExcludedCidrs: make([]string, 0),
-				},
-				Status: v1alpha1.CrossVPCEniStatus{
-					EniID:               "",
-					EniStatus:           v1alpha1.EniStatusInuse,
-					PrimaryIPAddress:    "",
-					MacAddress:          "",
-					InvolvedContainerID: containerID,
-				},
-			},
-			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -577,8 +454,7 @@ func TestIPAM_Release(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: containerID,
 						Labels: map[string]string{
-							PodLabelOwnerNode:     "test-node",
-							PodLabelOwnerInstance: "i-xxx",
+							PodLabelOwnerNode: "test-node",
 						},
 					},
 					Status: v1alpha1.CrossVPCEniStatus{
@@ -589,10 +465,6 @@ func TestIPAM_Release(t *testing.T) {
 				crdClient.CceV1alpha1().CrossVPCEnis().Create(context.TODO(), &v1alpha1.CrossVPCEni{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "ooops",
-						Labels: map[string]string{
-							PodLabelOwnerNode:     "test-node",
-							PodLabelOwnerInstance: "i-xxx",
-						},
 					},
 					Status: v1alpha1.CrossVPCEniStatus{
 						EniStatus: v1alpha1.EniStatusAttaching,
@@ -802,7 +674,7 @@ func TestIPAM_searchCrossVPCEniEvents(t *testing.T) {
 				kubeClient, kubeInformer, crdClient, crdInformer, eventBroadcaster, recorder := setupEnv(ctrl)
 				waitForCacheSync(kubeInformer, crdInformer)
 
-				// recorder.Event(eni, v1.EventTypeWarning, "CreateEni", "Got Error")
+				recorder.Event(eni, v1.EventTypeWarning, "CreateEni", "Got Error")
 
 				return fields{
 					ctrl:             ctrl,
@@ -870,7 +742,7 @@ func Test_eventsToErrorMsg(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want []string
+		want string
 	}{
 		{
 			name: "empty list",
@@ -879,7 +751,7 @@ func Test_eventsToErrorMsg(t *testing.T) {
 					Items: []v1.Event{},
 				},
 			},
-			want: []string{},
+			want: "",
 		},
 		{
 			name: "normal list",
@@ -904,185 +776,13 @@ func Test_eventsToErrorMsg(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"CreateEni: aaa", "AttachEni: ccc"},
+			want: `[CreateEni: aaa, AttachEni: ccc]`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := eventsToErrorMsg(tt.args.events)
-			if len(tt.want) == 0 {
-				assert.Equal(t, "", got)
-			} else {
-				for _, subWant := range tt.want {
-					assert.Contains(t, got, subWant)
-				}
-			}
-		})
-	}
-}
-
-func Test_getEniSpecFromPodAnnotations(t *testing.T) {
-
-	var (
-		userID     = "abcdef"
-		subnetID   = "sbn-xxx"
-		secGroupID = "g-xxx"
-		vpcCIDR    = "7.0.0.0/16"
-	)
-
-	type args struct {
-		ctx context.Context
-		pod *v1.Pod
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *v1alpha1.CrossVPCEniSpec
-		wantErr bool
-	}{
-		{
-			name: "eni without route anno",
-			args: args{
-				ctx: context.TODO(),
-				pod: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:           userID,
-							PodAnnotationCrossVPCEniSubnetID:         subnetID,
-							PodAnnotationCrossVPCEniSecurityGroupIDs: secGroupID,
-							PodAnnotationCrossVPCEniVPCCIDR:          vpcCIDR,
-						},
-					},
-				},
-			},
-			want: &v1alpha1.CrossVPCEniSpec{
-				UserID:                          userID,
-				SubnetID:                        subnetID,
-				SecurityGroupIDs:                []string{secGroupID},
-				VPCCIDR:                         vpcCIDR,
-				PrivateIPAddress:                "",
-				BoundInstanceID:                 "",
-				DefaultRouteInterfaceDelegation: "",
-				DefaultRouteExcludedCidrs:       []string{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "eni with eni delegation anno",
-			args: args{
-				ctx: context.TODO(),
-				pod: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:                          userID,
-							PodAnnotationCrossVPCEniSubnetID:                        subnetID,
-							PodAnnotationCrossVPCEniSecurityGroupIDs:                secGroupID,
-							PodAnnotationCrossVPCEniVPCCIDR:                         vpcCIDR,
-							PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation: "eni",
-						},
-					},
-				},
-			},
-			want: &v1alpha1.CrossVPCEniSpec{
-				UserID:                          userID,
-				SubnetID:                        subnetID,
-				SecurityGroupIDs:                []string{secGroupID},
-				VPCCIDR:                         vpcCIDR,
-				PrivateIPAddress:                "",
-				BoundInstanceID:                 "",
-				DefaultRouteInterfaceDelegation: "eni",
-				DefaultRouteExcludedCidrs:       []string{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "eni with bad eni delegation anno",
-			args: args{
-				ctx: context.TODO(),
-				pod: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:                          userID,
-							PodAnnotationCrossVPCEniSubnetID:                        subnetID,
-							PodAnnotationCrossVPCEniSecurityGroupIDs:                secGroupID,
-							PodAnnotationCrossVPCEniVPCCIDR:                         vpcCIDR,
-							PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation: "emm",
-						},
-					},
-				},
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "eni with eni delegation anno and excluded cidr",
-			args: args{
-				ctx: context.TODO(),
-				pod: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:                          userID,
-							PodAnnotationCrossVPCEniSubnetID:                        subnetID,
-							PodAnnotationCrossVPCEniSecurityGroupIDs:                secGroupID,
-							PodAnnotationCrossVPCEniVPCCIDR:                         vpcCIDR,
-							PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation: "eni",
-							PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs:       "8.0.0.0/8,9.0.0.0/8",
-						},
-					},
-				},
-			},
-			want: &v1alpha1.CrossVPCEniSpec{
-				UserID:                          userID,
-				SubnetID:                        subnetID,
-				SecurityGroupIDs:                []string{secGroupID},
-				VPCCIDR:                         vpcCIDR,
-				PrivateIPAddress:                "",
-				BoundInstanceID:                 "",
-				DefaultRouteInterfaceDelegation: "eni",
-				DefaultRouteExcludedCidrs:       []string{"8.0.0.0/8", "9.0.0.0/8"},
-			},
-			wantErr: false,
-		},
-		{
-			name: "eni with eni delegation anno and excluded cidr",
-			args: args{
-				ctx: context.TODO(),
-				pod: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "busybox",
-						Namespace: "default",
-						Annotations: map[string]string{
-							PodAnnotationCrossVPCEniUserID:                          userID,
-							PodAnnotationCrossVPCEniSubnetID:                        subnetID,
-							PodAnnotationCrossVPCEniSecurityGroupIDs:                secGroupID,
-							PodAnnotationCrossVPCEniVPCCIDR:                         vpcCIDR,
-							PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation: "eni",
-							PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs:       "8.0.0.0/1,",
-						},
-					},
-				},
-			},
-			want:    nil,
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := getEniSpecFromPodAnnotations(tt.args.ctx, tt.args.pod)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("getEniSpecFromPodAnnotations() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("getEniSpecFromPodAnnotations() = %v, want %v", got, tt.want)
+			if got := eventsToErrorMsg(tt.args.events); got != tt.want {
+				t.Errorf("eventsToErrorMsg() = %v, want %v", got, tt.want)
 			}
 		})
 	}

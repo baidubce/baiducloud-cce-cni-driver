@@ -18,7 +18,6 @@ package network
 import (
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/j-keck/arping"
 	"github.com/vishvananda/netlink"
@@ -80,8 +79,4 @@ func (c *linuxNetwork) InterfaceByName(name string) (*net.Interface, error) {
 
 func (c *linuxNetwork) GratuitousArpOverIface(srcIP net.IP, iface net.Interface) error {
 	return arping.GratuitousArpOverIface(srcIP, iface)
-}
-
-func (c *linuxNetwork) PingOverIfaceByName(dstIP net.IP, ifaceName string) (net.HardwareAddr, time.Duration, error) {
-	return arping.PingOverIfaceByName(dstIP, ifaceName)
 }

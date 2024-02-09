@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -17,7 +16,6 @@ import (
 	"modernc.org/mathutil"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apimachinery/networking"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
@@ -82,8 +80,7 @@ func (manager *simpleIPResourceManager) patchENICapacityInfoToNode(ctx context.C
 
 	// update node capacity
 	needUpdateIPResourceFlag := true
-	// ENI primary IP is not used for container network IP allocation
-	maxIP := maxENINum * (maxIPPerENI - 1)
+	maxIP := maxENINum * maxIPPerENI
 	ipPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "ip", maxIP)
 	if ipRe, ok := node.Status.Capacity[networking.ResourceIPForNode]; ok {
 		if ipRe.Value() == int64(maxIP) {
@@ -259,47 +256,13 @@ func NewCrossVPCEniResourceManager(kubeClient kubernetes.Interface, node *corev1
 }
 
 func (manager *crossVPCEniResourceManager) SyncCapacity(ctx context.Context) error {
-	var (
-		maxEniNum        int
-		maxEniNumByAnno  int
-		maxEniNumByLabel int
-		node             *v1.Node
-	)
-
-	maxEniNum = utileni.GetMaxENIPerNode(manager.bccInstance.CpuCount)
-	if maxEniNum < customerMaxENINum {
-		maxEniNum = customerMaxENINum
+	var maxENINum int
+	maxENINum = utileni.GetMaxENIPerNode(manager.bccInstance.CpuCount)
+	if maxENINum < customerMaxENINum {
+		maxENINum = customerMaxENINum
 	}
 
-	node = manager.node
-
-	maxEniNumStr, ok := node.Annotations[crossvpceni.NodeAnnotationMaxCrossVPCEni]
-	if ok {
-		i, err := strconv.ParseInt(maxEniNumStr, 10, 32)
-		if err != nil {
-			return err
-		}
-		maxEniNumByAnno = int(i)
-
-		if maxEniNumByAnno < maxEniNum {
-			maxEniNum = maxEniNumByAnno
-		}
-	}
-
-	maxEniNumStr, ok = node.Labels[crossvpceni.NodeLabelMaxCrossVPCEni]
-	if ok {
-		i, err := strconv.ParseInt(maxEniNumStr, 10, 32)
-		if err != nil {
-			return err
-		}
-		maxEniNumByLabel = int(i)
-
-		if maxEniNumByLabel < maxEniNum {
-			maxEniNum = maxEniNumByLabel
-		}
-	}
-
-	return manager.patchCrossVPCEniCapacityInfoToNode(ctx, maxEniNum)
+	return manager.patchCrossVPCEniCapacityInfoToNode(ctx, maxENINum)
 }
 
 func (manager *crossVPCEniResourceManager) patchCrossVPCEniCapacityInfoToNode(ctx context.Context, maxEniNum int) error {

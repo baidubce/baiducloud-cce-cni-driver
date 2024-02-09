@@ -12,8 +12,6 @@ type Interface interface {
 	CrossVPCEnis() CrossVPCEniInformer
 	// IPPools returns a IPPoolInformer.
 	IPPools() IPPoolInformer
-	// MultiIPWorkloadEndpoints returns a MultiIPWorkloadEndpointInformer.
-	MultiIPWorkloadEndpoints() MultiIPWorkloadEndpointInformer
 	// PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.
 	PodSubnetTopologySpreads() PodSubnetTopologySpreadInformer
 	// PodSubnetTopologySpreadTables returns a PodSubnetTopologySpreadTableInformer.
@@ -43,11 +41,6 @@ func (v *version) CrossVPCEnis() CrossVPCEniInformer {
 // IPPools returns a IPPoolInformer.
 func (v *version) IPPools() IPPoolInformer {
 	return &iPPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// MultiIPWorkloadEndpoints returns a MultiIPWorkloadEndpointInformer.
-func (v *version) MultiIPWorkloadEndpoints() MultiIPWorkloadEndpointInformer {
-	return &multiIPWorkloadEndpointInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // PodSubnetTopologySpreads returns a PodSubnetTopologySpreadInformer.

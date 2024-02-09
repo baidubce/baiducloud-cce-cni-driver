@@ -22,33 +22,21 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/dockershim/network"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 )
 
 const (
-	WepTypeSts        = "StatefulSet"
-	WepTypePod        = "Pod"
-	WepTypeReuseIPPod = "ReuseIPPod"
+	WepTypeSts = "StatefulSet"
+	WepTypePod = "Pod"
 
 	WepLabelStsOwnerKey     = "cce.io/owner"
 	WepLabelSubnetIDKey     = "cce.io/subnet-id"
 	WepLabelInstanceTypeKey = "cce.io/instance-type"
 	WepFinalizer            = "cce-cni.cce.io"
 
-	IPPoolCreationSourceCNI  = "cce-cni"
-	MwepTypeRoce             = "roce"
-	MwepTypeERI              = "eri"
-	MwepLabelInstanceTypeKey = "cce.io/instance-type"
-	MwepFinalizer            = "cce-cni-roce.cce.io"
-
-	// RDMANodeLabelAvailableKey = true and RDMANodeLabelCapableKey = true is node selector of rdma-device-plugin
-	RDMANodeLabelAvailableKey = "feature.node.kubernetes.io/custom-rdma.available"
-	RDMANodeLabelCapableKey   = "feature.node.kubernetes.io/custom-rdma.capable"
+	IPPoolCreationSourceCNI = "cce-cni"
 
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
 	KubeletCniTimeout = network.CNITimeoutSec * time.Second
-
-	NodeInstanceType = "node.kubernetes.io/instance-type"
 
 	// CCECniTimeout set to be much less than kubelet cni timeout
 	CCECniTimeout = 60 * time.Second
@@ -70,11 +58,4 @@ type ExclusiveEniInterface interface {
 	Allocate(ctx context.Context, name, namespace, containerID string) (*v1alpha1.CrossVPCEni, error)
 	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.CrossVPCEni, error)
 	Run(ctx context.Context, stopCh <-chan struct{}) error
-}
-type RoceInterface interface {
-	Allocate(ctx context.Context, name, namespace, containerID string, mac string,
-		ipType rpc.IPType) (*v1alpha1.WorkloadEndpoint, error)
-	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error)
-	Run(ctx context.Context, stopCh <-chan struct{}) error
-	Ready(ctx context.Context) bool
 }

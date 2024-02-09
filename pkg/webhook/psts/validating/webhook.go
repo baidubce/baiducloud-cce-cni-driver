@@ -23,7 +23,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	networkinformer "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions/networking/v1alpha1"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/iprange"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/webhook/injector"
 )
@@ -136,11 +135,10 @@ func (h *ValidatingPSTSHandler) validatePstsSpec(spec *networkv1alpha1.PodSubnet
 	if len(spec.Subnets) == 0 {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("subnets"), spec.Subnets, "length of subnets must greater than 0"))
 	}
-
 	if len(allErrs) > 0 {
 		return allErrs
 	}
-	return h.validateSubnet(spec.Strategy, spec.Subnets, fldPath.Child("subnets"))
+	return h.validateSubnet(spec.Subnets, fldPath.Child("subnets"))
 }
 
 // Verify the availability of the subnet
@@ -149,60 +147,28 @@ func (h *ValidatingPSTSHandler) validatePstsSpec(spec *networkv1alpha1.PodSubnet
 // does not exist, a private subnet will be automatically created.
 // If the corresponding subnet already exists, but it is not a
 // exclusive subnet, an error will be triggered
-func (h *ValidatingPSTSHandler) validateSubnet(
-	strategy *networkv1alpha1.IPAllocationStrategy,
-	sas map[string]networkv1alpha1.SubnetAllocation,
-	fldPath *field.Path) field.ErrorList {
+func (h *ValidatingPSTSHandler) validateSubnet(sas map[string]networkv1alpha1.SubnetAllocation, fldPath *field.Path) field.ErrorList {
 
 	var (
 		allErrs  = field.ErrorList{}
 		lastType networkv1alpha1.IPAllocType
 	)
 	for sbnID, sbnSpec := range sas {
-		newStrategy := sbnSpec.IPAllocationStrategy
-		newType := sbnSpec.Type
-		if strategy != nil {
-			newType = strategy.Type
-			newStrategy = *strategy
+		var sbn *networkv1alpha1.Subnet
+		sbn, allErrs = h.getORCreateSubnet(sbnID, &sbnSpec, fldPath.Child(sbnID), allErrs)
+		if len(allErrs) > 0 {
+			return allErrs
 		}
 
-		var sbn *networkv1alpha1.Subnet
-
-		switch newType {
+		switch sbnSpec.Type {
 		case networkv1alpha1.IPAllocTypeFixed:
-			sbn, allErrs = h.getORCreateSubnet(sbnID, true, fldPath.Child(sbnID), allErrs)
-			if len(allErrs) > 0 {
-				return allErrs
-			}
-			allErrs = h.validateExclusiveSubnet(sbn, &sbnSpec, fldPath.Child(sbnID), allErrs)
+			allErrs = h.validateFixedMode(sbn, &sbnSpec, fldPath.Child(sbnID), allErrs)
 		case networkv1alpha1.IPAllocTypeManual:
-			// manaual ip validating
-			sbn, allErrs = h.getORCreateSubnet(sbnID, true, fldPath.Child(sbnID), allErrs)
-			if len(allErrs) > 0 {
-				return allErrs
-			}
-			if newStrategy.ReleaseStrategy != networkv1alpha1.ReleaseStrategyTTL && newStrategy.ReleaseStrategy != "" {
-				allErrs = append(allErrs,
-					field.Invalid(
-						fldPath.Child(fmt.Sprintf("%s.%s", sbn.Name, "releaseStrategy")),
-						sbnSpec, "releaseStrategy is not TTL on Elastic mode"),
-				)
-			}
-			allErrs = h.validateExclusiveSubnet(sbn, &sbnSpec, fldPath.Child(sbnID), allErrs)
-		case networkv1alpha1.IPAllocTypeCustom:
-			sbn, allErrs = h.getORCreateSubnet(sbnID, true, fldPath.Child(sbnID), allErrs)
-			if len(allErrs) > 0 {
-				return allErrs
-			}
-			allErrs = h.validateCustomMode(sbn, &sbnSpec, fldPath.Child(sbnID), allErrs)
+			allErrs = h.validateManualMode(sbn, &sbnSpec, fldPath.Child(sbnID), allErrs)
 		case "":
 			sbnSpec.Type = networkv1alpha1.IPAllocTypeElastic
 			fallthrough
 		case networkv1alpha1.IPAllocTypeElastic:
-			sbn, allErrs = h.getORCreateSubnet(sbnID, false, fldPath.Child(sbnID), allErrs)
-			if len(allErrs) > 0 {
-				return allErrs
-			}
 			allErrs = h.validateElasticMode(sbnSpec, allErrs, fldPath, sbnID, sbn)
 		default:
 			return append(allErrs, field.Invalid(fldPath.Child(fmt.Sprintf("%s.%s", sbnID, "type")), sbnSpec, fmt.Sprintf("unknown subnet type %s, the value must be Fixed, Manual or Elastic", sbnSpec.Type)))
@@ -243,22 +209,16 @@ func (h *ValidatingPSTSHandler) validateElasticMode(sbnSpec networkv1alpha1.Subn
 // does not exist, a private subnet will be automatically created.
 // If the corresponding subnet already exists, but it is not a
 // exclusive subnet, an error will be triggered
-func (h *ValidatingPSTSHandler) getORCreateSubnet(
-	sbnID string,
-	exclusive bool,
-	fldPath *field.Path,
-	allErrs field.ErrorList,
-) (*networkv1alpha1.Subnet,
-	field.ErrorList) {
+func (h *ValidatingPSTSHandler) getORCreateSubnet(sbnID string, sbnSpec *networkv1alpha1.SubnetAllocation, fldPath *field.Path, allErrs field.ErrorList) (*networkv1alpha1.Subnet, field.ErrorList) {
 	sbn, err := h.subnetInformer.Lister().Subnets(corev1.NamespaceDefault).Get(sbnID)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// 1. create a new subnet cr
 			err = subnet.CreateSubnetCR(context.Background(), h.bceClient, h.crdClient, sbnID)
 			if err != nil {
-				return nil, append(allErrs, field.Invalid(fldPath, sbnID, fmt.Sprintf("create subnet %s error: %v", sbnID, err)))
+				return nil, append(allErrs, field.Invalid(fldPath, sbnSpec, fmt.Sprintf("create subnet %s error: %v", sbnID, err)))
 			}
-			if exclusive {
+			if sbnSpec.Type == networkv1alpha1.IPAllocTypeFixed || sbnSpec.Type == networkv1alpha1.IPAllocTypeManual {
 				// 2. mark subnet as exclusive
 				sbn, err = subnet.MarkExclusiveSubnet(context.Background(), h.crdClient, sbnID, true)
 				if err != nil {
@@ -272,7 +232,7 @@ func (h *ValidatingPSTSHandler) getORCreateSubnet(
 				}
 			}
 		} else {
-			return nil, append(allErrs, field.Invalid(fldPath.Child(sbnID), sbnID, fmt.Sprintf("get subnet %s error: %v", sbnID, err)))
+			return nil, append(allErrs, field.Invalid(fldPath.Child(sbnID), sbnSpec, fmt.Sprintf("get subnet %s error: %v", sbnID, err)))
 		}
 	}
 
@@ -321,27 +281,17 @@ func (h *ValidatingPSTSHandler) validateExclusiveSubnet(sbn *networkv1alpha1.Sub
 	return allErrs
 }
 
-func (h *ValidatingPSTSHandler) validateCustomMode(
-	sbn *networkv1alpha1.Subnet,
-	sbnSpec *networkv1alpha1.SubnetAllocation,
-	fldPath *field.Path,
-	allErrs field.ErrorList,
-) field.ErrorList {
-	// mark subnet as exclusive
-	if !sbn.Spec.Exclusive {
-		return append(allErrs, field.Invalid(fldPath, sbn, "subnet is not exclusive"))
-	}
+func (h *ValidatingPSTSHandler) validateFixedMode(sbn *networkv1alpha1.Subnet, sbnSpec *networkv1alpha1.SubnetAllocation, fldPath *field.Path, allErrs field.ErrorList) field.ErrorList {
+	// fixed ip validating
+	return h.validateExclusiveSubnet(sbn, sbnSpec, fldPath, allErrs)
+}
 
-	_, cidr, err := net.ParseCIDR(sbn.Spec.CIDR)
-	if err != nil {
-		return append(allErrs, field.Invalid(fldPath, sbn, "cidr of subnet is invalide"))
+func (h *ValidatingPSTSHandler) validateManualMode(sbn *networkv1alpha1.Subnet, sbnSpec *networkv1alpha1.SubnetAllocation, fldPath *field.Path, allErrs field.ErrorList) field.ErrorList {
+	// manaual ip validating
+	if sbnSpec.ReleaseStrategy != networkv1alpha1.ReleaseStrategyTTL && sbnSpec.ReleaseStrategy != "" {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child(fmt.Sprintf("%s.%s", sbn.Name, "releaseStrategy")), sbnSpec, "releaseStrategy is not TTL on Elastic mode"))
 	}
-	_, err = iprange.ListAllCustomIPRangeIndexs(cidr, sbnSpec.Custom)
-	if err != nil {
-		return append(allErrs, field.Invalid(fldPath, sbnSpec.Custom, err.Error()))
-	}
-
-	return allErrs
+	return h.validateExclusiveSubnet(sbn, sbnSpec, fldPath, allErrs)
 }
 
 var _ admission.DecoderInjector = &ValidatingPSTSHandler{}

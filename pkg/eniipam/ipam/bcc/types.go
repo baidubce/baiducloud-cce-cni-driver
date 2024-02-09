@@ -29,14 +29,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 
-	networkingv1alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/subnet"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/controller/topology_spread"
 	datastorev1 "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/datastore/v1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/ipcache"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 )
@@ -71,17 +70,17 @@ type event struct {
 type IPAM struct {
 	lock sync.RWMutex
 	// key is node name, value is list of enis attached
-	eniCache *ipcache.CacheMapArray[*enisdk.Eni]
+	eniCache map[string][]*enisdk.Eni
 	// privateIPNumCache stores allocated IP num of each eni. key is eni id.
 	privateIPNumCache map[string]int
 	// possibleLeakedIPCache stores possible leaked ip cache.
 	possibleLeakedIPCache map[eniAndIPAddrKey]time.Time
 	// addIPBackoffCache to slow down add ip API call if subnet or vm cannot allocate more ip
-	addIPBackoffCache *ipcache.CacheMap[*wait.Backoff]
+	addIPBackoffCache map[string]*wait.Backoff
 	// ipam will rebuild cache if restarts, should not handle request from cni if cacheHasSynced is false
 	cacheHasSynced bool
 	// key is ip, value is wep
-	allocated         *ipcache.CacheMap[*networkingv1alpha1.WorkloadEndpoint]
+	allocated         map[string]*v1alpha1.WorkloadEndpoint
 	datastore         *datastorev1.DataStore
 	idleIPPoolMinSize int
 	idleIPPoolMaxSize int
@@ -120,8 +119,6 @@ type IPAM struct {
 	// lock for allocation IP from exclusisve subnet
 	exclusiveSubnetCond *sync.Cond
 	exclusiveSubnetFlag map[string]bool
-
-	reusedIPs *ipcache.ReuseIPAndWepPool
 }
 
 var _ ipam.Interface = &IPAM{}

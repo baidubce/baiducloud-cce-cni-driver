@@ -23,8 +23,9 @@ import (
 	"strings"
 	"time"
 
-	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	v1 "k8s.io/api/core/v1"
+
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 )

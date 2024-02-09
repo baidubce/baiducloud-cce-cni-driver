@@ -32,7 +32,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/ipcache"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
 	utileni "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/eni"
@@ -47,15 +46,6 @@ const (
 	ENIReadyTimeToAttach        = 5 * time.Second
 	CreateENIMaxConcurrency     = 15
 )
-
-type eniManager struct {
-	*ipcache.CacheMapArray[*enisdk.Eni]
-	ipam *IPAM
-}
-
-func (m *eniManager) start(stopCh <-chan struct{}) {
-
-}
 
 func (ipam *IPAM) syncENI(stopCh <-chan struct{}) error {
 	eniSyncInterval := wait.Jitter(ipam.eniSyncPeriod, 0.2)
@@ -136,26 +126,27 @@ func (ipam *IPAM) buildInuseENICache(ctx context.Context, nodes []*v1.Node, enis
 	defer ipam.lock.Unlock()
 
 	// build eni cache
-	eniCache := ipcache.NewCacheMapArray[*enisdk.Eni]()
+	ipam.eniCache = make(map[string][]*enisdk.Eni)
 	ipam.privateIPNumCache = make(map[string]int)
 
 	instanceIdToNodeNameMap := buildInstanceIdToNodeNameMap(ctx, nodes)
 	// init eni cache
+	for _, n := range nodes {
+		ipam.eniCache[n.Name] = make([]*enisdk.Eni, 0)
+	}
 
 	for idx, eni := range enis {
-		log.Infof(ctx, "try to add eni %s to cache", eni.EniId)
 		if eni.Status != utileni.ENIStatusInuse {
 			continue
 		}
 
 		if nodeName, ok := instanceIdToNodeNameMap[eni.InstanceId]; ok {
-			eniCache.Append(nodeName, &enis[idx])
+			ipam.eniCache[nodeName] = append(ipam.eniCache[nodeName], &enis[idx])
 		}
 
 		// update private ip num of enis
 		ipam.privateIPNumCache[eni.EniId] = len(eni.PrivateIpSet)
 	}
-	ipam.eniCache = eniCache
 
 	return nil
 }
@@ -169,8 +160,8 @@ func (ipam *IPAM) findSuitableENIs(ctx context.Context, pod *v1.Pod) ([]*enisdk.
 	nodeName := pod.Spec.NodeName
 
 	// get eni list from eniCache
-	enis, ok := ipam.eniCache.Get(nodeName)
-	if !ok {
+	enis, ok := ipam.eniCache[nodeName]
+	if !ok || len(enis) == 0 {
 		return nil, fmt.Errorf("no eni binded to node %s", nodeName)
 	}
 
@@ -180,7 +171,7 @@ func (ipam *IPAM) findSuitableENIs(ctx context.Context, pod *v1.Pod) ([]*enisdk.
 	}
 
 	// for fix IP pod, candidate subnets should be in the same subnet
-	if IsFixIPStatefulSetPod(pod) {
+	if isFixIPStatefulSetPod(pod) {
 		wep, err := ipam.crdInformer.Cce().V1alpha1().WorkloadEndpoints().Lister().WorkloadEndpoints(pod.Namespace).Get(pod.Name)
 		if err == nil {
 			// get old subnet of pod

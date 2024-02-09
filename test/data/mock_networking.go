@@ -31,45 +31,6 @@ func MockSubnet(namespace, name, cidr string) *networkingv1alpha1.Subnet {
 	}
 }
 
-func MockPodSubnetTopologySpreadWithSubnet(namespace, name string, subnet *networkingv1alpha1.Subnet, label labels.Set) *networkingv1alpha1.PodSubnetTopologySpread {
-	return &networkingv1alpha1.PodSubnetTopologySpread{
-		TypeMeta: metav1.TypeMeta{},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Spec: networkingv1alpha1.PodSubnetTopologySpreadSpec{
-			Name: name,
-			Subnets: map[string]networkingv1alpha1.SubnetAllocation{
-				subnet.Name: {
-					IPAllocationStrategy: networkingv1alpha1.IPAllocationStrategy{
-						Type:            networkingv1alpha1.IPAllocTypeElastic,
-						ReleaseStrategy: networkingv1alpha1.ReleaseStrategyTTL,
-					},
-				},
-			},
-			EnablePodTopologySpread: true,
-			Priority:                1,
-			Selector:                metav1.SetAsLabelSelector(label),
-		},
-		Status: networkingv1alpha1.PodSubnetTopologySpreadStatus{
-			AvailableSubnets: map[string]networkingv1alpha1.SubnetPodStatus{
-				subnet.Name: {
-					SubenetDetail: networkingv1alpha1.SubenetDetail{
-						Enable:           subnet.Status.Enable,
-						HasNoMoreIP:      subnet.Status.HasNoMoreIP,
-						ID:               subnet.Spec.ID,
-						Name:             subnet.Spec.Name,
-						CIDR:             subnet.Spec.CIDR,
-						AvailabilityZone: subnet.Spec.AvailabilityZone,
-						AvailableIPNum:   subnet.Status.AvailableIPNum,
-					},
-				},
-			},
-		},
-	}
-}
-
 // mock a PodSubnetTopologySpread
 func MockPodSubnetTopologySpread(namespace, name, subnet string, label labels.Set) *networkingv1alpha1.PodSubnetTopologySpread {
 	return &networkingv1alpha1.PodSubnetTopologySpread{
@@ -82,15 +43,9 @@ func MockPodSubnetTopologySpread(namespace, name, subnet string, label labels.Se
 			Name: name,
 			Subnets: map[string]networkingv1alpha1.SubnetAllocation{
 				subnet: {
-					IPAllocationStrategy: networkingv1alpha1.IPAllocationStrategy{
-						Type:            networkingv1alpha1.IPAllocTypeElastic,
-						ReleaseStrategy: networkingv1alpha1.ReleaseStrategyTTL,
-					},
+					Type:            networkingv1alpha1.IPAllocTypeElastic,
+					ReleaseStrategy: networkingv1alpha1.ReleaseStrategyTTL,
 				},
-			},
-			Strategy: &networkingv1alpha1.IPAllocationStrategy{
-				Type:            networkingv1alpha1.IPAllocTypeElastic,
-				ReleaseStrategy: networkingv1alpha1.ReleaseStrategyTTL,
 			},
 			EnablePodTopologySpread: true,
 			Priority:                1,
@@ -126,7 +81,6 @@ func MockFixedWorkloadEndpoint() *networkingv1alpha1.WorkloadEndpoint {
 			EnableFixIP:             "True",
 			SubnetTopologyReference: "psts-test",
 			FixIPDeletePolicy:       string(networkingv1alpha1.ReleaseStrategyNever),
-			Phase:                   networkingv1alpha1.WorkloadEndpointPhasePodRuning,
 		},
 	}
 }

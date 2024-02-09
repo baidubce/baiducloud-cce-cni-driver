@@ -14,14 +14,6 @@ type IPPoolListerExpansion interface{}
 // IPPoolNamespaceLister.
 type IPPoolNamespaceListerExpansion interface{}
 
-// MultiIPWorkloadEndpointListerExpansion allows custom methods to be added to
-// MultiIPWorkloadEndpointLister.
-type MultiIPWorkloadEndpointListerExpansion interface{}
-
-// MultiIPWorkloadEndpointNamespaceListerExpansion allows custom methods to be added to
-// MultiIPWorkloadEndpointNamespaceLister.
-type MultiIPWorkloadEndpointNamespaceListerExpansion interface{}
-
 // PodSubnetTopologySpreadListerExpansion allows custom methods to be added to
 // PodSubnetTopologySpreadLister.
 type PodSubnetTopologySpreadListerExpansion interface{}

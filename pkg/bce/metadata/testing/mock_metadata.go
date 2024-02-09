@@ -79,21 +79,6 @@ func (mr *MockInterfaceMockRecorder) GetInstanceName() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceName", reflect.TypeOf((*MockInterface)(nil).GetInstanceName))
 }
 
-// GetInstanceType mocks base method.
-func (m *MockInterface) GetInstanceType() (metadata.InstanceType, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetInstanceType")
-	ret0, _ := ret[0].(metadata.InstanceType)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetInstanceType indicates an expected call of GetInstanceType.
-func (mr *MockInterfaceMockRecorder) GetInstanceType() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceType", reflect.TypeOf((*MockInterface)(nil).GetInstanceType))
-}
-
 // GetInstanceTypeEx mocks base method.
 func (m *MockInterface) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	m.ctrl.T.Helper()
@@ -197,34 +182,4 @@ func (m *MockInterface) GetVPCID() (string, error) {
 func (mr *MockInterfaceMockRecorder) GetVPCID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVPCID", reflect.TypeOf((*MockInterface)(nil).GetVPCID))
-}
-
-// GetVifFeatures mocks base method.
-func (m *MockInterface) GetVifFeatures(arg0 string) (string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVifFeatures", arg0)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetVifFeatures indicates an expected call of GetVifFeatures.
-func (mr *MockInterfaceMockRecorder) GetVifFeatures(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVifFeatures", reflect.TypeOf((*MockInterface)(nil).GetVifFeatures), arg0)
-}
-
-// ListMacs mocks base method.
-func (m *MockInterface) ListMacs() ([]string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListMacs")
-	ret0, _ := ret[0].([]string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ListMacs indicates an expected call of ListMacs.
-func (mr *MockInterfaceMockRecorder) ListMacs() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListMacs", reflect.TypeOf((*MockInterface)(nil).ListMacs))
 }

@@ -6,14 +6,14 @@ OUTDIR  := $(HOMEDIR)/output
 GO      := $(GO_1_18_BIN)/go
 ifeq ($(GO), /go)
 	GO = go
-endif
+endif	
 GOROOT  := $(GO_1_18_HOME)
 GOPATH  := $(shell $(GO) env GOPATH)
 GOMOD   := $(GO) mod
 GOARCH  := $(shell $(GO) env GOARCH)
 GOBUILD = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build
 GOTEST  := $(GO) test
-GOPKGS  := $$($(GO) list ./...| grep "pkg" |grep -v "vendor" | grep -v "cmd" |grep -v "test" | grep -v 'api' |grep -v "generated" | grep -v 'pkg/bce' | grep -v config | grep -v metric | grep -v rpc | grep -v version | grep -v wrapper | grep -v util | grep -v testing)
+GOPKGS  := $$($(GO) list ./...| grep -vE "vendor" | grep -vE "cmd" |grep -vE "test" |grep -v 'apis/networking'| grep -v 'generated')
 GOGCFLAGS := -gcflags=all="-trimpath=$(GOPATH)" -asmflags=all="-trimpath=$(GOPATH)"
 GOLDFLAGS := -ldflags '-s -w'
 GO_PACKAGE := github.com/baidubce/baiducloud-cce-cni-driver
@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.9.6
+VERSION := v1.4.6
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -41,16 +41,16 @@ EXTRALDFLAGS += -X $(GO_PACKAGE)/pkg/version.Version=$(VERSION)
 # pro or dev
 PROFILES := dev
 IMAGE_TAG := registry.baidubce.com/cce-plugin-$(PROFILES)/cce-cni
-PUSH_CNI_IMAGE_FLAGS = --push
+PUSH_CNI_IMAGE_FLAGS = --load --push
 
 # make, make all
 all: prepare compile
 
 fmt:  ## Run go fmt against code.
-	$(GO) fmt $(shell $(GO) list ./... | grep -v /vendor/)
+	$(GO) fmt $(shell go list ./... | grep -v /vendor/)
 
 vet: ## Run go vet against code.
-	$(GO) vet $(shell $(GO) list ./... | grep -v /vendor/)
+	$(GO) vet $(shell go list ./... | grep -v /vendor/)
 
 # set proxy env
 set-env:
@@ -68,11 +68,10 @@ gomod: set-env
 outdir: 
 	mkdir -p $(OUTDIR)/cni-bin
 # Compile all cni plug-ins
-cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni rdma eri roce
+cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni
 $(cni_target): fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/$@ $(HOMEDIR)/cni/$@
-	strip $(HOMEDIR)/$@
 	mv $(HOMEDIR)/$@ $(OUTDIR)/cni-bin/
 
 # Compile all container network programs
@@ -80,7 +79,6 @@ exec_target := cce-ipam cni-node-agent ip-masq-agent
 $(exec_target):	fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -ldflags '$(EXTRALDFLAGS)' -o $(HOMEDIR)/$@ $(HOMEDIR)/cmd/$@
-	strip $(HOMEDIR)/$@
 	mv $(HOMEDIR)/$@ $(OUTDIR)
 
 #make compile
@@ -90,7 +88,7 @@ build: compile
 # make test, test your code
 test: prepare test-case
 test-case:
-	$(GOTEST) -v -cover -parallel 16 $(GOPKGS)
+	$(GOTEST) -v -cover $(GOPKGS)
 
 debian-iptables-image:
 	@echo "===> Building debian iptables base image <==="

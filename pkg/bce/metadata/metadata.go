@@ -35,7 +35,6 @@ const (
 )
 
 type InstanceTypeEx string
-type InstanceType string
 
 var (
 	InstanceTypeExBBC     InstanceTypeEx = "bbc"
@@ -51,7 +50,6 @@ var (
 type Interface interface {
 	GetInstanceID() (string, error)
 	GetInstanceName() (string, error)
-	GetInstanceType() (InstanceType, error)
 	GetInstanceTypeEx() (InstanceTypeEx, error)
 	GetLocalIPv4() (string, error)
 	GetAvailabilityZone() (string, error)
@@ -60,9 +58,6 @@ type Interface interface {
 	GetSubnetID() (string, error)
 	GetLinkGateway(string, string) (string, error)
 	GetLinkMask(string, string) (string, error)
-	GetVifFeatures(macAddress string) (string, error)
-
-	ListMacs() ([]string, error)
 }
 
 var _ Interface = &Client{}
@@ -90,12 +85,12 @@ func NewClient() *Client {
 func (c *Client) sendRequest(path string) ([]byte, error) {
 	ctx := log.NewContext()
 
-	reqURL := url.URL{
+	url := url.URL{
 		Scheme: c.scheme,
 		Host:   c.host,
 		Path:   path,
 	}
-	resp, err := http.Get(reqURL.String())
+	resp, err := http.Get(url.String())
 	if err != nil {
 		return nil, err
 	}
@@ -141,35 +136,13 @@ func (c *Client) GetInstanceName() (string, error) {
 	return instanceID, nil
 }
 
-func (c *Client) GetInstanceType() (InstanceType, error) {
-	bodyType, err := c.sendRequest(metadataBasePath + "instance-type")
-	if err != nil {
-		return "", err
-	}
-	typeStr := strings.TrimSpace(string(bodyType))
-	return InstanceType(typeStr), nil
-}
-
 func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {
-	bodyTypeEx, err := c.sendRequest(metadataBasePath + "instance-type-ex")
+	body, err := c.sendRequest(metadataBasePath + "instance-type-ex")
 	if err != nil {
 		return "", err
 	}
-	// typeExStr == "bbc" && typeStr is in the same format as "ebc.l5c.c128m256.1d"
-	// or "ehc.lgn5.c128m1024.8a100.8re.4d", set typeExStr = "bcc"
-	typeExStr := strings.TrimSpace(string(bodyTypeEx))
-	if typeExStr == "bbc" {
-		bodyType, err := c.GetInstanceType()
-		if err != nil {
-			return "", err
-		}
-		typeStr := strings.TrimSpace(string(bodyType))
-		isEbc := strings.HasPrefix(typeStr, "ebc") || strings.HasPrefix(typeStr, "ehc")
-		if isEbc {
-			typeExStr = string(InstanceTypeExBCC)
-		}
-	}
-	switch typeExStr {
+	typeStr := strings.TrimSpace(string(body))
+	switch typeStr {
 	case "bbc":
 		return InstanceTypeExBBC, nil
 	case "bcc":
@@ -316,44 +289,4 @@ func (c *Client) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
 	}
 
 	return secondaryIPs, nil
-}
-
-func (c *Client) GetVifFeatures(macAddress string) (string, error) {
-	// eg. /1.0/meta-data/network/interfaces/macs/fa:26:00:01:6f:37/vif_features
-	// response:
-	// elastic_rdma
-	path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/vif_features", macAddress)
-	body, err := c.sendRequest(path)
-	if err != nil {
-		return "", err
-	}
-	vifFeatures := strings.TrimSpace(string(body))
-	return vifFeatures, nil
-}
-
-func (c *Client) ListMacs() ([]string, error) {
-	// eg. /1.0/meta-data/network/interfaces/macs
-	// response:
-	// fa:f6:00:01:7b:f4/
-	// fa:f6:00:07:f8:f4/
-	// fa:f6:00:08:13:e1/
-	// fa:f6:00:14:4c:f0/
-	path := fmt.Sprintf(metadataBasePath + "network/interfaces/macs")
-	body, err := c.sendRequest(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var (
-		macAddrs []string
-	)
-
-	reader := strings.NewReader(strings.TrimSpace(string(body)))
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := scanner.Text()
-		macAddrs = append(macAddrs, strings.TrimSuffix(line, "/"))
-	}
-
-	return macAddrs, nil
 }

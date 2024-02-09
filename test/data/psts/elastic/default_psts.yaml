@@ -6,10 +6,10 @@ metadata:
 spec:
     priority: 0
     subnets:
-        # elastic-f sbn-50st4bb33pri
-        sbn-50st4bb33pri: {}
+        # elastic-f 192.168.100.0/24
+        sbn-xcee24pjj0p1: {}
          # elastic-c 192.168.101.0/24
-        # sbn-e8rk4zxn2ys6: {}
+        sbn-e8rk4zxn2ys6: {}
     maxSkew: 10
     whenUnsatisfiable: ScheduleAnyway
     enablePodTopologySpread: true

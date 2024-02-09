@@ -16,8 +16,6 @@ enum IPType {
     BCCMultiENIMultiIPType = 0;
     BBCPrimaryENIMultiIPType = 1;
     CrossVPCENIIPType = 2;
-    RoceENIMultiIPType = 3;
-    ERIENIMultiIPType = 4;
 }
 
 message AllocateIPRequest {
@@ -93,7 +91,6 @@ message CheckIPReply {
 
 
 message ENIMultiIPRequest {
-    string Mac = 1;
 }
 
 
@@ -116,6 +113,4 @@ message CrossVPCENIReply {
     string IP = 1;
     string Mac = 2;
     string VPCCIDR = 3;
-    string DefaultRouteInterfaceDelegation = 4;
-    repeated string DefaultRouteExcludedCidrs = 5;
 }

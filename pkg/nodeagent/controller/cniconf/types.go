@@ -32,7 +32,6 @@ const (
 	IPAMServiceNamespace    = "kube-system"
 	IPAMServiceName         = "cce-eni-ipam"
 	CCETemplateFileBasePath = "/etc/kubernetes/cni/"
-	DefaultMTU              = 1500
 )
 
 var (

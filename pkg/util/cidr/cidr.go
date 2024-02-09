@@ -3,7 +3,6 @@ package cidr
 import (
 	"net"
 
-	"github.com/spf13/pflag"
 	k8sutilnet "k8s.io/utils/net"
 )
 
@@ -23,16 +22,7 @@ var (
 	_, IPv6ZeroCIDR, _ = net.ParseCIDR("::/0")
 
 	_, LinkLocalCIDR, _ = net.ParseCIDR("169.254.0.0/16")
-
-	// subnetAvailableIndex Which index IP address is available in a subnet
-	// In BCE Cloud, the index is 2
-	// In a private cloud, the number may be 4
-	subnetAvailableIndex = 2
 )
-
-func RegisterCIDRFlags(pset *pflag.FlagSet) {
-	pset.IntVar(&subnetAvailableIndex, "subnet-available-index", subnetAvailableIndex, "Which index IP address is available in a subnet")
-}
 
 func IsUnicastIP(ip net.IP, subnet string) bool {
 	if !ip.IsGlobalUnicast() {
@@ -108,17 +98,19 @@ func ListFirtstAndLastIPStringFromCIDR(cidr string) []net.IP {
 		if size == 0 {
 			return []net.IP{cidr.IP}
 		}
-
+		ip, err := k8sutilnet.GetIndexedIP(cidr, 0)
+		if err == nil {
+			ipList = append(ipList, ip)
+		}
 		// Exclude first ip
 		// The first IP address of the subnet is usually the gateway address
-		for i := 0; i < subnetAvailableIndex && i < int(size); i++ {
-			ip, err := k8sutilnet.GetIndexedIP(cidr, i)
+		if size > 1 {
+			ip, err := k8sutilnet.GetIndexedIP(cidr, 1)
 			if err == nil {
 				ipList = append(ipList, ip)
 			}
 		}
-
-		ip, err := k8sutilnet.GetIndexedIP(cidr, int(size-1))
+		ip, err = k8sutilnet.GetIndexedIP(cidr, int(size-1))
 		if err == nil {
 			ipList = append(ipList, ip)
 		}

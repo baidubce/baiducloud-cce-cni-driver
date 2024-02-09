@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	listercorev1 "k8s.io/client-go/listers/core/v1"
@@ -38,6 +39,8 @@ func MockTopologySpreadController(t *testing.T) (*TopologySpreadController, kube
 	kubeClient, kubeInformer, crdClient, crdInformer, cloudClient, ebc, _ := data.NewMockEnv(gomock.NewController(t))
 	sbnc := subnet.NewSubnetController(crdInformer, crdClient, cloudClient, ebc)
 	tsc := NewTopologySpreadController(kubeInformer, crdInformer, crdClient, ebc, sbnc)
+	kubeInformer.Start(make(<-chan struct{}))
+	crdInformer.Start(make(<-chan struct{}))
 	return tsc, kubeClient
 }
 
@@ -56,12 +59,7 @@ func (suite *TopologySpreadControllerTester) SetupTest() {
 }
 
 func (suite *TopologySpreadControllerTester) assert() {
-	stopchan := make(chan struct{})
-	defer close(stopchan)
-	suite.tsc.crdInformer.Start(stopchan)
-	suite.tsc.kubeInformer.Start(stopchan)
-	suite.tsc.waitCache(stopchan)
-
+	suite.tsc.waitCache(wait.NeverStop)
 	err := suite.tsc.sync(suite.key)
 	if suite.wantErr {
 		suite.Error(err, "sync error is not match")
@@ -109,12 +107,7 @@ func (suite *TopologySpreadControllerTester) TestTrySyncSubnetNotFound() {
 	_, err := tsc.crdClient.CceV1alpha1().PodSubnetTopologySpreads(corev1.NamespaceDefault).Create(context.TODO(), psts, metav1.CreateOptions{})
 	suite.NoError(err, "create psts error")
 
-	stopchan := make(chan struct{})
-	defer close(stopchan)
-	suite.tsc.crdInformer.Start(stopchan)
-	suite.tsc.kubeInformer.Start(stopchan)
-	suite.tsc.waitCache(stopchan)
-
+	suite.tsc.waitCache(wait.NeverStop)
 	psts = nil
 	for psts == nil {
 		psts, err = suite.tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Lister().PodSubnetTopologySpreads(corev1.NamespaceDefault).Get(pstsName)
@@ -151,11 +144,7 @@ func (suite *TopologySpreadControllerTester) TestTrySyncSubnetEnable() {
 	psts, err := tsc.crdClient.CceV1alpha1().PodSubnetTopologySpreads(corev1.NamespaceDefault).Create(context.TODO(), psts, metav1.CreateOptions{})
 	suite.NoError(err, "create psts error")
 
-	stopchan := make(chan struct{})
-	defer close(stopchan)
-	suite.tsc.crdInformer.Start(stopchan)
-	suite.tsc.kubeInformer.Start(stopchan)
-	suite.tsc.waitCache(stopchan)
+	suite.tsc.waitCache(wait.NeverStop)
 	psts = nil
 	for psts == nil {
 		psts, err = suite.tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Lister().PodSubnetTopologySpreads(corev1.NamespaceDefault).Get(pstsName)
@@ -195,12 +184,7 @@ func (suite *TopologySpreadControllerTester) TestTrySyncWithWEP() {
 	psts, err := tsc.crdClient.CceV1alpha1().PodSubnetTopologySpreads(corev1.NamespaceDefault).Create(context.TODO(), psts, metav1.CreateOptions{})
 	suite.NoError(err, "create psts error")
 
-	stopchan := make(chan struct{})
-	defer close(stopchan)
-	suite.tsc.crdInformer.Start(stopchan)
-	suite.tsc.kubeInformer.Start(stopchan)
-	suite.tsc.waitCache(stopchan)
-
+	suite.tsc.waitCache(wait.NeverStop)
 	psts = nil
 	for psts == nil {
 		psts, err = suite.tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Lister().PodSubnetTopologySpreads(corev1.NamespaceDefault).Get(pstsName)
@@ -255,12 +239,7 @@ func (suite *TopologySpreadControllerTester) TestTrySyncWithUpdatePod() {
 	psts, err := tsc.crdClient.CceV1alpha1().PodSubnetTopologySpreads(corev1.NamespaceDefault).Create(context.TODO(), psts, metav1.CreateOptions{})
 	suite.NoError(err, "create psts error")
 
-	stopchan := make(chan struct{})
-	defer close(stopchan)
-	suite.tsc.crdInformer.Start(stopchan)
-	suite.tsc.kubeInformer.Start(stopchan)
-	suite.tsc.waitCache(stopchan)
-
+	suite.tsc.waitCache(wait.NeverStop)
 	psts = nil
 	for psts == nil {
 		psts, err = suite.tsc.crdInformer.Cce().V1alpha1().PodSubnetTopologySpreads().Lister().PodSubnetTopologySpreads(corev1.NamespaceDefault).Get(pstsName)

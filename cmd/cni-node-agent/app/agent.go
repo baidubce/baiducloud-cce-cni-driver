@@ -33,11 +33,9 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/cniconf"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/eni"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/eri"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/gc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/ippool"
 	ippoolctrl "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/ippool"
@@ -45,10 +43,7 @@ import (
 	utilk8s "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8swatcher"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
-	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
-	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
-	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 )
 
 // NewAgentCommand creates agent command
@@ -116,14 +111,11 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 		return nil, err
 	}
 
-	eriClient := client.NewEriClient(cloudClient)
-
 	s := &nodeAgent{
 		kubeClient:  kubeClient,
 		crdClient:   crdClient,
 		cloudClient: cloudClient,
 		metaClient:  metadata.NewClient(),
-		eriClient:   eriClient,
 		broadcaster: eventBroadcaster,
 		recorder:    recorder,
 		options:     o,
@@ -167,24 +159,24 @@ func (s *nodeAgent) run(ctx context.Context) error {
 
 	// Create watcher to watch for k8s resources
 	nodeWatcher := k8swatcher.NewNodeWatcher(informerFactory.Core().V1().Nodes(), informerResyncPeriod)
-	// This has to start after the calls to NewXXXWatcher  because those
-	// functions must configure their shared informer event handlers first.
-	informerFactory.Start(wait.NeverStop)
-	crdInformerFactory.Start(wait.NeverStop)
-
-	log.Infof(ctx, "waiting for informer caches to sync")
-
-	// WaitCacheSync
-	informerFactory.WaitForCacheSync(wait.NeverStop)
-	crdInformerFactory.WaitForCacheSync(wait.NeverStop)
-
-	log.Infof(ctx, "informer caches are synced")
-
-	nodeWatcher.SyncCache(wait.NeverStop)
 
 	// check cni mode
 	if !types.IsKubenetMode(cniMode) && !types.IsCCECNIMode(cniMode) {
 		return fmt.Errorf("unknown cni mode: %v", cniMode)
+	}
+
+	// all modes need cni config file except kubenet.
+	if !types.IsKubenetMode(cniMode) {
+		// cni config controller
+		cniConfigCtrl := cniconf.New(
+			s.kubeClient,
+			crdInformerFactory.Cce().V1alpha1().IPPools().Lister(),
+			cniMode,
+			s.options.hostName,
+			&s.options.config.CNIConfig,
+		)
+		nodeWatcher.RegisterEventHandler(cniConfigCtrl)
+		go cniConfigCtrl.ReconcileCNIConfig()
 	}
 
 	// all modes needs ippool controller
@@ -202,24 +194,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.options.config.CCE.ENIController.PreAttachedENINum,
 		s.options.config.CCE.PodSubnetController.SubnetList,
 	)
-	// 这里先显式将最新的 node cidr 同步到 ippool 中
-	// 避免下面 cni 配置生成时，使用到已删除 node 残留的 ipool 中的 旧 cidr
-	ippoolCtrl.SyncNode(s.options.hostName, informerFactory.Core().V1().Nodes().Lister())
 	nodeWatcher.RegisterEventHandler(ippoolCtrl)
-
-	// all modes need cni config file except kubenet.
-	if !types.IsKubenetMode(cniMode) {
-		// cni config controller
-		cniConfigCtrl := cniconf.New(
-			s.kubeClient,
-			crdInformerFactory.Cce().V1alpha1().IPPools().Lister(),
-			cniMode,
-			s.options.hostName,
-			&s.options.config.CNIConfig,
-		)
-		nodeWatcher.RegisterEventHandler(cniConfigCtrl)
-		go cniConfigCtrl.ReconcileCNIConfig()
-	}
 
 	// all modes runs gc
 	gcCtrl := gc.New()
@@ -241,7 +216,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 	)
 
 	switch {
-	case types.IsKubenetMode(cniMode), types.IsCCECNIModeBasedOnVPCRoute(cniMode), types.IsCrossVPCEniMode(cniMode):
+	case types.IsKubenetMode(cniMode), types.IsCCECNIModeBasedOnVPCRoute(cniMode), cniMode == types.CCEModeCrossVPCEni:
 		s.runCCEModeBasedOnVPCRoute(ctx, nodeWatcher)
 	case types.IsCCECNIModeBasedOnBCCSecondaryIP(cniMode):
 		s.runCCEModeBasedOnBCCSecondaryIP(ctx, nodeWatcher, eniCtrl)
@@ -249,20 +224,18 @@ func (s *nodeAgent) run(ctx context.Context) error {
 		s.runCCEModeBasedOnBBCSecondaryIP(ctx, nodeWatcher, eniCtrl)
 	}
 
-	// eri controller
-	eriCtrl := eri.New(
-		s.metaClient,
-		s.eriClient,
-		netlinkwrapper.New(),
-		sysctlwrapper.New(),
-		networkutil.New(),
-		s.options.config.CCE.ClusterID,
-		s.options.hostName,
-		s.options.instanceID,
-		s.options.config.CCE.VPCID,
-		time.Duration(s.options.config.CCE.ENIController.ENISyncPeriod),
-	)
-	go eriCtrl.ReconcileERIs()
+	// This has to start after the calls to NewXXXWatcher  because those
+	// functions must configure their shared informer event handlers first.
+	informerFactory.Start(wait.NeverStop)
+	crdInformerFactory.Start(wait.NeverStop)
+
+	log.Infof(ctx, "waiting for informer caches to sync")
+
+	// WaitCacheSync
+	informerFactory.WaitForCacheSync(wait.NeverStop)
+	crdInformerFactory.WaitForCacheSync(wait.NeverStop)
+
+	log.Infof(ctx, "informer caches are synced")
 
 	nodeWatcher.Run(s.options.config.Workers, wait.NeverStop)
 

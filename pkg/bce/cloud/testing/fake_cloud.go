@@ -17,6 +17,7 @@ package testing
 
 import (
 	"context"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"net"
 	"os"
 	"strconv"
@@ -48,6 +49,18 @@ type apiConfig struct {
 
 type FakeBceCloud struct {
 	bbcConfig *apiConfig
+}
+
+func (fake *FakeBceCloud) GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error) {
+	return &hpc.EniList{}, nil
+}
+
+func (fake *FakeBceCloud) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
+	return nil
+}
+
+func (fake *FakeBceCloud) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
+	return &hpc.BatchAddPrivateIPResult{}, nil
 }
 
 func NewFakeBceCloud() cloud.Interface {

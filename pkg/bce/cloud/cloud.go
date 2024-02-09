@@ -21,6 +21,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	"github.com/baidubce/bce-sdk-go/bce"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/baidubce/bce-sdk-go/services/bcc"
@@ -110,8 +111,12 @@ func New(
 	}
 	bbcClient.Config.ConnectionTimeoutInMillis = connectionTimeoutSInSecond * 1000
 
+	hpcClient := &hpc.Client{
+		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
+	}
 	c := &Client{
 		vpcClient: vpcClient,
+		hpcClient: hpcClient,
 		bccClient: bccClient,
 		eniClient: eniClient,
 		bbcClient: bbcClient,
@@ -386,5 +391,26 @@ func (c *Client) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAd
 	t := time.Now()
 	resp, err := c.bbcClient.BatchAddIPCrossSubnet(args)
 	exportMetricAndLog(ctx, "BBCBatchAddIPCrossSubnet", t, err)
+	return resp, err
+}
+
+func (c *Client) GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error) {
+	t := time.Now()
+	resp, err := c.hpcClient.GetHPCEniID(instanceID)
+	exportMetricAndLog(ctx, "GetHPCEniID", t, err)
+	return resp, err
+}
+
+func (c *Client) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
+	t := time.Now()
+	err := c.hpcClient.BatchDeletePrivateIPByHpc(args)
+	exportMetricAndLog(ctx, "BatchDeleteHpcEniPrivateIP", t, err)
+	return err
+}
+
+func (c *Client) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
+	t := time.Now()
+	resp, err := c.hpcClient.BatchAddPrivateIPByHpc(args)
+	exportMetricAndLog(ctx, "BatchAddHpcEniPrivateIP", t, err)
 	return resp, err
 }

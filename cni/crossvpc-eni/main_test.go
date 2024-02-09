@@ -16,6 +16,8 @@
 package main
 
 import (
+	"net"
+	"syscall"
 	"testing"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -42,6 +44,8 @@ import (
 	mockns "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/ns/testing"
 	rpcwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/rpc"
 	mockrpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/rpc/testing"
+	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
+	mocksysctl "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl/testing"
 )
 
 var (
@@ -103,6 +107,7 @@ func setupEnv(ctrl *gomock.Controller) (
 	*mockutilnetwork.MockInterface,
 	*mockrpc.MockInterface,
 	*mockgrpc.MockInterface,
+	*mocksysctl.MockInterface,
 ) {
 	nlink := mocknetlink.NewMockInterface(ctrl)
 	ns := mockns.NewMockInterface(ctrl)
@@ -112,8 +117,9 @@ func setupEnv(ctrl *gomock.Controller) (
 	netutil := mockutilnetwork.NewMockInterface(ctrl)
 	rpc := mockrpc.NewMockInterface(ctrl)
 	grpc := mockgrpc.NewMockInterface(ctrl)
+	sysctl := mocksysctl.NewMockInterface(ctrl)
 
-	return nlink, ns, ipam, ip, types, netutil, rpc, grpc
+	return nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl
 }
 
 func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
@@ -141,7 +147,7 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 			name: "Chained Plugin 正常流程",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				netns := mocknetns.NewMockNetNS(ctrl)
@@ -194,10 +200,67 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Chained Plugin 正常流程，等待网卡就绪重试",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
+
+				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
+				netns := mocknetns.NewMockNetNS(ctrl)
+				allocReply := rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:      "10.10.10.10",
+							Mac:     "ff:ff:ff:ff:ff:ff",
+							VPCCIDR: "10.0.0.0/8",
+						},
+					},
+				}
+
+				gomock.InOrder(
+					grpc.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil),
+					rpc.EXPECT().NewCNIBackendClient(gomock.Any()).Return(cniBackendClient),
+					cniBackendClient.EXPECT().AllocateIP(gomock.Any(), gomock.Any()).Return(&allocReply, nil),
+					ns.EXPECT().GetNS(gomock.Any()).Return(netns, nil),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, net.ErrClosed),
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(nil, nil),
+					netns.EXPECT().Fd().Return(uintptr(10)),
+					nlink.EXPECT().LinkSetNsFd(gomock.Any(), gomock.Any()).Return(nil),
+					netns.EXPECT().Do(gomock.Any()).Return(nil),
+					types.EXPECT().PrintResult(gomock.Any(), gomock.Any()).Return(nil),
+					netns.EXPECT().Close().Return(nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+				}
+			}(),
+			args: args{
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Main plugin 正常流程",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				netns := mocknetns.NewMockNetNS(ctrl)
@@ -253,7 +316,7 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 			name: "分配 ENI 失败流程",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				// netns := mocknetns.NewMockNetNS(ctrl)
@@ -295,7 +358,7 @@ func Test_crossVpcEniPlugin_cmdAdd(t *testing.T) {
 			name: "Pod 无需申请 ENI ",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 				// netns := mocknetns.NewMockNetNS(ctrl)
@@ -368,6 +431,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 		netutil networkutil.Interface
 		rpc     rpcwrapper.Interface
 		grpc    grpcwrapper.Interface
+		sysctl  sysctlwrapper.Interface
 	}
 	type args struct {
 		resp   *rpc.AllocateIPReply
@@ -384,12 +448,14 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 			name: "正常流程, 不指定网卡名字",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
 					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
 					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
 				)
 
 				return fields{
@@ -402,6 +468,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 					netutil: netutil,
 					rpc:     rpc,
 					grpc:    grpc,
+					sysctl:  sysctl,
 				}
 			}(),
 			args: args{
@@ -431,7 +498,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 			name: "正常流程, 指定网卡名字",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
 					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
@@ -439,6 +506,8 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
 					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
 				)
 
 				return fields{
@@ -451,6 +520,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 					netutil: netutil,
 					rpc:     rpc,
 					grpc:    grpc,
+					sysctl:  sysctl,
 				}
 			}(),
 			args: args{
@@ -480,15 +550,18 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 			name: "正常流程, 指定网卡名字 eth0",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
 
 				gomock.InOrder(
 					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().LinkDel(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
 					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
 					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
 				)
 
 				return fields{
@@ -501,6 +574,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 					netutil: netutil,
 					rpc:     rpc,
 					grpc:    grpc,
+					sysctl:  sysctl,
 				}
 			}(),
 			args: args{
@@ -526,6 +600,278 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "正常流程, 指定网卡名字，使用 ENI 作为默认路由网卡",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				gomock.InOrder(
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				resp: &rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:                              "10.10.10.10",
+							Mac:                             "ff:ff:ff:ff:ff:ff",
+							VPCCIDR:                         "10.0.0.0/8",
+							DefaultRouteInterfaceDelegation: "eni",
+						},
+					},
+				},
+				ifName: "eni0",
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常流程, 指定网卡名字，ENI 添加自定义网段路由",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				gomock.InOrder(
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				resp: &rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:                        "10.10.10.10",
+							Mac:                       "ff:ff:ff:ff:ff:ff",
+							VPCCIDR:                   "10.0.0.0/8",
+							DefaultRouteExcludedCidrs: []string{"100.0.0.0/8", "180.0.0.0/16"},
+						},
+					},
+				},
+				ifName: "eni0",
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常流程, 指定网卡名字，使用 ENI 作为默认路由网卡，容器默认网卡指定自定义路由",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				gomock.InOrder(
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				resp: &rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:                              "10.10.10.10",
+							Mac:                             "ff:ff:ff:ff:ff:ff",
+							VPCCIDR:                         "10.0.0.0/8",
+							DefaultRouteInterfaceDelegation: "eni",
+							DefaultRouteExcludedCidrs:       []string{"100.0.0.0/8", "180.0.0.0/16"},
+						},
+					},
+				},
+				ifName: "eni0",
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常流程, 指定网卡名字 eth0，使用 ENI 作为默认路由网卡，容器默认网卡指定自定义路由",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				gomock.InOrder(
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkByName(gomock.Any()).Return(&netlink.Veth{}, nil),
+					nlink.EXPECT().LinkDel(gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetDown(gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetName(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().RouteReplace(gomock.Any()).Return(nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("0", nil),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				resp: &rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:                              "10.10.10.10",
+							Mac:                             "ff:ff:ff:ff:ff:ff",
+							VPCCIDR:                         "10.0.0.0/8",
+							DefaultRouteInterfaceDelegation: "eni",
+							DefaultRouteExcludedCidrs:       []string{"100.0.0.0/8", "180.0.0.0/16"},
+						},
+					},
+				},
+				ifName: "eth0",
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "正常流程, 不指定网卡名字，关闭 ip_forward 出错",
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, sysctl := setupEnv(ctrl)
+
+				gomock.InOrder(
+					netutil.EXPECT().GetLinkByMacAddress(gomock.Any()).Return(&netlink.Bond{}, nil),
+					nlink.EXPECT().LinkSetUp(gomock.Any()).Return(nil),
+					nlink.EXPECT().AddrAdd(gomock.Any(), gomock.Any()).Return(nil),
+					nlink.EXPECT().LinkByName("eth0").Return(&netlink.Veth{}, nil),
+					sysctl.EXPECT().Sysctl("net/ipv4/ip_forward", "0").Return("", syscall.EPERM),
+				)
+
+				return fields{
+					ctrl:    ctrl,
+					nlink:   nlink,
+					ns:      ns,
+					ipam:    ipam,
+					ip:      ip,
+					types:   types,
+					netutil: netutil,
+					rpc:     rpc,
+					grpc:    grpc,
+					sysctl:  sysctl,
+				}
+			}(),
+			args: args{
+				resp: &rpcdef.AllocateIPReply{
+					IsSuccess: true,
+					NetworkInfo: &rpcdef.AllocateIPReply_CrossVPCENI{
+						CrossVPCENI: &rpcdef.CrossVPCENIReply{
+							IP:      "10.10.10.10",
+							Mac:     "ff:ff:ff:ff:ff:ff",
+							VPCCIDR: "10.0.0.0/8",
+						},
+					},
+				},
+				ifName: "",
+				args: &skel.CmdArgs{
+					ContainerID: "xxxx",
+					Netns:       "/proc/100/ns/net",
+					IfName:      "eth0",
+					Args:        envArgs,
+					Path:        "/opt/cin/bin",
+					StdinData:   []byte(stdinData),
+				},
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -541,6 +887,7 @@ func Test_crossVpcEniPlugin_setupEni(t *testing.T) {
 				netutil: tt.fields.netutil,
 				rpc:     tt.fields.rpc,
 				grpc:    tt.fields.grpc,
+				sysctl:  tt.fields.sysctl,
 			}
 			if err := p.setupEni(tt.args.resp, tt.args.ifName, tt.args.args); (err != nil) != tt.wantErr {
 				t.Errorf("crossVpcEniPlugin.setupEni() error = %v, wantErr %v", err, tt.wantErr)
@@ -574,7 +921,7 @@ func Test_crossVpcEniPlugin_cmdDel(t *testing.T) {
 			name: "正常流程",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 
@@ -623,7 +970,7 @@ func Test_crossVpcEniPlugin_cmdDel(t *testing.T) {
 			name: "释放 ENI 失败流程",
 			fields: func() fields {
 				ctrl := gomock.NewController(t)
-				nlink, ns, ipam, ip, types, netutil, rpc, grpc := setupEnv(ctrl)
+				nlink, ns, ipam, ip, types, netutil, rpc, grpc, _ := setupEnv(ctrl)
 
 				cniBackendClient := mockcbclient.NewMockCNIBackendClient(ctrl)
 

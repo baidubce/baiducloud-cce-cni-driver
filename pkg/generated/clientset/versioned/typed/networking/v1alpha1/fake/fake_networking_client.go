@@ -20,6 +20,10 @@ func (c *FakeCceV1alpha1) IPPools(namespace string) v1alpha1.IPPoolInterface {
 	return &FakeIPPools{c, namespace}
 }
 
+func (c *FakeCceV1alpha1) MultiIPWorkloadEndpoints(namespace string) v1alpha1.MultiIPWorkloadEndpointInterface {
+	return &FakeMultiIPWorkloadEndpoints{c, namespace}
+}
+
 func (c *FakeCceV1alpha1) PodSubnetTopologySpreads(namespace string) v1alpha1.PodSubnetTopologySpreadInterface {
 	return &FakePodSubnetTopologySpreads{c, namespace}
 }

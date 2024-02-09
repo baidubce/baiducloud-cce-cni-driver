@@ -216,7 +216,7 @@ func (s *nodeAgent) run(ctx context.Context) error {
 	)
 
 	switch {
-	case types.IsKubenetMode(cniMode), types.IsCCECNIModeBasedOnVPCRoute(cniMode), cniMode == types.CCEModeCrossVPCEni:
+	case types.IsKubenetMode(cniMode), types.IsCCECNIModeBasedOnVPCRoute(cniMode), types.IsCrossVPCEniMode(cniMode):
 		s.runCCEModeBasedOnVPCRoute(ctx, nodeWatcher)
 	case types.IsCCECNIModeBasedOnBCCSecondaryIP(cniMode):
 		s.runCCEModeBasedOnBCCSecondaryIP(ctx, nodeWatcher, eniCtrl)

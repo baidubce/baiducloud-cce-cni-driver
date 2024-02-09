@@ -3,13 +3,15 @@ module github.com/baidubce/baiducloud-cce-cni-driver
 go 1.16
 
 require (
+	github.com/alexflint/go-filemutex v0.0.0-20171022225611-72bdc8eae2ae
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a
 	github.com/baidubce/bce-sdk-go v0.9.117
 	github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins v0.8.7
+	github.com/davecgh/go-spew v1.1.1
 	github.com/evanphx/json-patch v5.6.0+incompatible
 	github.com/fsnotify/fsnotify v1.4.9
-	github.com/golang/mock v1.5.0
+	github.com/golang/mock v1.6.0
 	github.com/golang/protobuf v1.5.2
 	github.com/gorilla/mux v1.8.0
 	github.com/im7mortal/kmutex v1.0.1
@@ -40,7 +42,6 @@ require (
 replace (
 	github.com/go-logr/logr => github.com/go-logr/logr v0.4.0
 	github.com/go-logr/zapr => github.com/go-logr/zapr v0.4.0
-
 	github.com/googleapis/gnostic => github.com/googleapis/gnostic v0.1.0
 	github.com/im7mortal/kmutex => github.com/im7mortal/kmutex v1.0.2-0.20211009180904-795f0d162683
 	google.golang.org/grpc v1.30.0 => google.golang.org/grpc v1.29.1
@@ -56,7 +57,6 @@ replace (
 	k8s.io/component-base => k8s.io/component-base v0.18.9
 	k8s.io/cri-api => k8s.io/cri-api v0.18.9
 	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.18.9
-
 	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.18.9
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.18.9
 	k8s.io/kube-proxy => k8s.io/kube-proxy v0.18.9

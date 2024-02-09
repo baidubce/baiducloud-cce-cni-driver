@@ -33,10 +33,14 @@ const (
 	WepLabelInstanceTypeKey = "cce.io/instance-type"
 	WepFinalizer            = "cce-cni.cce.io"
 
-	IPPoolCreationSourceCNI = "cce-cni"
-
+	IPPoolCreationSourceCNI  = "cce-cni"
+	MwepType                 = "roce"
+	MwepLabelInstanceTypeKey = "cce.io/instance-type"
+	MwepFinalizer            = "cce-cni-roce.cce.io"
 	// Ref: https://github.com/kubernetes/kubernetes/pull/71653
 	KubeletCniTimeout = network.CNITimeoutSec * time.Second
+
+	NodeInstanceType = "node.kubernetes.io/instance-type"
 
 	// CCECniTimeout set to be much less than kubelet cni timeout
 	CCECniTimeout = 60 * time.Second
@@ -58,4 +62,10 @@ type ExclusiveEniInterface interface {
 	Allocate(ctx context.Context, name, namespace, containerID string) (*v1alpha1.CrossVPCEni, error)
 	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.CrossVPCEni, error)
 	Run(ctx context.Context, stopCh <-chan struct{}) error
+}
+type RoceInterface interface {
+	Allocate(ctx context.Context, name, namespace, containerID string, mac string) (*v1alpha1.WorkloadEndpoint, error)
+	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error)
+	Run(ctx context.Context, stopCh <-chan struct{}) error
+	Ready(ctx context.Context) bool
 }

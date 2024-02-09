@@ -166,7 +166,6 @@ func (ipam *IPAM) buildPossibleLeakedIPCache(ctx context.Context, podIPSet, stsP
 									delete(ipam.possibleLeakedIPCache, tmpKey)
 								}
 							}
-
 						}
 					}
 				}

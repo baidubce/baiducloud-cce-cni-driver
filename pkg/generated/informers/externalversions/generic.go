@@ -41,6 +41,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().CrossVPCEnis().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("ippools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().IPPools().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("multiipworkloadendpoints"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().MultiIPWorkloadEndpoints().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("podsubnettopologyspreads"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V1alpha1().PodSubnetTopologySpreads().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("podsubnettopologyspreadtables"):

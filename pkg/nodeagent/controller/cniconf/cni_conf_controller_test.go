@@ -16,9 +16,15 @@
 package cniconf
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+
+	roce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
+	mockroce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce/testing"
+
 	"reflect"
 	"testing"
 	"time"
@@ -651,4 +657,203 @@ func Test_renderTemplate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_patchCNIConfig(t *testing.T) {
+	type fields struct {
+		ctrl          *gomock.Controller
+		kubeClient    kubernetes.Interface
+		cniMode       types.ContainerNetworkMode
+		nodeName      string
+		config        *v1alpha1.CNIConfigControllerConfiguration
+		netutil       network.Interface
+		kernelhandler kernel.Interface
+		filesystem    fs.FileSystem
+		roceProbe     roce.IRoCEProbe
+	}
+	type args struct {
+		ctx        context.Context
+		tplContent string
+		dataObject *CNIConfigData
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    string
+		wantErr bool
+	}{
+		/** normal: */
+		{
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				roceProbe := mockroce.NewMockIRoCEProbe(ctrl)
+				roceProbe.EXPECT().HasRoCEMellanox8Available(gomock.Any()).Return(true)
+
+				return fields{
+					ctrl:      ctrl,
+					config:    &v1alpha1.CNIConfigControllerConfiguration{},
+					roceProbe: roceProbe,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				tplContent: `{"name":"cce-cni","cniVersion":"0.3.1","plugins":[{"type":"ptp","enableARPProxy":true,` +
+					`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],"routes"` +
+					`:[{"dst":"0.0.0.0/0"}]}},{"type":"portmap","capabilities":{"portMappings":true},"externalSetMarkChain":` +
+					`"KUBE-MARK-MASQ"}]}`,
+
+				dataObject: &CNIConfigData{
+					NetworkName:     "cce-cni",
+					IPAMEndPoint:    "10.0.0.2:80",
+					VethMTU:         1500,
+					MasterInterface: "eth0",
+				},
+			},
+			want: `{"cniVersion":"0.3.1","name":"cce-cni","plugins":[{"enableARPProxy":true,"ipam":{"ranges":` +
+				`[[{"subnet":"10.1.3.0/24"}]],"routes":[{"dst":"0.0.0.0/0"}],"type":"host-local"},"mtu":1500,"type":"ptp"` +
+				`,"vethPrefix":"veth"},{"capabilities":{"portMappings":true},"externalSetMarkChain":"KUBE-MARK-MASQ","type"` +
+				`:"portmap"},{"ipam":{"endpoint":"10.0.0.2:80"},"type":"rdma"}]}`,
+			wantErr: false,
+		},
+		/** exceptional 1: no roce mallanox8 available */
+		{
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				roceProbe := mockroce.NewMockIRoCEProbe(ctrl)
+				roceProbe.EXPECT().HasRoCEMellanox8Available(gomock.Any()).Return(false)
+
+				return fields{
+					ctrl:      ctrl,
+					config:    &v1alpha1.CNIConfigControllerConfiguration{},
+					roceProbe: roceProbe,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				tplContent: `{"name":"cce-cni","cniVersion":"0.3.1","plugins":[{"type":"ptp","enableARPProxy":true,` +
+					`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],` +
+					`"routes":[{"dst":"0.0.0.0/0"}]}},{"type":"portmap","capabilities":{"portMappings":true},` +
+					`"externalSetMarkChain":"KUBE-MARK-MASQ"}]}`,
+
+				dataObject: &CNIConfigData{
+					NetworkName:     "cce-cni",
+					IPAMEndPoint:    "10.0.0.3:80",
+					VethMTU:         1500,
+					MasterInterface: "eth0",
+				},
+			},
+			want: `{"name":"cce-cni","cniVersion":"0.3.1","plugins":[{"type":"ptp","enableARPProxy":true,` +
+				`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],"routes"` +
+				`:[{"dst":"0.0.0.0/0"}]}},{"type":"portmap","capabilities":{"portMappings":true},` +
+				`"externalSetMarkChain":"KUBE-MARK-MASQ"}]}`,
+			wantErr: false,
+		},
+		/** exceptional 2: bad tmpContent */
+		{
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				roceProbe := mockroce.NewMockIRoCEProbe(ctrl)
+				roceProbe.EXPECT().HasRoCEMellanox8Available(gomock.Any()).Return(false)
+
+				return fields{
+					ctrl:      ctrl,
+					config:    &v1alpha1.CNIConfigControllerConfiguration{},
+					roceProbe: roceProbe,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				tplContent: `{"name":"cce-cni","cniVersion":"0.3.1","plugxxx":[{"type":"ptp","enableARPProxy":true,` +
+					`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],` +
+					`"routes":[{"dst":"0.0.0.0/0"}]}},{"type":"portmap","capabilities":{"portMappings":true},` +
+					`"externalSetMarkChain":"KUBE-MARK-MASQ"}]}`,
+
+				dataObject: &CNIConfigData{
+					NetworkName:     "cce-cni",
+					IPAMEndPoint:    "10.0.0.3:80",
+					VethMTU:         1500,
+					MasterInterface: "eth0",
+				},
+			},
+			want: `{"name":"cce-cni","cniVersion":"0.3.1","plugxxx":[{"type":"ptp","enableARPProxy":true,"vethPrefix":` +
+				`"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],"routes":` +
+				`[{"dst":"0.0.0.0/0"}]}},{"type":"portmap","capabilities":{"portMappings":true},` +
+				`"externalSetMarkChain":"KUBE-MARK-MASQ"}]}`,
+			wantErr: false,
+		},
+		/** exceptional 3: bad tmpContent */
+		{
+			fields: func() fields {
+				ctrl := gomock.NewController(t)
+				roceProbe := mockroce.NewMockIRoCEProbe(ctrl)
+				roceProbe.EXPECT().HasRoCEMellanox8Available(gomock.Any()).Return(false)
+
+				return fields{
+					ctrl:      ctrl,
+					config:    &v1alpha1.CNIConfigControllerConfiguration{},
+					roceProbe: roceProbe,
+				}
+			}(),
+			args: args{
+				ctx: context.TODO(),
+				tplContent: `{"name":"cce-cni","cniVersion":"0.3.1","plugxxx":{"type":"ptp","enableARPProxy":true,` +
+					`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]],"routes"` +
+					`:[{"dst":"0.0.0.0/0"}]}}}`,
+
+				dataObject: &CNIConfigData{
+					NetworkName:     "cce-cni",
+					IPAMEndPoint:    "10.0.0.3:80",
+					VethMTU:         1500,
+					MasterInterface: "eth0",
+				},
+			},
+			want: `{"name":"cce-cni","cniVersion":"0.3.1","plugxxx":{"type":"ptp","enableARPProxy":true,` +
+				`"vethPrefix":"veth","mtu":1500,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.1.3.0/24"}]]` +
+				`,"routes":[{"dst":"0.0.0.0/0"}]}}}`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var jsonout bytes.Buffer
+
+			if tt.fields.ctrl != nil {
+				defer tt.fields.ctrl.Finish()
+			}
+			c := &Controller{
+				kubeClient:    tt.fields.kubeClient,
+				cniMode:       tt.fields.cniMode,
+				nodeName:      tt.fields.nodeName,
+				config:        tt.fields.config,
+				netutil:       tt.fields.netutil,
+				kernelhandler: tt.fields.kernelhandler,
+				filesystem:    tt.fields.filesystem,
+				roceProbe:     tt.fields.roceProbe,
+			}
+
+			rawgot, err := c.patchCNIConfig(tt.args.ctx, tt.args.tplContent, tt.args.dataObject)
+			//			t.Errorf("got:[%s] err:[%+v]", got, err)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("patchCNIConfigTemplate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if len(tt.want) > 0 {
+				err = json.Compact(&jsonout, []byte(rawgot))
+				if err != nil {
+					t.Errorf("patchCNIConfigTemplate() err = %+v", err)
+					return
+				}
+
+				got := jsonout.String()
+
+				if got != tt.want {
+					t.Errorf("patchCNIConfigTemplate() got = %v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+
 }

@@ -17,6 +17,7 @@ package cloud
 
 import (
 	"context"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 
 	"github.com/baidubce/bce-sdk-go/services/bbc"
 	"github.com/baidubce/bce-sdk-go/services/bcc"
@@ -59,12 +60,17 @@ type Interface interface {
 	BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error)
 	BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error
 	BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error)
+
+	GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error)
+	BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error
+	BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error)
 }
 
 type Client struct {
 	bccClient *bcc.Client
 	eniClient *eni.Client
 	vpcClient *vpc.Client
+	hpcClient *hpc.Client
 	bbcClient *bbc.Client
 }
 

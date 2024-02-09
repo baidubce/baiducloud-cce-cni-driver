@@ -279,6 +279,27 @@ data:
         "name":"{{ printf "{{ .NetworkName }}" }}",
         "cniVersion":"0.3.1",
         "plugins":[
+               {
+                "type":"ptp",
+                "enableARPProxy":true,
+                "vethPrefix":"veth",
+                "mtu": {{ printf "{{ .VethMTU }}" }},
+                "ipam":{
+                    "type":"host-local",
+                    "ranges":[
+                        [
+                            {
+                                "subnet":"{{ printf "{{ .Subnet }}" }}"
+                            }
+                        ]
+                    ],
+                    "routes":[
+                        {
+                            "dst":"0.0.0.0/0"
+                        }
+                    ]
+                }
+            },
             {
                 "type": "crossvpc-eni",
                 "ifName": "eth0",

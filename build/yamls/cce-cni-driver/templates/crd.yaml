@@ -75,6 +75,8 @@ spec:
     kind: CrossVPCEni
     listKind: CrossVPCEniList
     plural: crossvpcenis
+    shortNames:
+    - cveni
     singular: crossvpceni
   scope: Cluster
   versions:
@@ -124,24 +126,46 @@ spec:
             description: CrossVPCEniSpec defines the desired state of CrossVPCEni
             properties:
               boundInstanceID:
+                description: BoundInstanceID is instance id of the node where this
+                  eni will be attached
+                type: string
+              defaultRouteExcludedCidrs:
+                description: DefaultRouteExcludedCidrs is the cidrs excluded from
+                  default route
+                items:
+                  type: string
+                type: array
+              defaultRouteInterfaceDelegation:
+                description: DefaultRouteInterfaceDelegation specifies the default
+                  route interface type
+                enum:
+                - eni
                 type: string
               privateIPAddress:
+                description: PrivateIPAddress is the private ip address to create
+                  an eni
                 type: string
               securityGroupIDs:
+                description: SecurityGroupIDs is the list of security groups that
+                  are bound to eni
                 items:
                   type: string
                 type: array
               subnetID:
+                description: SubnetID is id of the subnet where this eni is created
                 type: string
               userID:
+                description: UserID is the id of the user which this eni belongs to
                 type: string
               vpcCidr:
+                description: VPCCIDR is cidr of the vpc where this eni is created
                 type: string
             type: object
           status:
             description: CrossVPCEniStatus defines the observed state of CrossVPCEni
             properties:
               conditions:
+                description: Conditions is the conditions of this eni
                 items:
                   properties:
                     eniStatus:
@@ -153,16 +177,23 @@ spec:
                 maxItems: 10
                 type: array
               eniID:
+                description: EniID is id of this eni
                 type: string
               eniStatus:
+                description: EniStatus is the status of this eni
                 type: string
               involvedContainerID:
+                description: ' InvolvedContainerID is the infra container id of this
+                  eni'
                 type: string
               macAddress:
+                description: MacAddress is the hardware address of this eni
                 type: string
               primaryIPAddress:
+                description: PrimaryIPAddress is the primary ip address of this eni
                 type: string
               vpcID:
+                description: VPCID is the vpc id of this eni
                 type: string
             type: object
         type: object

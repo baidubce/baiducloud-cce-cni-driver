@@ -23,6 +23,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
 	crdlisters "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
+	roce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
@@ -62,6 +63,7 @@ type Controller struct {
 	netutil       networkutil.Interface
 	kernelhandler kernel.Interface
 	filesystem    fsutil.FileSystem
+	roceProbe     roce.IRoCEProbe
 }
 
 // CNIConfigData contains everything a cni config needs

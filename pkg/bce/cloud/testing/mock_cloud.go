@@ -8,6 +8,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	hpc "github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/hpc"
 	bbc "github.com/baidubce/bce-sdk-go/services/bbc"
 	api "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	eni "github.com/baidubce/bce-sdk-go/services/eni"
@@ -111,6 +112,21 @@ func (mr *MockInterfaceMockRecorder) BBCBatchDelIP(arg0, arg1 interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchDelIP), arg0, arg1)
 }
 
+// BatchAddHpcEniPrivateIP mocks base method.
+func (m *MockInterface) BatchAddHpcEniPrivateIP(arg0 context.Context, arg1 *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchAddHpcEniPrivateIP", arg0, arg1)
+	ret0, _ := ret[0].(*hpc.BatchAddPrivateIPResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BatchAddHpcEniPrivateIP indicates an expected call of BatchAddHpcEniPrivateIP.
+func (mr *MockInterfaceMockRecorder) BatchAddHpcEniPrivateIP(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddHpcEniPrivateIP), arg0, arg1)
+}
+
 // BatchAddPrivateIP mocks base method.
 func (m *MockInterface) BatchAddPrivateIP(arg0 context.Context, arg1 []string, arg2 int, arg3 string) ([]string, error) {
 	m.ctrl.T.Helper()
@@ -139,6 +155,20 @@ func (m *MockInterface) BatchAddPrivateIpCrossSubnet(arg0 context.Context, arg1,
 func (mr *MockInterfaceMockRecorder) BatchAddPrivateIpCrossSubnet(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIpCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIpCrossSubnet), arg0, arg1, arg2, arg3, arg4)
+}
+
+// BatchDeleteHpcEniPrivateIP mocks base method.
+func (m *MockInterface) BatchDeleteHpcEniPrivateIP(arg0 context.Context, arg1 *hpc.EniBatchDeleteIPArgs) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchDeleteHpcEniPrivateIP", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// BatchDeleteHpcEniPrivateIP indicates an expected call of BatchDeleteHpcEniPrivateIP.
+func (mr *MockInterfaceMockRecorder) BatchDeleteHpcEniPrivateIP(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchDeleteHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchDeleteHpcEniPrivateIP), arg0, arg1)
 }
 
 // BatchDeletePrivateIP mocks base method.
@@ -299,6 +329,21 @@ func (m *MockInterface) GetBCCInstanceDetail(arg0 context.Context, arg1 string) 
 func (mr *MockInterfaceMockRecorder) GetBCCInstanceDetail(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBCCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBCCInstanceDetail), arg0, arg1)
+}
+
+// GetHPCEniID mocks base method.
+func (m *MockInterface) GetHPCEniID(arg0 context.Context, arg1 string) (*hpc.EniList, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetHPCEniID", arg0, arg1)
+	ret0, _ := ret[0].(*hpc.EniList)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetHPCEniID indicates an expected call of GetHPCEniID.
+func (mr *MockInterfaceMockRecorder) GetHPCEniID(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHPCEniID", reflect.TypeOf((*MockInterface)(nil).GetHPCEniID), arg0, arg1)
 }
 
 // ListENIs mocks base method.

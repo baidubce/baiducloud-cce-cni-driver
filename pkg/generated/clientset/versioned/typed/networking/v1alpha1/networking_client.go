@@ -12,6 +12,7 @@ type CceV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	CrossVPCEnisGetter
 	IPPoolsGetter
+	MultiIPWorkloadEndpointsGetter
 	PodSubnetTopologySpreadsGetter
 	PodSubnetTopologySpreadTablesGetter
 	SubnetsGetter
@@ -29,6 +30,10 @@ func (c *CceV1alpha1Client) CrossVPCEnis() CrossVPCEniInterface {
 
 func (c *CceV1alpha1Client) IPPools(namespace string) IPPoolInterface {
 	return newIPPools(c, namespace)
+}
+
+func (c *CceV1alpha1Client) MultiIPWorkloadEndpoints(namespace string) MultiIPWorkloadEndpointInterface {
+	return newMultiIPWorkloadEndpoints(c, namespace)
 }
 
 func (c *CceV1alpha1Client) PodSubnetTopologySpreads(namespace string) PodSubnetTopologySpreadInterface {

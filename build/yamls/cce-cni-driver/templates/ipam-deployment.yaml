@@ -1,4 +1,4 @@
-{{- $deployCNIModeList := list "vpc-secondary-ip-veth" "vpc-secondary-ip-ipvlan" "vpc-secondary-ip-auto-detect" "bbc-vpc-secondary-ip-veth" "bbc-vpc-secondary-ip-ipvlan" "bbc-vpc-secondary-ip-auto-detect" "cross-vpc-eni"}}
+{{- $deployCNIModeList := list "vpc-secondary-ip-veth" "vpc-secondary-ip-ipvlan" "vpc-secondary-ip-auto-detect" "bbc-vpc-secondary-ip-veth" "bbc-vpc-secondary-ip-ipvlan" "bbc-vpc-secondary-ip-auto-detect" "cross-vpc-eni" "vpc-route-auto-detect" "vpc-route-ipvlan" "vpc-route-veth" "exclusive-cross-vpc-eni"}}
 {{- if has .Values.CNIMode $deployCNIModeList }}
 kind: Deployment
 apiVersion: apps/v1

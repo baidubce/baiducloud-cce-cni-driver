@@ -18,6 +18,7 @@ package cniconf
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,8 @@ import (
 	v1alpha1network "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
 	utilenv "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/env"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
+	roce "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
+
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -69,6 +72,7 @@ func New(
 		netutil:       networkutil.New(),
 		kernelhandler: kernel.NewLinuxKernelHandler(),
 		filesystem:    fsutil.DefaultFS{},
+		roceProbe:     roce.ProbeNew(),
 	}
 }
 
@@ -106,15 +110,21 @@ func (c *Controller) syncCNIConfig(ctx context.Context, nodeName string) error {
 	}
 
 	// read cni config template
-	templateContent, err := c.filesystem.ReadFile(templateFilePath)
+	rawTemplateContent, err := c.filesystem.ReadFile(templateFilePath)
 	if err != nil {
 		log.Errorf(ctx, "failed to read cni config template file %v: %v", c.config.CNIConfigTemplateFile, err)
 		return err
 	}
 
 	// render cni config template with data to get final rendered content
-	renderedContent, err := renderTemplate(ctx, string(templateContent), dataObj)
+	renderedContent, err := renderTemplate(ctx, string(rawTemplateContent), dataObj)
 	if err != nil {
+		return err
+	}
+
+	renderedContent, err = c.patchCNIConfig(ctx, renderedContent, dataObj)
+	if err != nil {
+		log.Errorf(ctx, "failed to patch CNI config template. err:[%+v]", err)
 		return err
 	}
 
@@ -224,16 +234,16 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
-		// assemble ipam endpoint from clusterip
-		svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(ctx, IPAMServiceName, metav1.GetOptions{})
-		if err != nil {
-			return nil, err
-		}
-		if len(svc.Spec.Ports) != 0 {
-			configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
-		}
+	// assemble ipam endpoint from clusterip
+	svc, err := c.kubeClient.CoreV1().Services(IPAMServiceNamespace).Get(ctx, IPAMServiceName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if len(svc.Spec.Ports) != 0 {
+		configData.IPAMEndPoint = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port)
+	}
 
+	if types.IsCCECNIModeBasedOnSecondaryIP(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
 		// get instance type from meta
 		if configData.InstanceType == "" {
 			insType, err := c.getNodeInstanceTypeEx(ctx)
@@ -254,7 +264,7 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 		}
 	}
 
-	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || c.cniMode == types.CCEModeCrossVPCEni {
+	if types.IsCCECNIModeBasedOnVPCRoute(c.cniMode) || types.IsCrossVPCEniMode(c.cniMode) {
 		ipPoolName := utilpool.GetNodeIPPoolName(c.nodeName)
 		ipPool, err := c.ippoolLister.IPPools(v1.NamespaceDefault).Get(ipPoolName)
 		if err != nil {
@@ -354,6 +364,79 @@ func renderTemplate(ctx context.Context, tplContent string, dataObject *CNIConfi
 	}
 
 	return buf.String(), nil
+}
+
+func (c *Controller) patchCNIConfig(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
+	var str string
+	var err error
+
+	str = oriYamlStr
+
+	str, err = c.patchCNIConfigForMellanox8(ctx, str, dataObject)
+	if err != nil {
+		return oriYamlStr, err
+	}
+
+	return str, nil
+}
+
+func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
+	var bHasRoCEMellanox8 bool = false
+	var b bool
+	var key string
+	var err error
+	//	var i int
+	var m map[string]interface{}
+	var mR map[string]interface{}
+	var buf []byte
+	//	var arrPlugins ([]interface{})
+
+	//for RoCEMellanox8
+	if c.roceProbe.HasRoCEMellanox8Available(ctx) {
+		bHasRoCEMellanox8 = true
+	}
+	//if etc...
+	//exit if no need to update
+	if !bHasRoCEMellanox8 {
+		log.Warningf(ctx, "No RoCE Mellanox8 Available. bHasRoCEMellanox8:[%t]", bHasRoCEMellanox8)
+		goto unchanged
+	}
+
+	//  log.Infof("arrPlugins:[%+v]", arrPlugins);
+	//do Update
+	m = make(map[string](interface{}))
+	err = json.Unmarshal([]byte(oriYamlStr), &m)
+	if err != nil {
+		log.Errorf(ctx, "oriYamlStr: [%s]", oriYamlStr)
+		return "", err
+	}
+
+	key = "plugins" /** optional */
+	if _, b = m[key]; !b {
+		log.Errorf(ctx, ": ", "")
+		goto unchanged
+	}
+	if _, b = m[key].([]interface{}); !b {
+		log.Errorf(ctx, ": ", "")
+		goto unchanged
+	}
+	//	arrPlugins = m[key].([]interface{})
+
+	//insert RoCEMellanox8 section
+	mR = make(map[string]interface{})
+	mR["type"] = "rdma"
+	mR["ipam"] = make(map[string]interface{})
+	mR["ipam"].(map[string]interface{})["endpoint"] = dataObject.IPAMEndPoint
+
+	//arrPlugins = append(arrPlugins, mR)
+	m[key] = append(m[key].([]interface{}), mR)
+	log.Errorf(ctx, "m: [%+v]", m)
+
+	buf, err = json.MarshalIndent(&m, "", "  ")
+	return string(buf), nil
+
+unchanged:
+	return oriYamlStr, nil
 }
 
 func canUseIPVlan(kernelVersion *version.Version, kernelModules []string) bool {

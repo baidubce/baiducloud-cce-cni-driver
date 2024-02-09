@@ -45,7 +45,9 @@ var (
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&WorkloadEndpoint{},
+		&MultiIPWorkloadEndpoint{},
 		&WorkloadEndpointList{},
+		&MultiIPWorkloadEndpointList{},
 		&IPPool{},
 		&IPPoolList{},
 		&Subnet{},

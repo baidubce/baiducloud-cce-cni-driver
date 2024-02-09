@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -64,11 +65,13 @@ var (
 )
 
 var (
-	PodAnnotationCrossVPCEniUserID           = "cross-vpc-eni.cce.io/userID"
-	PodAnnotationCrossVPCEniSubnetID         = "cross-vpc-eni.cce.io/subnetID"
-	PodAnnotationCrossVPCEniSecurityGroupIDs = "cross-vpc-eni.cce.io/securityGroupIDs"
-	PodAnnotationCrossVPCEniPrivateIPAddress = "cross-vpc-eni.cce.io/privateIPAddress"
-	PodAnnotationCrossVPCEniVPCCIDR          = "cross-vpc-eni.cce.io/vpcCidr"
+	PodAnnotationCrossVPCEniUserID                          = "cross-vpc-eni.cce.io/userID"
+	PodAnnotationCrossVPCEniSubnetID                        = "cross-vpc-eni.cce.io/subnetID"
+	PodAnnotationCrossVPCEniSecurityGroupIDs                = "cross-vpc-eni.cce.io/securityGroupIDs"
+	PodAnnotationCrossVPCEniPrivateIPAddress                = "cross-vpc-eni.cce.io/privateIPAddress"
+	PodAnnotationCrossVPCEniVPCCIDR                         = "cross-vpc-eni.cce.io/vpcCidr"
+	PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation = "cross-vpc-eni.cce.io/defaultRouteInterfaceDelegation"
+	PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs       = "cross-vpc-eni.cce.io/defaultRouteExcludedCidrs"
 
 	necessaryAnnoKeyList = []string{
 		PodAnnotationCrossVPCEniUserID,
@@ -80,6 +83,7 @@ var (
 	PodLabelOwnerNamespace = "cce.io/ownerNamespace"
 	PodLabelOwnerName      = "cce.io/ownerName"
 	PodLabelOwnerNode      = "cce.io/ownerNode"
+	PodLabelOwnerInstance  = "cce.io/ownerInstance"
 )
 
 type IPAM struct {
@@ -163,20 +167,30 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		return nil, err
 	}
 
+	var (
+		nodeName   string = pod.Spec.NodeName
+		instanceID string
+	)
+
+	instanceID, err = util.GetInstanceIDFromNode(node)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node %v instanceId: %v", node.Name, err)
+	}
+
 	// pod without all crossvpceni annotations should return
 	if !podHasCrossVPCEniAnnotation(ctx, pod) {
 		return nil, nil
 	}
 
 	// node has attaching/detaching eni
-	unstable, err := ipam.nodeHasUnstableEni(ctx, pod.Spec.NodeName)
+	unstable, err := ipam.nodeHasUnstableEni(ctx, instanceID)
 	if err != nil {
 		log.Errorf(ctx, "nodeHasUnstableEni error: %v", err)
 		return nil, err
 	}
 
 	if unstable {
-		msg := fmt.Sprintf("node %v has unstable eni", pod.Spec.NodeName)
+		msg := fmt.Sprintf("node %v(%v) has unstable eni", nodeName, instanceID)
 		log.Error(ctx, msg)
 		return nil, errors.New(msg)
 	}
@@ -187,10 +201,7 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 		return nil, err
 	}
 
-	spec.BoundInstanceID, err = util.GetInstanceIDFromNode(node)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node %v instanceId: %v", node.Name, err)
-	}
+	spec.BoundInstanceID = instanceID
 
 	// create eni cr
 	var (
@@ -200,7 +211,8 @@ func (ipam *IPAM) Allocate(ctx context.Context, name, namespace, containerID str
 				Labels: map[string]string{
 					PodLabelOwnerNamespace: namespace,
 					PodLabelOwnerName:      name,
-					PodLabelOwnerNode:      pod.Spec.NodeName,
+					PodLabelOwnerNode:      nodeName,
+					PodLabelOwnerInstance:  instanceID,
 				},
 				Finalizers: []string{ipamgeneric.WepFinalizer},
 			},
@@ -288,18 +300,19 @@ func (ipam *IPAM) Release(ctx context.Context, name, namespace, containerID stri
 	}
 
 	var (
-		nodeName = eni.Labels[PodLabelOwnerNode]
+		nodeName   = eni.Labels[PodLabelOwnerNode]
+		instanceID = eni.Labels[PodLabelOwnerInstance]
 	)
 
 	// node has attaching/detaching eni
-	unstable, err := ipam.nodeHasUnstableEni(ctx, nodeName)
+	unstable, err := ipam.nodeHasUnstableEni(ctx, instanceID)
 	if err != nil {
 		log.Errorf(ctx, "nodeHasUnstableEni error: %v", err)
 		return nil, err
 	}
 
 	if unstable {
-		msg := fmt.Sprintf("node %v has unstable eni", nodeName)
+		msg := fmt.Sprintf("node %v(%v) has unstable eni", nodeName, instanceID)
 		log.Error(ctx, msg)
 		return nil, errors.New(msg)
 	}
@@ -455,16 +468,29 @@ func getEniSpecFromPodAnnotations(ctx context.Context, pod *v1.Pod) (*v1alpha1.C
 		eniSpec v1alpha1.CrossVPCEniSpec
 	)
 
+	// extract info from annotations
 	eniSpec.UserID = pod.Annotations[PodAnnotationCrossVPCEniUserID]
 	eniSpec.SubnetID = pod.Annotations[PodAnnotationCrossVPCEniSubnetID]
 	eniSpec.VPCCIDR = pod.Annotations[PodAnnotationCrossVPCEniVPCCIDR]
 	eniSpec.PrivateIPAddress = pod.Annotations[PodAnnotationCrossVPCEniPrivateIPAddress]
+
 	eniSpec.SecurityGroupIDs = make([]string, 0)
 	secGroups := strings.Split(pod.Annotations[PodAnnotationCrossVPCEniSecurityGroupIDs], ",")
 	for _, s := range secGroups {
 		eniSpec.SecurityGroupIDs = append(eniSpec.SecurityGroupIDs, strings.TrimSpace(s))
 	}
 
+	eniSpec.DefaultRouteInterfaceDelegation = pod.Annotations[PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation]
+
+	eniSpec.DefaultRouteExcludedCidrs = make([]string, 0)
+	if _, ok := pod.Annotations[PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs]; ok {
+		excludedCidrs := strings.Split(pod.Annotations[PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs], ",")
+		for _, s := range excludedCidrs {
+			eniSpec.DefaultRouteExcludedCidrs = append(eniSpec.DefaultRouteExcludedCidrs, strings.TrimSpace(s))
+		}
+	}
+
+	// validate spec
 	if eniSpec.UserID == "" {
 		return nil, fmt.Errorf("pod annotation %v cannot be empty", PodAnnotationCrossVPCEniUserID)
 	}
@@ -481,20 +507,31 @@ func getEniSpecFromPodAnnotations(ctx context.Context, pod *v1.Pod) (*v1alpha1.C
 		return nil, fmt.Errorf("pod annotation %v cannot be empty", PodAnnotationCrossVPCEniVPCCIDR)
 	}
 
+	if eniSpec.DefaultRouteInterfaceDelegation != "" && eniSpec.DefaultRouteInterfaceDelegation != "eni" {
+		return nil, fmt.Errorf("pod annotation %v can only \"eni\"", PodAnnotationCrossVPCEniDefaultRouteInterfaceDelegation)
+	}
+
+	for _, cidr := range eniSpec.DefaultRouteExcludedCidrs {
+		_, _, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("pod annotation %v contains invalid cidr %v", PodAnnotationCrossVPCEniDefaultRouteExcludedCidrs, cidr)
+		}
+	}
+
 	return &eniSpec, nil
 }
 
-func (ipam *IPAM) nodeHasUnstableEni(ctx context.Context, nodeName string) (bool, error) {
+func (ipam *IPAM) nodeHasUnstableEni(ctx context.Context, instanceID string) (bool, error) {
 	var (
 		selector = labels.NewSelector()
 		result   = false
 	)
 
-	requirement, err := labels.NewRequirement(PodLabelOwnerNode, selection.Equals, []string{nodeName})
+	requirement, err := labels.NewRequirement(PodLabelOwnerInstance, selection.Equals, []string{instanceID})
 	if err != nil {
 		return true, err
 	}
-	selector.Add(*requirement)
+	selector = selector.Add(*requirement)
 
 	enis, err := ipam.crdInformer.Cce().V1alpha1().CrossVPCEnis().Lister().List(selector)
 	if err != nil {
@@ -502,6 +539,7 @@ func (ipam *IPAM) nodeHasUnstableEni(ctx context.Context, nodeName string) (bool
 	}
 	for _, e := range enis {
 		if e.Status.EniStatus == v1alpha1.EniStatusAttaching || e.Status.EniStatus == v1alpha1.EniStatusDetaching {
+			log.Infof(ctx, "instance %v has unstable eni %v: %v", instanceID, e.Name, e.Status.EniStatus)
 			result = true
 			break
 		}

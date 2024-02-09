@@ -23,7 +23,7 @@ COVFUNC := $(HOMEDIR)/covfunc.txt  # coverage profile information for each funct
 COVHTML := $(HOMEDIR)/covhtml.html # HTML representation of coverage profile
 
 # versions
-VERSION := v1.4.8
+VERSION := v1.5.4
 FELIX_VERSION := v3.5.8
 K8S_VERSION := 1.18.9
 
@@ -47,10 +47,10 @@ PUSH_CNI_IMAGE_FLAGS = --push
 all: prepare compile
 
 fmt:  ## Run go fmt against code.
-	$(GO) fmt $(shell go list ./... | grep -v /vendor/)
+	$(GO) fmt $(shell $(GO) list ./... | grep -v /vendor/)
 
 vet: ## Run go vet against code.
-	$(GO) vet $(shell go list ./... | grep -v /vendor/)
+	$(GO) vet $(shell $(GO) list ./... | grep -v /vendor/)
 
 # set proxy env
 set-env:
@@ -68,7 +68,7 @@ gomod: set-env
 outdir: 
 	mkdir -p $(OUTDIR)/cni-bin
 # Compile all cni plug-ins
-cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni
+cni_target := eni-ipam ipvlan macvlan bandwidth ptp sysctl unnumbered-ptp crossvpc-eni rdma
 $(cni_target): fmt outdir
 	@echo "===> Building cni $@ <==="
 	$(GOBUILD) $(GOLDFLAGS) $(GOGCFLAGS) -o $(HOMEDIR)/$@ $(HOMEDIR)/cni/$@

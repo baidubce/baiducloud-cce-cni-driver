@@ -61,6 +61,36 @@ type WorkloadEndpointList struct {
 }
 
 // +genclient
+// +genclient:noStatus
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type MultiIPWorkloadEndpoint struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	NodeName          string                        `json:"nodeName"`
+	InstanceID        string                        `json:"instanceID"`
+	Type              string                        `json:"type"` //类型，目前只有一种：Roce
+	Spec              []MultiIPWorkloadEndpointSpec `json:"spec,omitempty"`
+}
+
+type MultiIPWorkloadEndpointSpec struct {
+	EniID       string      `json:"eniID"`
+	ContainerID string      `json:"containerID"`
+	IP          string      `json:"ip,omitempty"`
+	Mac         string      `json:"mac,omitempty"`
+	UpdateAt    metav1.Time `json:"updateAt"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type MultiIPWorkloadEndpointList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+
+	Items []MultiIPWorkloadEndpoint `json:"items"`
+}
+
+// +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 type IPPool struct {
@@ -220,22 +250,60 @@ type CrossVPCEni struct {
 }
 
 type CrossVPCEniSpec struct {
-	UserID           string   `json:"userID,omitempty"`
-	SubnetID         string   `json:"subnetID,omitempty"`
+	// UserID is the id of the user which this eni belongs to
+	UserID string `json:"userID,omitempty"`
+
+	// SubnetID is id of the subnet where this eni is created
+	SubnetID string `json:"subnetID,omitempty"`
+
+	// SecurityGroupIDs is the list of security groups that are bound to eni
 	SecurityGroupIDs []string `json:"securityGroupIDs,omitempty"`
-	VPCCIDR          string   `json:"vpcCidr,omitempty"`
-	PrivateIPAddress string   `json:"privateIPAddress,omitempty"`
-	BoundInstanceID  string   `json:"boundInstanceID,omitempty"`
+
+	// VPCCIDR is cidr of the vpc where this eni is created
+	VPCCIDR string `json:"vpcCidr,omitempty"`
+
+	// PrivateIPAddress is the private ip address to create an eni
+	PrivateIPAddress string `json:"privateIPAddress,omitempty"`
+
+	// BoundInstanceID is instance id of the node where this eni will be attached
+	BoundInstanceID string `json:"boundInstanceID,omitempty"`
+
+	// DefaultRouteInterfaceDelegation specifies the default route interface type
+	//
+	// +kubebuilder:validation:Enum=eni
+	// +kubebuilder:validation:Optional
+	DefaultRouteInterfaceDelegation string `json:"defaultRouteInterfaceDelegation,omitempty"`
+
+	// DefaultRouteExcludedCidrs is the cidrs excluded from default route
+	//
+	// +kubebuilder:validation:Optional
+	DefaultRouteExcludedCidrs []string `json:"defaultRouteExcludedCidrs,omitempty"`
 }
 
+// CrossVPCEniStatus defines the observed state of CrossVPCEni
 type CrossVPCEniStatus struct {
-	EniID               string                 `json:"eniID,omitempty"`
-	EniStatus           EniStatus              `json:"eniStatus,omitempty"`
-	PrimaryIPAddress    string                 `json:"primaryIPAddress,omitempty"`
-	MacAddress          string                 `json:"macAddress,omitempty"`
-	VPCID               string                 `json:"vpcID,omitempty"`
-	InvolvedContainerID string                 `json:"involvedContainerID,omitempty"`
-	Conditions          []CrossVPCEniCondition `json:"conditions,omitempty"`
+	// EniID is id of this eni
+	EniID string `json:"eniID,omitempty"`
+
+	// EniStatus is the status of this eni
+	EniStatus EniStatus `json:"eniStatus,omitempty"`
+
+	// PrimaryIPAddress is the primary ip address of this eni
+	PrimaryIPAddress string `json:"primaryIPAddress,omitempty"`
+
+	// MacAddress is the hardware address of this eni
+	MacAddress string `json:"macAddress,omitempty"`
+
+	// VPCID is the vpc id of this eni
+	VPCID string `json:"vpcID,omitempty"`
+
+	//  InvolvedContainerID is the infra container id of this eni
+	InvolvedContainerID string `json:"involvedContainerID,omitempty"`
+
+	// Conditions is the conditions of this eni
+	//
+	// +kubebuilder:validation:MaxItems=10
+	Conditions []CrossVPCEniCondition `json:"conditions,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

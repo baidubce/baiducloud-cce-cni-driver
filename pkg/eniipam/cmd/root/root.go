@@ -41,6 +41,7 @@ import (
 	bbcipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bbc"
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	eniipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
+	roceipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/roce"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
@@ -185,6 +186,19 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			log.Fatalf(ctx, "failed to create cross vpc eni ipamd: %v", err)
 		}
 
+		roceipamd, err := roceipam.NewIPAM(
+			kubeClient,
+			crdClient,
+			bceClient,
+			opts.ResyncPeriod,
+			opts.ENISyncPeriod,
+			opts.GCPeriod,
+			opts.Debug,
+		)
+		if err != nil {
+			log.Fatalf(ctx, "failed to create roce ipamd: %v", err)
+		}
+
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
 
 		switch {
@@ -198,6 +212,8 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 					log.Fatalf(ctx, "eni ipamd failed to run: %v", err)
 				}
 			}()
+		case types.IsCCECNIModeBasedOnVPCRoute(opts.CNIMode):
+			ipamds = [2]ipam.Interface{}
 		default:
 			log.Fatalf(ctx, "unsupported cni mode: %v", opts.CNIMode)
 		}
@@ -213,10 +229,20 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			}
 		}
 
+		if roceipamd != nil {
+			go func(roceipamd ipam.RoceInterface) {
+				ctx := log.NewContext()
+				if err := roceipamd.Run(ctx, opts.stopCh); err != nil {
+					log.Fatalf(ctx, "roce ipamd failed to run: %v", err)
+				}
+			}(roceipamd)
+		}
+
 		ipamGrpcBackend := grpc.New(
 			ipamds[0],
 			ipamds[1],
 			eniipamd,
+			roceipamd,
 			opts.Port,
 			opts.AllocateIPConcurrencyLimit,
 			opts.ReleaseIPConcurrencyLimit,

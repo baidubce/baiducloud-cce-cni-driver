@@ -23,7 +23,7 @@ rules:
     verbs: [ "get", "watch", "list", "update", "create", "patch" ]
   - apiGroups: ["cce.io"]
     resources:
-      ["workloadendpoints", "ippools", "ippools/status", "subnets", "subnets/status", "crossvpcenis", "crossvpcenis/status"]
+      ["workloadendpoints", "ippools", "ippools/status", "subnets", "subnets/status", "crossvpcenis", "crossvpcenis/status","multiipworkloadendpoints"]
     verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

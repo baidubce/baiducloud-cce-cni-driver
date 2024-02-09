@@ -3,17 +3,19 @@ package rdma
 import (
 	"context"
 	"fmt"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
+	"strings"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/util"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
 )
 
@@ -57,7 +59,7 @@ func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
 			continue
 		}
 
-		resultList, listErr := ipam.iaasClient.ListEnis(ctx, ipam.vpcID, instanceID)
+		eriList, roceList, listErr := ipam.listENI(ctx, instanceID)
 		if listErr != nil {
 			log.Infof(ctx, "list eni for %s failed: %s", instanceID, listErr)
 			if cloud.IsErrorRateLimit(listErr) {
@@ -67,13 +69,14 @@ func (ipam *IPAM) gcLeakedIP(ctx context.Context) error {
 			continue
 		}
 		// get mwep by instanceID
-		ipSet, ipErr := ipam.getIPSetForNode(ctx, instanceID)
+		eriIPSet, roceIPSet, ipErr := ipam.getIPSetForNode(ctx, instanceID)
 		if ipErr != nil {
 			log.Infof(ctx, "get ip set for %s failed: %s", instanceID, ipErr)
 			continue
 		}
 		// delete eni ip when ip not in mwep
-		ipam.gcOneNodeLeakedIP(ctx, resultList, ipSet)
+		ipam.gcOneNodeLeakedIP(ctx, ipam.eriClient, eriList, eriIPSet)
+		ipam.gcOneNodeLeakedIP(ctx, ipam.roceClient, roceList, roceIPSet)
 	}
 
 	return nil
@@ -87,40 +90,60 @@ func (ipam *IPAM) listRDMANode() ([]*v1.Node, error) {
 	return ipam.kubeInformer.Core().V1().Nodes().Lister().List(nodeSelector)
 }
 
-func (ipam *IPAM) getIPSetForNode(ctx context.Context, instanceID string) (map[string]struct{}, error) {
-	// list mwep
-	mwepSelector, selectorErr := ipam.mwepListerSelector()
-	if selectorErr != nil {
-		log.Errorf(ctx, "make mwep lister selector has error: %v", selectorErr)
-		return nil, selectorErr
+func (ipam *IPAM) listENI(ctx context.Context, instanceID string) ([]client.EniResult, []client.EniResult, error) {
+	eriList, eriErr := ipam.eriClient.ListEnis(ctx, ipam.vpcID, instanceID)
+	if eriErr != nil {
+		return nil, nil, eriErr
 	}
-	mwepList, mwepErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().List(mwepSelector)
+	roceList, roceErr := ipam.roceClient.ListEnis(ctx, ipam.vpcID, instanceID)
+	if roceErr != nil {
+		return nil, nil, roceErr
+	}
+	return eriList, roceList, nil
+}
+
+func (ipam *IPAM) getIPSetForNode(ctx context.Context, instanceID string) (
+	map[string]struct{}, map[string]struct{}, error) {
+	// list mwep
+	mwepList, mwepErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().List(labels.Everything())
 	if mwepErr != nil {
 		log.Errorf(ctx, "gc: error list mwep in cluster: %v", mwepErr)
-		return nil, mwepErr
+		return nil, nil, mwepErr
 	}
 	log.Infof(ctx, "list mwepList count is %d ", len(mwepList))
 
 	// collect ip for instanceID
-	ipSet := make(map[string]struct{})
+	eriIPSet := make(map[string]struct{})
+	roceIPSet := make(map[string]struct{})
+
 	for _, mwep := range mwepList {
-		if mwep.Type != ipam.iaasClient.GetMwepType() {
-			continue
-		}
 		if mwep.InstanceID != instanceID {
 			continue
 		}
+		defaultType := mwep.Type
 		for _, spec := range mwep.Spec {
+			var ipSet map[string]struct{}
+			ipType := defaultType
+			if len(spec.Type) > 0 {
+				ipType = spec.Type
+			}
+			if strings.EqualFold(ipType, ipam.eriClient.GetMwepType()) {
+				ipSet = eriIPSet
+			} else {
+				ipSet = roceIPSet
+			}
+
 			if _, exist := ipSet[spec.IP]; exist {
 				continue
 			}
 			ipSet[spec.IP] = struct{}{}
 		}
 	}
-	return ipSet, nil
+	return eriIPSet, roceIPSet, nil
 }
 
-func (ipam *IPAM) gcOneNodeLeakedIP(ctx context.Context, resultList []client.EniResult, ipSet map[string]struct{}) {
+func (ipam *IPAM) gcOneNodeLeakedIP(ctx context.Context, iaasClient client.IaaSClient, resultList []client.EniResult,
+	ipSet map[string]struct{}) {
 	for _, eniResult := range resultList {
 		for _, privateIP := range eniResult.PrivateIPSet {
 			if privateIP.Primary {
@@ -133,7 +156,7 @@ func (ipam *IPAM) gcOneNodeLeakedIP(ctx context.Context, resultList []client.Eni
 				privateIP.PrivateIPAddress)
 
 			// delete ip
-			if err := ipam.iaasClient.DeletePrivateIP(ctx, eniResult.EniID, privateIP.PrivateIPAddress); err != nil {
+			if err := iaasClient.DeletePrivateIP(ctx, eniResult.EniID, privateIP.PrivateIPAddress); err != nil {
 				log.Errorf(ctx, "gc: failed to delete privateIP %s on %s for not found in mwep: %s",
 					privateIP.PrivateIPAddress, eniResult.EniID, err)
 			}
@@ -142,13 +165,7 @@ func (ipam *IPAM) gcOneNodeLeakedIP(ctx context.Context, resultList []client.Eni
 }
 
 func (ipam *IPAM) gcLeakedPod(ctx context.Context) error {
-	mwepSelector, selectorErr := ipam.mwepListerSelector()
-	if selectorErr != nil {
-		log.Errorf(ctx, "make mwep lister selector has error: %v", selectorErr)
-		return selectorErr
-	}
-
-	mwepList, mwepErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().List(mwepSelector)
+	mwepList, mwepErr := ipam.crdInformer.Cce().V1alpha1().MultiIPWorkloadEndpoints().Lister().List(labels.Everything())
 	if mwepErr != nil {
 		log.Errorf(ctx, "gc: error list mwep in cluster: %v", mwepErr)
 		return mwepErr

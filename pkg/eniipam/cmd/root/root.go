@@ -41,7 +41,6 @@ import (
 	bccipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/bcc"
 	eniipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/crossvpceni"
 	rdmaipam "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma"
-	rdmaclient "github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/metric"
@@ -192,24 +191,12 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 			opts.VPCID,
 			kubeClient,
 			crdClient,
-			rdmaclient.NewRoCEClient(bceClient),
+			bceClient,
 			opts.ResyncPeriod,
 			opts.GCPeriod,
 		)
 		if err != nil {
 			log.Fatalf(ctx, "failed to create bbc roce ipamd: %v", err)
-		}
-
-		eriipamd, err := rdmaipam.NewIPAM(
-			opts.VPCID,
-			kubeClient,
-			crdClient,
-			rdmaclient.NewEriClient(bceClient),
-			opts.ResyncPeriod,
-			opts.GCPeriod,
-		)
-		if err != nil {
-			log.Fatalf(ctx, "failed to create bcc roce ipamd: %v", err)
 		}
 
 		log.Infof(ctx, "cni mode is: %v", opts.CNIMode)
@@ -250,21 +237,12 @@ func runCommand(ctx context.Context, cmd *cobra.Command, args []string, opts *Op
 				}
 			}(roceipamd)
 		}
-		if eriipamd != nil {
-			go func(rdmaipamd ipam.RoceInterface) {
-				ctx := log.NewContext()
-				if err := rdmaipamd.Run(ctx, opts.stopCh); err != nil {
-					log.Fatalf(ctx, "bcc roce ipamd failed to run: %v", err)
-				}
-			}(eriipamd)
-		}
 
 		ipamGrpcBackend := grpc.New(
 			ipamds[0],
 			ipamds[1],
 			eniipamd,
 			roceipamd,
-			eriipamd,
 			opts.Port,
 			opts.AllocateIPConcurrencyLimit,
 			opts.ReleaseIPConcurrencyLimit,

@@ -148,7 +148,7 @@ func (c *Controller) SyncNode(nodeKey string, nodeLister corelisters.NodeLister)
 		}
 
 		// node exists, then ensure pool exists
-		if err = c.createOrUpdateIPPool(ctx, node); err != nil {
+		if err = c.createOrUpdateIPPool(ctx); err != nil {
 			log.Errorf(ctx, "failed to create ippool %v: %v", c.ippoolName, err)
 			return err
 		}
@@ -378,29 +378,18 @@ func (c *Controller) syncRangeSpec(ctx context.Context, node *v1.Node) error {
 }
 
 // createOrUpdateIPPool creates or updates node-level IPPool CR
-func (c *Controller) createOrUpdateIPPool(ctx context.Context, node *v1.Node) error {
+func (c *Controller) createOrUpdateIPPool(ctx context.Context) error {
 	poolName := c.ippoolName
-	nodeGVK := v1.SchemeGroupVersion.WithKind("Node")
-
-	// add owner reference to ippool object, ippool object will be deleted when node's ippool is deleted
-	ownerRefence := []metav1.OwnerReference{
-		{
-			APIVersion: nodeGVK.GroupVersion().String(),
-			Kind:       nodeGVK.Kind,
-			Name:       node.Name,
-			UID:        node.UID,
-		},
-	}
-	old, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, poolName, metav1.GetOptions{})
+	_, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Get(ctx, poolName, metav1.GetOptions{})
 	if err != nil {
 		if !kerrors.IsNotFound(err) {
 			return err
 		}
 		log.Infof(ctx, "ippool %s is not found, will create", poolName)
+
 		ippool := &v1alpha1.IPPool{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            poolName,
-				OwnerReferences: ownerRefence,
+				Name: poolName,
 			},
 			Spec: v1alpha1.IPPoolSpec{
 				NodeSelector:   fmt.Sprintf("kubernetes.io/hostname=%s", c.nodeName),
@@ -411,15 +400,8 @@ func (c *Controller) createOrUpdateIPPool(ctx context.Context, node *v1.Node) er
 			return err
 		}
 		log.Infof(ctx, "ippool %s is created successfully", poolName)
-	} else if old != nil && len(old.OwnerReferences) == 0 {
-		log.Infof(ctx, "ippool %s has no one owner, will update", poolName)
-		old.OwnerReferences = ownerRefence
-		_, err := c.crdClient.CceV1alpha1().IPPools(v1.NamespaceDefault).Update(ctx, old, metav1.UpdateOptions{})
-		if err != nil {
-			log.Errorf(ctx, "error updating ippool %v onwer: %v", poolName, err)
-			return err
-		}
 	}
+
 	return nil
 }
 

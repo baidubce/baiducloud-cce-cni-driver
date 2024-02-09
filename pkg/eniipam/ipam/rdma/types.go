@@ -28,7 +28,9 @@ type IPAM struct {
 	crdInformer   crdinformers.SharedInformerFactory
 	crdClient     versioned.Interface
 
-	iaasClient client.IaaSClient
+	//iaasClient client.IaaSClient
+	eriClient  *client.EriClient
+	roceClient *client.RoCEClient
 }
 
 var _ ipam.RoceInterface = &IPAM{}

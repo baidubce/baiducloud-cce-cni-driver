@@ -22,6 +22,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/dockershim/network"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/apis/networking/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/rpc"
 )
 
 const (
@@ -71,7 +72,8 @@ type ExclusiveEniInterface interface {
 	Run(ctx context.Context, stopCh <-chan struct{}) error
 }
 type RoceInterface interface {
-	Allocate(ctx context.Context, name, namespace, containerID string, mac string) (*v1alpha1.WorkloadEndpoint, error)
+	Allocate(ctx context.Context, name, namespace, containerID string, mac string,
+		ipType rpc.IPType) (*v1alpha1.WorkloadEndpoint, error)
 	Release(ctx context.Context, name, namespace, containerID string) (*v1alpha1.WorkloadEndpoint, error)
 	Run(ctx context.Context, stopCh <-chan struct{}) error
 	Ready(ctx context.Context) bool

@@ -44,6 +44,7 @@ func (c *EriClient) ListEnis(ctx context.Context, vpcID, instanceID string) ([]E
 		}
 
 		resultList = append(resultList, EniResult{
+			Type:         c.GetMwepType(),
 			EniID:        eniInfo.EniId,
 			MacAddress:   eniInfo.MacAddress,
 			PrivateIPSet: ips,

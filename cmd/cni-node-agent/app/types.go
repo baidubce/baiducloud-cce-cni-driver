@@ -23,6 +23,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	nodeagentconfig "github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/node-agent/v1alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
 	clientset "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/clientset/versioned"
 )
 
@@ -58,6 +59,7 @@ type nodeAgent struct {
 	crdClient   clientset.Interface
 	cloudClient cloud.Interface
 	metaClient  metadata.Interface
+	eriClient   *client.EriClient
 	broadcaster record.EventBroadcaster
 	recorder    record.EventRecorder
 	options     *Options

@@ -5,6 +5,7 @@ import (
 )
 
 type EniResult struct {
+	Type         string
 	EniID        string
 	MacAddress   string
 	PrivateIPSet []PrivateIP

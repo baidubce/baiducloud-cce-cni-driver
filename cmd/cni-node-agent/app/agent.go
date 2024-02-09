@@ -33,9 +33,11 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/bce/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/config/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/eniipam/ipam/rdma/client"
 	crdinformers "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/informers/externalversions"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/cniconf"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/eri"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/gc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/ippool"
 	ippoolctrl "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/controller/ippool"
@@ -43,7 +45,10 @@ import (
 	utilk8s "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/k8swatcher"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
+	networkutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/network"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/version"
+	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/netlink"
+	sysctlwrapper "github.com/baidubce/baiducloud-cce-cni-driver/pkg/wrapper/sysctl"
 )
 
 // NewAgentCommand creates agent command
@@ -111,11 +116,14 @@ func newNodeAgent(o *Options) (*nodeAgent, error) {
 		return nil, err
 	}
 
+	eriClient := client.NewEriClient(cloudClient)
+
 	s := &nodeAgent{
 		kubeClient:  kubeClient,
 		crdClient:   crdClient,
 		cloudClient: cloudClient,
 		metaClient:  metadata.NewClient(),
+		eriClient:   eriClient,
 		broadcaster: eventBroadcaster,
 		recorder:    recorder,
 		options:     o,
@@ -240,6 +248,21 @@ func (s *nodeAgent) run(ctx context.Context) error {
 	case types.IsCCECNIModeBasedOnBBCSecondaryIP(cniMode):
 		s.runCCEModeBasedOnBBCSecondaryIP(ctx, nodeWatcher, eniCtrl)
 	}
+
+	// eri controller
+	eriCtrl := eri.New(
+		s.metaClient,
+		s.eriClient,
+		netlinkwrapper.New(),
+		sysctlwrapper.New(),
+		networkutil.New(),
+		s.options.config.CCE.ClusterID,
+		s.options.hostName,
+		s.options.instanceID,
+		s.options.config.CCE.VPCID,
+		time.Duration(s.options.config.CCE.ENIController.ENISyncPeriod),
+	)
+	go eriCtrl.ReconcileERIs()
 
 	nodeWatcher.Run(s.options.config.Workers, wait.NeverStop)
 

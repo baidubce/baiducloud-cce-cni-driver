@@ -86,6 +86,7 @@ type MultiIPWorkloadEndpoint struct {
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 	NodeName          string                        `json:"nodeName"`
 	InstanceID        string                        `json:"instanceID"`
+	ContainerID       string                        `json:"containerID"`
 	Type              string                        `json:"type"` //类型，取值：roce, eri
 	Spec              []MultiIPWorkloadEndpointSpec `json:"spec,omitempty"`
 }
@@ -96,6 +97,7 @@ type MultiIPWorkloadEndpointSpec struct {
 	IP          string      `json:"ip,omitempty"`
 	Mac         string      `json:"mac,omitempty"`
 	UpdateAt    metav1.Time `json:"updateAt"`
+	Type        string      `json:"type"` //类型，取值：roce, eri
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

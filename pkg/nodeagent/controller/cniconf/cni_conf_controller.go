@@ -40,7 +40,6 @@ import (
 	v1alpha1network "github.com/baidubce/baiducloud-cce-cni-driver/pkg/generated/listers/networking/v1alpha1"
 	utilenv "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/env"
 	utilpool "github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/ippool"
-	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/nodeagent/util/roce"
 	fsutil "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/fs"
 	"github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/kernel"
 	log "github.com/baidubce/baiducloud-cce-cni-driver/pkg/util/logger"
@@ -53,8 +52,14 @@ const (
 	forceRecreatePeriod         = 60 * time.Second
 
 	pluginsConfigKey = "plugins"
-	eriVifFeatures   = "elastic_rdma"
 	localDNSAddress  = "169.254.20.10"
+)
+
+var (
+	roceVF = map[string]struct{}{
+		"elastic_rdma": {},
+		"rdma_roce":    {},
+	}
 )
 
 func New(
@@ -74,7 +79,6 @@ func New(
 		netutil:       networkutil.New(),
 		kernelhandler: kernel.NewLinuxKernelHandler(),
 		filesystem:    fsutil.DefaultFS{},
-		roceProbe:     roce.ProbeNew(),
 	}
 }
 
@@ -283,11 +287,6 @@ func (c *Controller) fillCNIConfigData(ctx context.Context) (*CNIConfigData, err
 			return nil, err
 		}
 
-		// if ippool has no owner reference that means it is a expired object
-		if len(ipPool.OwnerReferences) == 0 {
-			return nil, fmt.Errorf("expired object: ippool object %s have no one owner reference", ipPool.Name)
-		}
-
 		if len(ipPool.Spec.IPv4Ranges) != 0 {
 			configData.Subnet = ipPool.Spec.IPv4Ranges[0].CIDR
 		} else if len(ipPool.Spec.IPv6Ranges) != 0 {
@@ -379,93 +378,14 @@ func renderTemplate(ctx context.Context, tplContent string, dataObject *CNIConfi
 }
 
 func (c *Controller) patchCNIConfig(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	if dataObject.InstanceType == string(metadata.InstanceTypeExBBC) {
-		return c.patchCNIConfigForMellanox8(ctx, oriYamlStr, dataObject)
+	// has roce?
+	if c.hasRoCE(ctx) {
+		return c.patchCNIConfigForRoCE(ctx, oriYamlStr, dataObject)
 	}
-
-	if dataObject.InstanceType == string(metadata.InstanceTypeExBCC) {
-		return c.patchCNIConfigForBCCRDMA(ctx, oriYamlStr, dataObject)
-	}
-
-	log.Errorf(ctx, "unknown instance type: %s", dataObject.InstanceType)
 	return oriYamlStr, nil
 }
 
-func (c *Controller) patchCNIConfigForMellanox8(ctx context.Context, oriYamlStr string, dataObject *CNIConfigData) (string, error) {
-	var bHasRoCEMellanox8 = false
-	var b bool
-	var key string
-	var err error
-	//	var i int
-	var m map[string]interface{}
-	var mR map[string]interface{}
-	var buf []byte
-	//	var arrPlugins ([]interface{})
-
-	//for RoCEMellanox8
-	if c.roceProbe.HasRoCEMellanox8Available(ctx) {
-		bHasRoCEMellanox8 = true
-	}
-	//if etc...
-	//exit if no need to update
-	if !bHasRoCEMellanox8 {
-		log.Infof(ctx, "No RoCE Mellanox8 Available. bHasRoCEMellanox8:[%t]", bHasRoCEMellanox8)
-		goto unchanged
-	}
-
-	//  log.Infof("arrPlugins:[%+v]", arrPlugins);
-	//do Update
-	m = make(map[string]interface{})
-	err = json.Unmarshal([]byte(oriYamlStr), &m)
-	if err != nil {
-		log.Errorf(ctx, "oriYamlStr: [%s]", oriYamlStr)
-		return "", err
-	}
-
-	key = pluginsConfigKey /** optional */
-	if _, b = m[key]; !b {
-		log.Errorf(ctx, ": ", "")
-		goto unchanged
-	}
-	if _, b = m[key].([]interface{}); !b {
-		log.Errorf(ctx, ": ", "")
-		goto unchanged
-	}
-	//	arrPlugins = m[key].([]interface{})
-
-	//insert RoCEMellanox8 section
-	mR = make(map[string]interface{})
-	mR["type"] = "rdma"
-	mR["ipam"] = make(map[string]interface{})
-	mR["ipam"].(map[string]interface{})["endpoint"] = dataObject.IPAMEndPoint
-	mR["instanceType"] = dataObject.InstanceType
-
-	//arrPlugins = append(arrPlugins, mR)
-	m[key] = append(m[key].([]interface{}), mR)
-	log.Errorf(ctx, "m: [%+v]", m)
-
-	buf, err = json.MarshalIndent(&m, "", "  ")
-	return string(buf), nil
-
-unchanged:
-	return oriYamlStr, nil
-}
-
-func (c *Controller) patchCNIConfigForBCCRDMA(ctx context.Context, oriYamlStr string,
-	dataObject *CNIConfigData) (string, error) {
-	hasERI, eriErr := c.hasERI(ctx)
-	// is eri?
-	if eriErr != nil {
-		log.Errorf(ctx, "check eri failed: %s", eriErr)
-	}
-	if hasERI {
-		return c.patchCNIConfigForERI(ctx, oriYamlStr, dataObject)
-	}
-	// is hpc?
-	return c.patchCNIConfigForMellanox8(ctx, oriYamlStr, dataObject)
-}
-
-func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string,
+func (c *Controller) patchCNIConfigForRoCE(ctx context.Context, oriYamlStr string,
 	dataObject *CNIConfigData) (string, error) {
 	// patch eri info to cni config
 	oriConfigMap := make(map[string]interface{})
@@ -479,7 +399,7 @@ func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string
 	}
 
 	eriConfigMap := map[string]interface{}{
-		"type": "eri",
+		"type": "roce",
 		"ipam": map[string]string{
 			"endpoint": dataObject.IPAMEndPoint,
 		},
@@ -491,25 +411,26 @@ func (c *Controller) patchCNIConfigForERI(ctx context.Context, oriYamlStr string
 	return string(newConfig), nil
 }
 
-func (c *Controller) hasERI(ctx context.Context) (bool, error) {
+func (c *Controller) hasRoCE(ctx context.Context) bool {
 	// list network interface macs
 	macList, macErr := c.metaClient.ListMacs()
 	if macErr != nil {
-		return false, macErr
+		log.Errorf(ctx, "list mac failed: %w", macErr)
+		return false
 	}
 
 	// check whether there is ERI
 	for _, macAddress := range macList {
 		vifFeatures, vifErr := c.metaClient.GetVifFeatures(macAddress)
 		if vifErr != nil {
-			log.Errorf(ctx, "get mac %s vif features failed: %s", macAddress, vifErr)
+			log.Errorf(ctx, "get mac %s vif features failed: %w", macAddress, vifErr)
 			continue
 		}
-		if vifFeatures == eriVifFeatures {
-			return true, nil
+		if _, ok := roceVF[vifFeatures]; ok {
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func canUseIPVlan(kernelVersion *version.Version, kernelModules []string) bool {

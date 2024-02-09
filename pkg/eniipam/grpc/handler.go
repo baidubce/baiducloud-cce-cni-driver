@@ -47,7 +47,6 @@ type ENIIPAMGrpcServer struct {
 	bbcipamd       ipam.Interface
 	eniipamd       ipam.ExclusiveEniInterface
 	roceipamd      ipam.RoceInterface
-	eriipamd       ipam.RoceInterface
 	port           int
 	allocWorkers   int
 	releaseWorkers int
@@ -60,7 +59,6 @@ func New(
 	bbcipam ipam.Interface,
 	eniipam ipam.ExclusiveEniInterface,
 	roceipamd ipam.RoceInterface,
-	eriipamd ipam.RoceInterface,
 	port int,
 	allocLimit int,
 	releaseLimit int,
@@ -79,7 +77,6 @@ func New(
 		bbcipamd:  bbcipam,
 		eniipamd:  eniipam,
 		roceipamd: roceipamd,
-		eriipamd:  eriipamd,
 		port:      port,
 		debug:     debug,
 	}
@@ -170,10 +167,8 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 
 	if req.IPType == rpc.IPType_CrossVPCENIIPType {
 		crossVpcEniIpamd = cb.eniipamd
-	} else if req.IPType == rpc.IPType_RoceENIMultiIPType {
+	} else if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
 		multiIPIpamd = cb.roceipamd
-	} else if req.IPType == rpc.IPType_ERIENIMultiIPType {
-		multiIPIpamd = cb.eriipamd
 	} else {
 		ipamd = cb.getIpamByIPType(ctx, req.IPType)
 	}
@@ -212,7 +207,7 @@ func (cb *ENIIPAMGrpcServer) AllocateIP(ctx context.Context, req *rpc.AllocateIP
 	} else {
 		if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
 			mac := req.GetENIMultiIP().Mac
-			wep, err = multiIPIpamd.Allocate(ctx, name, namespace, containerID, mac)
+			wep, err = multiIPIpamd.Allocate(ctx, name, namespace, containerID, mac, req.IPType)
 		} else {
 			wep, err = ipamd.Allocate(ctx, name, namespace, containerID)
 		}
@@ -308,10 +303,8 @@ func (cb *ENIIPAMGrpcServer) ReleaseIP(ctx context.Context, req *rpc.ReleaseIPRe
 	)
 	if req.IPType == rpc.IPType_CrossVPCENIIPType {
 		crossVpcEniIpamd = cb.eniipamd
-	} else if req.IPType == rpc.IPType_RoceENIMultiIPType {
+	} else if req.IPType == rpc.IPType_RoceENIMultiIPType || req.IPType == rpc.IPType_ERIENIMultiIPType {
 		multiIPIpamd = cb.roceipamd
-	} else if req.IPType == rpc.IPType_ERIENIMultiIPType {
-		multiIPIpamd = cb.eriipamd
 	} else {
 		ipamd = cb.getIpamByIPType(ctx, req.IPType)
 	}

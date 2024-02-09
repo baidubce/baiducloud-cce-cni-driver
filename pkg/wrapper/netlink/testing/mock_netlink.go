@@ -234,6 +234,35 @@ func (mr *MockInterfaceMockRecorder) NeighAdd(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NeighAdd", reflect.TypeOf((*MockInterface)(nil).NeighAdd), arg0)
 }
 
+// NeighDel mocks base method.
+func (m *MockInterface) NeighDel(arg0 *netlink.Neigh) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NeighDel", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NeighDel indicates an expected call of NeighDel.
+func (mr *MockInterfaceMockRecorder) NeighDel(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NeighDel", reflect.TypeOf((*MockInterface)(nil).NeighDel), arg0)
+}
+
+// NeighList mocks base method.
+func (m *MockInterface) NeighList(arg0, arg1 int) ([]netlink.Neigh, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NeighList", arg0, arg1)
+	ret0, _ := ret[0].([]netlink.Neigh)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// NeighList indicates an expected call of NeighList.
+func (mr *MockInterfaceMockRecorder) NeighList(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NeighList", reflect.TypeOf((*MockInterface)(nil).NeighList), arg0, arg1)
+}
+
 // NewRule mocks base method.
 func (m *MockInterface) NewRule() *netlink.Rule {
 	m.ctrl.T.Helper()

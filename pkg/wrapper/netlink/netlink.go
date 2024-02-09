@@ -69,6 +69,9 @@ type Interface interface {
 	RuleList(family int) ([]netlink.Rule, error)
 	// LinkSetMTU is equivalent to `ip link set dev $link mtu $mtu`
 	LinkSetMTU(link netlink.Link, mtu int) error
+
+	NeighDel(neigh *netlink.Neigh) error
+	NeighList(linkIndex, family int) ([]netlink.Neigh, error)
 }
 
 // client is the implementation of Interface
@@ -174,4 +177,11 @@ func (*client) RuleList(family int) ([]netlink.Rule, error) {
 
 func (*client) LinkSetMTU(link netlink.Link, mtu int) error {
 	return netlink.LinkSetMTU(link, mtu)
+}
+
+func (*client) NeighDel(neigh *netlink.Neigh) error {
+	return netlink.NeighDel(neigh)
+}
+func (*client) NeighList(linkIndex, family int) ([]netlink.Neigh, error) {
+	return netlink.NeighList(linkIndex, family)
 }

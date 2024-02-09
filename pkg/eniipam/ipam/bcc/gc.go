@@ -166,9 +166,9 @@ func (ipam *IPAM) buildPossibleLeakedIPCache(ctx context.Context, podIPSet, rese
 						delete(ipam.possibleLeakedIPCache, key)
 						log.Warningf(ctx, "gc: remove IP %v on eni %v from possibleLeakedIPCache", ip.PrivateIpAddress, eni.EniId)
 					} else {
-						// If the eni network card bound to the IP address changes,
-						// but the private IP of eni has not been synchronized yet,
-						// and the IP has been allocated to the new Pod, the garbage
+						// If the eni network card bound to the IP address changes, 
+						// but the private IP of eni has not been synchronized yet, 
+						// and the IP has been allocated to the new Pod, the garbage 
 						// collection process for the IP should be cancelled
 						for tmpKey := range ipam.possibleLeakedIPCache {
 							if tmpKey.ipAddr == ip.PrivateIpAddress {

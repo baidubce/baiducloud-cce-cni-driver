@@ -64,46 +64,46 @@ import (
 
 var (
 	stdinData = `
-	{
-		"cniVersion":"0.3.1",
-		"name":"cce-cni",
-		"type":"eri",
-		"ipam":{
-			"endpoint":"172.25.66.38:80"
-		},
-		"prevResult": {
-			"ips": [
-				{
-				  "address": "10.1.0.5/16",
-				  "gateway": "10.1.0.1",
-				  "interface": 2
-				}
-			],
-			"routes": [
-			  {
-				"dst": "0.0.0.0/0"
-			  }
-			],
-			"interfaces": [
-				{
-					"name": "cni0",
-					"mac": "00:11:22:33:44:55"
-				},
-				{
-					"name": "veth3243",
-					"mac": "55:44:33:22:11:11"
-				},
-				{
-					"name": "eth0",
-					"mac": "00:11:22:33:44:66",
-					"sandbox": "/var/run/netns/blue"
-				}
-			],
-			"dns": {
-			  "nameservers": [ "10.1.0.1" ]
+{
+    "cniVersion":"0.3.1",
+    "name":"cce-cni",
+    "type":"eri",
+	"ipam":{
+        "endpoint":"172.25.66.38:80"
+    },
+	"prevResult": {
+		"ips": [
+			{
+			  "address": "10.1.0.5/16",
+			  "gateway": "10.1.0.1",
+			  "interface": 2
 			}
+		],
+		"routes": [
+		  {
+			"dst": "0.0.0.0/0"
+		  }
+		],
+		"interfaces": [
+			{
+				"name": "cni0",
+				"mac": "00:11:22:33:44:55"
+			},
+			{
+				"name": "veth3243",
+				"mac": "55:44:33:22:11:11"
+			},
+			{
+				"name": "eth0",
+				"mac": "00:11:22:33:44:66",
+				"sandbox": "/var/run/netns/blue"
+			}
+		],
+		"dns": {
+		  "nameservers": [ "10.1.0.1" ]
 		}
-	}`
+	}
+}`
 	envArgs = `IgnoreUnknown=1;K8S_POD_NAMESPACE=default;K8S_POD_NAME=busybox;K8S_POD_INFRA_CONTAINER_ID=xxxxx`
 )
 

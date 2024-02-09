@@ -39,6 +39,7 @@ func (c *RoCEClient) ListEnis(ctx context.Context, _, instanceID string) ([]EniR
 		}
 
 		resultList = append(resultList, EniResult{
+			Type:         c.GetMwepType(),
 			EniID:        hpcEni.EniID,
 			MacAddress:   hpcEni.MacAddress,
 			PrivateIPSet: ips,

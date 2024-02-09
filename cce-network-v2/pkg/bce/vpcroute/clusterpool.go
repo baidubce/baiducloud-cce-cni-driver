@@ -279,10 +279,12 @@ func (operator *VPCRouteOperator) updateVPCRouteStatus(scopedLog *logrus.Entry, 
 			newObj.Status.IPAM.VPCRouteCIDRs[target] != ipamTypes.VPCRouteStatusReleased {
 			scopedLog.WithField("target", target).Info("released vpc route")
 			newObj.Status.IPAM.VPCRouteCIDRs[target] = ipamTypes.VPCRouteStatusReleased
-			if newObj.DeletionTimestamp != nil {
-				delete(newObj.Status.IPAM.VPCRouteCIDRs, target)
-				scopedLog.WithField("target", target).Info("delete vpc route status success")
-			}
+		}
+
+		// remove vpc route record from nrs status
+		if newObj.DeletionTimestamp != nil && newObj.Status.IPAM.VPCRouteCIDRs[target] == ipamTypes.VPCRouteStatusReleased  {
+			delete(newObj.Status.IPAM.VPCRouteCIDRs, target)
+			scopedLog.WithField("target", target).Info("delete vpc route from deleting nrs status")
 		}
 	}
 
@@ -292,7 +294,7 @@ func (operator *VPCRouteOperator) updateVPCRouteStatus(scopedLog *logrus.Entry, 
 			scopedLog.WithError(err).WithField("method", "Update").Error("failed to update netresourceset status")
 			return false, err
 		}
-		scopedLog.Debug("update status of netresourceset success")
+		scopedLog.Info("update status of netresourceset success")
 	}
 	return true, nil
 }

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 
@@ -144,16 +145,12 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 
 		newNodeName = resource.Spec.Network.IPAllocation.NodeIP
 
-		newObj = resource.DeepCopy()
+		newObj    = resource.DeepCopy()
+		newStatus = &newObj.Status
+		returnObj *ccev2.CCEEndpoint
 	)
 
-	defer func() {
-		if err == nil {
-			manager.localPool.addEndpointAddress(newObj)
-		}
-		manager.recordEvent(metrics.LabelEventMethodUpdate, start, err, newObj)
-	}()
-
+	defer manager.handlerUpdateResult(ctx, start, logEntry, err, newObj, resource)
 	// reuse ip when pod rescheduler or recreate
 	if (resource.Status.Networking != nil &&
 		resource.Status.Networking.NodeIP == newNodeName &&
@@ -165,7 +162,6 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 
 	logEntry.Debug("received to update delegate cep")
 
-	var newStatus = &newObj.Status
 	if newStatus.Networking == nil {
 		newStatus.Networking = &ccev2.EndpointNetworking{
 			NodeIP: newNodeName,
@@ -194,13 +190,83 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 
 update:
 	// update to k8s apiserver
-	newObj, err = manager.k8sAPI.UpdateStatus(newObj)
+	// Note that if writing to apiserver is unsuccessful, it may lead to local IP leakage
+	err = wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (bool, error) {
+		// get the latest cep
+		returnObj, err = manager.k8sAPI.Lister().CCEEndpoints(newObj.Namespace).Get(newObj.Name)
+		if err != nil {
+			return false, fmt.Errorf("get cep %s/%s failed: %v", newObj.Namespace, newObj.Name, err)
+		}
+		returnObj = returnObj.DeepCopy()
+
+		// Force the latest state to be written to the object
+		returnObj.Status = *newStatus
+		returnObj, err = manager.k8sAPI.UpdateStatus(newObj)
+		// retry if conflict
+		if errors.IsConflict(err) || errors.IsResourceExpired(err) {
+			return false, nil
+		}
+		if err != nil {
+			logEntry.WithError(err).Errorf("update cep failed")
+			return false, err
+		}
+
+		return true, err
+	})
 	if err != nil {
 		logEntry.WithError(err).Errorf("update cep failed")
 		return err
 	}
 	logEntry.Infof("success to update cep")
+	newObj = returnObj
 	return err
+}
+
+// handlerUpdateResult 是EndpointManager结构体的一个方法，用于处理更新结果的回调函数
+func (manager *EndpointManager) handlerUpdateResult(ctx context.Context, start time.Time, logEntry *logrus.Entry, err error, newObj, oldObj *ccev2.CCEEndpoint) {
+	// case 1: successfully assigned IP, and the new and old IPs are different
+	// The remote IP has been released, so the local IP is directly released
+	if err == nil {
+		manager.localPool.addEndpointAddress(newObj)
+
+		if oldObj.Status.Networking != nil && len(oldObj.Status.Networking.Addressing) > 0 {
+			var oldIPs = map[string]*ccev2.AddressPair{}
+			for i := range oldObj.Status.Networking.Addressing {
+				oldIPs[oldObj.Status.Networking.Addressing[i].IP] = oldObj.Status.Networking.Addressing[i]
+			}
+			for _, existingAddr := range newObj.Status.Networking.Addressing {
+				if _, ok := oldIPs[existingAddr.IP]; ok {
+					delete(oldIPs, existingAddr.IP)
+				}
+			}
+			for _, oldAddr := range oldIPs {
+				manager.localPool.releaseLocalIPs(oldAddr)
+			}
+		}
+	} else {
+		// case 2: failed to assign the new IP, just release the new IPs
+		if oldObj.Status.Networking == nil || len(oldObj.Status.Networking.Addressing) == 0 {
+			operation, err := manager.directIPAllocator.NodeEndpoint(newObj)
+			if err != nil {
+				logEntry.Errorf("can not gc the allocated failture, failed to get node endpoint %v", err)
+			}
+			action := &DirectIPAction{
+				NodeName:   newObj.Spec.Network.IPAllocation.NodeIP,
+				Owner:      newObj.Namespace + "/" + newObj.Name,
+				Addressing: newObj.Status.Networking.Addressing,
+			}
+			err = operation.DeleteIP(ctx, action)
+			if err != nil {
+				logEntry.Errorf("can not gc the allocated failture, failed to delete ip %v", err)
+			}
+			if newObj.Status.Networking != nil && len(newObj.Status.Networking.Addressing) > 0 {
+				for _, newAddr := range newObj.Status.Networking.Addressing {
+					manager.localPool.releaseLocalIPs(newAddr)
+				}
+			}
+		}
+	}
+	manager.recordEvent(metrics.LabelEventMethodUpdate, start, err, newObj)
 }
 
 // Delete removes the endpoint from the endpointMap

@@ -2,6 +2,9 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.8 (2023/08/07)
+#### 2.8.5 [20241017]
+1. [优化] 优化了 psts 分配 IP 时失败的回收机制，避免出现 IP 泄露
+2. [BUGFIX] 修复 vpc 路由模式下 nrs 标记 deleteTimeStamp 之后，由于 vpc 路由状态处于 released，nrs 的 finallizer 无法回收的问题
 #### 2.8.4 [20230914]
 1. [BUG] vpc-eni，修复在 centos 8等使用 NetworkManager 的操作系统发行版，当 ENI 网卡被重命名后，DHCP 删除 IP 导致 ENI 无法就绪的问题
 #### 2.8.3 [20230904]

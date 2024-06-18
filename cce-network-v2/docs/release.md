@@ -2,6 +2,8 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.10 (2024/03/05)
+### 2.10.3 [20240425]
+1. [BUG] 修复 ResyncController 已经添加EventHandler 时，informer 重复添加处理器, psts 会收到重复事件会导致 IP 地址冲突的问题
 ### 2.10.2 [20240403]
 1. [BUG] 修复 vpc-route 模式下，重写 cni 文件错误问题
 

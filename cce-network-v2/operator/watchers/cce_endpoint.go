@@ -79,9 +79,7 @@ func StartSynchronizingCCEEndpoint(ctx context.Context, endpointManager Endpoint
 	}
 
 	controller := cm.NewResyncController("cce-endpoint-watcher", int(operatorOption.Config.ResourceResyncWorkers), k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), endpointManagerSyncHandler)
-	k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer().AddEventHandler(controller)
 	controller.RunWithResync(operatorOption.Config.ResourceResyncInterval)
-
 	return nil
 }
 

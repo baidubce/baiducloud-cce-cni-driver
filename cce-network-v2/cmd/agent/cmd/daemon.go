@@ -78,12 +78,18 @@ type Daemon struct {
 	// programs.
 	compilationMutex *lock.RWMutex
 	mtuConfig        mtu.Configuration
+	rdmaMtuConfig    mtu.Configuration
 
 	// nodeDiscovery defines the node discovery logic of the agent
 	nodeDiscovery *nodediscovery.NodeDiscovery
 
+	// nodeRDMADiscovery defines the node RDMADiscovery logic of the agent
+	rdmaDiscovery *nodediscovery.RdmaDiscovery
+
 	// ipam is the IP address manager of the agent
 	ipam ipam.CNIIPAMServer
+
+	rdmaIpam map[string]ipam.CNIIPAMServer
 
 	// enim is the eni manager of the agent
 	enim enim.ENIManagerServer
@@ -91,7 +97,8 @@ type Daemon struct {
 	// endpointManager is the endpoint manager of the agent
 	endpointAPIHandler *endpoint.EndpointAPIHandler
 
-	netConf *cnitypes.NetConf
+	netConf     *cnitypes.NetConf
+	rdmaNetConf *cnitypes.NetConf
 
 	k8sWatcher *watchers.K8sWatcher
 
@@ -153,9 +160,11 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	cleaner.SetCancelFunc(cancel)
 
 	var (
-		err           error
-		netConf       *cnitypes.NetConf
-		configuredMTU = option.Config.MTU
+		err              error
+		netConf          *cnitypes.NetConf
+		rdmaNetConf      *cnitypes.NetConf
+		configuredMTU    = option.Config.MTU
+		configureRdmaMTU = option.Config.MTU
 	)
 
 	bootstrapStats.daemonInit.Start()
@@ -181,7 +190,10 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		externalIP = node.GetIPv6()
 	}
 
-	var mtuConfig mtu.Configuration
+	var (
+		mtuConfig     mtu.Configuration
+		rdmaMtuConfig mtu.Configuration
+	)
 	// ExternalIP could be nil but we are covering that case inside NewConfiguration
 	mtuConfig = mtu.NewConfiguration(
 		0,
@@ -189,6 +201,14 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		false,
 		false,
 		configuredMTU,
+		externalIP,
+	)
+	rdmaMtuConfig = mtu.NewConfiguration(
+		0,
+		false,
+		false,
+		false,
+		configureRdmaMTU,
 		externalIP,
 	)
 
@@ -200,6 +220,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	}
 
 	nd := nodediscovery.NewNodeDiscovery(nodeMngr, mtuConfig, netConf)
+	rd := nodediscovery.NewRdmaDiscovery(nodeMngr, rdmaMtuConfig, rdmaNetConf)
 
 	d := Daemon{
 		ctx:              ctx,
@@ -207,8 +228,11 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		buildEndpointSem: semaphore.NewWeighted(int64(numWorkerThreads())),
 		compilationMutex: new(lock.RWMutex),
 		netConf:          netConf,
+		rdmaNetConf:      rdmaNetConf,
 		mtuConfig:        mtuConfig,
+		rdmaMtuConfig:    rdmaMtuConfig,
 		nodeDiscovery:    nd,
+		rdmaDiscovery:    rd,
 		apiLimiterSet:    apiLimiterSet,
 		controllers:      controller.NewManager(),
 		nodeAddressing:   addr,
@@ -221,6 +245,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 
 	// register the node discovery with the k8s watcher
 	d.nodeDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
+	d.rdmaDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
 	d.k8sWatcher.NodeChain.Register(d.nodeDiscovery)
 
 	bootstrapStats.daemonInit.End(true)
@@ -282,6 +307,13 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	d.configureIPAM()
 	d.startIPAM()
 
+	d.configureRDMAIPAM()
+	d.startRDMAIPAM()
+
+	for key, ri := range d.rdmaIpam {
+		debug.RegisterStatusObject("rdmaIpam["+key+"]", ri)
+	}
+
 	// confugure and start ENIM
 	d.configureENIM()
 	d.startENIM()
@@ -291,6 +323,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 
 	// Must occur after d.allocateIPs(), see GH-14245 and its fix.
 	d.nodeDiscovery.StartDiscovery()
+	d.rdmaDiscovery.StartDiscovery()
 
 	// Annotation of the k8s node must happen after discovery of the
 	// PodCIDR range and allocation of the health IPs.
@@ -329,6 +362,9 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		option.Config.IPAM == ipamOption.IPAMClusterPoolV2 ||
 		option.Config.IPAM == ipamOption.IPAMPrivateCloudBase {
 		d.ipam.RestoreFinished()
+		for _, ri := range d.rdmaIpam {
+			ri.RestoreFinished()
+		}
 	}
 	return &d, nil
 }

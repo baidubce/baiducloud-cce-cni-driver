@@ -28,6 +28,8 @@ const (
 	IPAMVpcEni = "vpc-eni"
 	// IPAMVpcRoute is the value to select the VPC Router IPAM plugin for option.IPAM
 	IPAMVpcRoute = "vpc-route"
+	// IPAMRdma is the value to select the RDMA-Backed IPAM plugin for option.IPAM
+	IPAMRdma = "rdma"
 
 	// IPAMClusterPool is the value to select the cluster pool mode for
 	// option.IPAM

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baidubce/bce-sdk-go/services/vpc"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -30,6 +31,7 @@ import (
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
@@ -42,7 +44,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	"github.com/baidubce/bce-sdk-go/services/vpc"
 )
 
 const (
@@ -126,25 +127,21 @@ func (operator *VPCRouteOperator) doSyncVPCRouteRules(ctx context.Context) error
 
 // Create implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Create(resource *ccev2.NetResourceSet) error {
-	return operator.realHandler.Create(resource)
-}
-
-// Delete implements allocator.NetResourceSetEventHandler
-func (operator *VPCRouteOperator) Delete(nodeName string) error {
-	oldNode, err := operator.updater.Get(nodeName)
-	if err == nil && oldNode != nil {
-		return operator.Update(oldNode)
+	// Only processing the resource when it is not RDMA
+	if bceutils.IsRdmaNetResourceSet(resource.Name) {
+		return nil
 	}
-	return operator.realHandler.Delete(nodeName)
-}
 
-// Resync implements allocator.NetResourceSetEventHandler
-func (operator *VPCRouteOperator) Resync(context.Context, time.Time) {
-	operator.realHandler.Resync(context.Background(), time.Now())
+	return operator.realHandler.Create(resource)
 }
 
 // Update implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
+	// Only processing the resource when it is not RDMA
+	if bceutils.IsRdmaNetResourceSet(resource.Name) {
+		return nil
+	}
+
 	if len(resource.Status.IPAM.VPCRouteCIDRs) == 0 {
 		resource.Status.IPAM.VPCRouteCIDRs = make(ipamTypes.VPCRouteStatuMap)
 	}
@@ -200,6 +197,25 @@ func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
 		return err
 	}
 	return operator.realHandler.Update(resource)
+}
+
+// Delete implements allocator.NetResourceSetEventHandler
+func (operator *VPCRouteOperator) Delete(netResourceSetName string) error {
+	// Only processing the resource when it is not RDMA
+	if bceutils.IsRdmaNetResourceSet(netResourceSetName) {
+		return nil
+	}
+
+	oldNetResourceSet, err := operator.updater.Get(netResourceSetName)
+	if err == nil && oldNetResourceSet != nil {
+		return operator.Update(oldNetResourceSet)
+	}
+	return operator.realHandler.Delete(netResourceSetName)
+}
+
+// Resync implements allocator.NetResourceSetEventHandler
+func (operator *VPCRouteOperator) Resync(context.Context, time.Time) {
+	operator.realHandler.Resync(context.Background(), time.Now())
 }
 
 // updateVPCRouteStatus is used for updating netresourceset status when vpc route rule should be sync

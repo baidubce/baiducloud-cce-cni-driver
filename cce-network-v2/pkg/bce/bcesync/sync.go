@@ -5,12 +5,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/baidubce/bce-sdk-go/services/bbc"
+	"github.com/baidubce/bce-sdk-go/services/vpc"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	"github.com/baidubce/bce-sdk-go/services/bbc"
-	"github.com/baidubce/bce-sdk-go/services/vpc"
 )
 
 const (
@@ -19,8 +21,15 @@ const (
 
 var log = logging.NewSubysLogger("bce-sync-manager")
 
+// PhysicalEni is the physical eni info, which will be used to compare with k8s eni
+type PhysicalEni struct {
+	bbcEni *bbc.GetInstanceEniResult
+	eri    *eni.Eni
+	hpcEni *hpc.Result
+}
+
 // SyncManager synchronize data between k8s and VPC, run in operator
-type SyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet | bbc.GetInstanceEniResult] struct {
+type SyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet | PhysicalEni] struct {
 	sync.Mutex
 	pool         map[string]T
 	resyncPeriod time.Duration
@@ -30,7 +39,7 @@ type SyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet | bbc.GetInstanceEniResu
 	mngr *controller.Manager
 }
 
-func NewSyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet | bbc.GetInstanceEniResult](name string, resyncPeriod time.Duration, resync func(ctx context.Context) ([]T, error)) *SyncManager[T] {
+func NewSyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet | PhysicalEni](name string, resyncPeriod time.Duration, resync func(ctx context.Context) ([]T, error)) *SyncManager[T] {
 	s := &SyncManager[T]{
 		pool:         make(map[string]T),
 		Name:         name,
@@ -91,6 +100,14 @@ func (s *SyncManager[T]) ingestKeywords(data interface{}) string {
 		return data.(*vpc.Subnet).SubnetId
 	case *bbc.GetInstanceEniResult:
 		return data.(*bbc.GetInstanceEniResult).Id
+	case *PhysicalEni:
+		if data.(*PhysicalEni).bbcEni != nil && data.(*PhysicalEni).bbcEni.Id != "" {
+			return data.(*PhysicalEni).bbcEni.Id
+		} else if data.(*PhysicalEni).eri != nil && data.(*PhysicalEni).eri.EniId != "" {
+			return data.(*PhysicalEni).eri.EniId
+		} else if data.(*PhysicalEni).hpcEni != nil && data.(*PhysicalEni).hpcEni.EniID != "" {
+			return data.(*PhysicalEni).hpcEni.EniID
+		}
 	}
 	return ""
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/rdmaipam"
 )
 
 // Default cce API HTTP client.
@@ -78,6 +79,7 @@ func New(transport runtime.ClientTransport, formats strfmt.Registry) *CceAPI {
 	cli.Endpoint = endpoint.New(transport, formats)
 	cli.Eni = eni.New(transport, formats)
 	cli.Ipam = ipam.New(transport, formats)
+	cli.Rdmaipam = rdmaipam.New(transport, formats)
 	cli.Metrics = metrics.New(transport, formats)
 	return cli
 }
@@ -131,6 +133,8 @@ type CceAPI struct {
 
 	Ipam ipam.ClientService
 
+	Rdmaipam rdmaipam.ClientService
+
 	Metrics metrics.ClientService
 
 	Transport runtime.ClientTransport
@@ -143,5 +147,6 @@ func (c *CceAPI) SetTransport(transport runtime.ClientTransport) {
 	c.Endpoint.SetTransport(transport)
 	c.Eni.SetTransport(transport)
 	c.Ipam.SetTransport(transport)
+	c.Rdmaipam.SetTransport(transport)
 	c.Metrics.SetTransport(transport)
 }

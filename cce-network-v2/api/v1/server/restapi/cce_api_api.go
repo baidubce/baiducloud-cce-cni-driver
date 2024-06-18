@@ -38,6 +38,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/rdmaipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/metrics"
 )
 
@@ -69,6 +70,9 @@ func NewCceAPIAPI(spec *loads.Document) *CceAPIAPI {
 		IpamDeleteIpamIPHandler: ipam.DeleteIpamIPHandlerFunc(func(params ipam.DeleteIpamIPParams) middleware.Responder {
 			return middleware.NotImplemented("operation ipam.DeleteIpamIP has not yet been implemented")
 		}),
+		RdmaipamDeleteRdmaipamRdmaipsHandler: rdmaipam.DeleteRdmaipamRdmaipsHandlerFunc(func(params rdmaipam.DeleteRdmaipamRdmaipsParams) middleware.Responder {
+			return middleware.NotImplemented("operation rdmaipam.DeleteRdmaipamRdmaips has not yet been implemented")
+		}),
 		EndpointGetEndpointExtpluginStatusHandler: endpoint.GetEndpointExtpluginStatusHandlerFunc(func(params endpoint.GetEndpointExtpluginStatusParams) middleware.Responder {
 			return middleware.NotImplemented("operation endpoint.GetEndpointExtpluginStatus has not yet been implemented")
 		}),
@@ -86,6 +90,9 @@ func NewCceAPIAPI(spec *loads.Document) *CceAPIAPI {
 		}),
 		IpamPostIpamIPHandler: ipam.PostIpamIPHandlerFunc(func(params ipam.PostIpamIPParams) middleware.Responder {
 			return middleware.NotImplemented("operation ipam.PostIpamIP has not yet been implemented")
+		}),
+		RdmaipamPostRdmaipamHandler: rdmaipam.PostRdmaipamHandlerFunc(func(params rdmaipam.PostRdmaipamParams) middleware.Responder {
+			return middleware.NotImplemented("operation rdmaipam.PostRdmaipam has not yet been implemented")
 		}),
 		EndpointPutEndpointProbeHandler: endpoint.PutEndpointProbeHandlerFunc(func(params endpoint.PutEndpointProbeParams) middleware.Responder {
 			return middleware.NotImplemented("operation endpoint.PutEndpointProbe has not yet been implemented")
@@ -128,6 +135,8 @@ type CceAPIAPI struct {
 	EniDeleteEniHandler eni.DeleteEniHandler
 	// IpamDeleteIpamIPHandler sets the operation handler for the delete ipam IP operation
 	IpamDeleteIpamIPHandler ipam.DeleteIpamIPHandler
+	// RdmaipamDeleteRdmaipamRdmaipsHandler sets the operation handler for the delete rdmaipam rdmaips operation
+	RdmaipamDeleteRdmaipamRdmaipsHandler rdmaipam.DeleteRdmaipamRdmaipsHandler
 	// EndpointGetEndpointExtpluginStatusHandler sets the operation handler for the get endpoint extplugin status operation
 	EndpointGetEndpointExtpluginStatusHandler endpoint.GetEndpointExtpluginStatusHandler
 	// DaemonGetHealthzHandler sets the operation handler for the get healthz operation
@@ -140,6 +149,8 @@ type CceAPIAPI struct {
 	IpamPostIpamHandler ipam.PostIpamHandler
 	// IpamPostIpamIPHandler sets the operation handler for the post ipam IP operation
 	IpamPostIpamIPHandler ipam.PostIpamIPHandler
+	// RdmaipamPostRdmaipamHandler sets the operation handler for the post rdmaipam operation
+	RdmaipamPostRdmaipamHandler rdmaipam.PostRdmaipamHandler
 	// EndpointPutEndpointProbeHandler sets the operation handler for the put endpoint probe operation
 	EndpointPutEndpointProbeHandler endpoint.PutEndpointProbeHandler
 	// ServeError is called when an error is received, there is a default handler
@@ -224,6 +235,9 @@ func (o *CceAPIAPI) Validate() error {
 	if o.IpamDeleteIpamIPHandler == nil {
 		unregistered = append(unregistered, "ipam.DeleteIpamIPHandler")
 	}
+	if o.RdmaipamDeleteRdmaipamRdmaipsHandler == nil {
+		unregistered = append(unregistered, "rdmaipam.DeleteRdmaipamRdmaipsHandler")
+	}
 	if o.EndpointGetEndpointExtpluginStatusHandler == nil {
 		unregistered = append(unregistered, "endpoint.GetEndpointExtpluginStatusHandler")
 	}
@@ -241,6 +255,9 @@ func (o *CceAPIAPI) Validate() error {
 	}
 	if o.IpamPostIpamIPHandler == nil {
 		unregistered = append(unregistered, "ipam.PostIpamIPHandler")
+	}
+	if o.RdmaipamPostRdmaipamHandler == nil {
+		unregistered = append(unregistered, "rdmaipam.PostRdmaipamHandler")
 	}
 	if o.EndpointPutEndpointProbeHandler == nil {
 		unregistered = append(unregistered, "endpoint.PutEndpointProbeHandler")
@@ -341,6 +358,10 @@ func (o *CceAPIAPI) initHandlerCache() {
 		o.handlers["DELETE"] = make(map[string]http.Handler)
 	}
 	o.handlers["DELETE"]["/ipam/{ip}"] = ipam.NewDeleteIpamIP(o.context, o.IpamDeleteIpamIPHandler)
+	if o.handlers["DELETE"] == nil {
+		o.handlers["DELETE"] = make(map[string]http.Handler)
+	}
+	o.handlers["DELETE"]["/rdmaipam/{rdmaips}"] = rdmaipam.NewDeleteRdmaipamRdmaips(o.context, o.RdmaipamDeleteRdmaipamRdmaipsHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
@@ -365,6 +386,10 @@ func (o *CceAPIAPI) initHandlerCache() {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}
 	o.handlers["POST"]["/ipam/{ip}"] = ipam.NewPostIpamIP(o.context, o.IpamPostIpamIPHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/rdmaipam"] = rdmaipam.NewPostRdmaipam(o.context, o.RdmaipamPostRdmaipamHandler)
 	if o.handlers["PUT"] == nil {
 		o.handlers["PUT"] = make(map[string]http.Handler)
 	}

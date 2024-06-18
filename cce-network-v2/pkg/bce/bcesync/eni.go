@@ -507,14 +507,14 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) {
 	scopeLog.Infof("start to create external eni")
 
 	// find node by instanceID
-	nodeList, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().List(labels.Everything())
+	nrsList, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().List(labels.Everything())
 	if err != nil {
 		return
 	}
 	var resource *ccev2.NetResourceSet
-	for _, node := range nodeList {
-		if node.Spec.InstanceID == eni.InstanceId {
-			resource = node
+	for _, nrs := range nrsList {
+		if nrs.Spec.InstanceID == eni.InstanceId {
+			resource = nrs
 			break
 		}
 	}

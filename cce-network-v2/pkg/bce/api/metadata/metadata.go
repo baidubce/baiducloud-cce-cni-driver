@@ -311,7 +311,8 @@ func (c *Client) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
 func (c *Client) GetVifFeatures(macAddress string) (string, error) {
 	// eg. /1.0/meta-data/network/interfaces/macs/fa:26:00:01:6f:37/vif_features
 	// response:
-	// elastic_rdma
+	//   elastic_rdma for eri
+	//   rdma_roce    for hpc
 	path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/vif_features", macAddress)
 	body, err := c.sendRequest(path)
 	if err != nil {

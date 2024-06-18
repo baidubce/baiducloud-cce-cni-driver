@@ -328,30 +328,13 @@ func runOperator() {
 	})
 }
 
-// onOperatorStartLeading is the function called once the operator starts leading
-// in HA mode.
-func onOperatorStartLeading(ctx context.Context) {
-	isLeader.Store(true)
-
-	// Restart kube-dns as soon as possible since it helps etcd-operator to be
-	// properly setup. If kube-dns is not managed by CCE it can prevent
-	// etcd from reaching out kube-dns in EKS.
-	// If this logic is modified, make sure the operator's clusterrole logic for
-	// pods/delete is also up-to-date.
-	if option.Config.DisableCCEEndpointCRD {
-		log.Infof("KubeDNS unmanaged pods controller disabled as %q option is set to 'disabled' in CCE ConfigMap", option.DisableCCEEndpointCRDName)
-	}
-
+func startEthernetOperator(ctx context.Context) {
 	var (
 		netResourceSetManager operatorWatchers.NodeEventHandler
 		cceEndpointManager    operatorWatchers.EndpointEventHandler
 		sbnHandler            syncer.SubnetEventHandler
 		eniHandler            syncer.ENIEventHandler
 	)
-
-	// wait all informer synced
-	operatorWatchers.StartWatchers(shutdownSignal)
-	operatorWatchers.WaitForCacheSync(shutdownSignal)
 
 	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing Ethernet IPAM")
 
@@ -438,10 +421,6 @@ func onOperatorStartLeading(ctx context.Context) {
 		log.WithError(err).Fatal("Unable to setup eni watcher")
 	}
 
-	if operatorOption.Config.NodeGCInterval != 0 {
-		operatorWatchers.RunNetResourceSetGC(ctx, operatorOption.Config.NodeGCInterval)
-	}
-
 	if option.Config.IPAM == ipamOption.IPAMClusterPool ||
 		option.Config.IPAM == ipamOption.IPAMClusterPoolV2 ||
 		option.Config.IPAM == ipamOption.IPAMVpcRoute {
@@ -472,6 +451,111 @@ func onOperatorStartLeading(ctx context.Context) {
 		}
 	}
 
+	log.Info("Initialization Ethernet IPAM complete")
+}
+
+func startRdmaOperator(ctx context.Context) {
+	var (
+		netResourceSetManager operatorWatchers.NodeEventHandler
+		cceEndpointManager    operatorWatchers.EndpointEventHandler
+		eniHandler            syncer.ENIEventHandler
+	)
+
+	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing RDMA IPAM")
+
+	ipamMode := ipamOption.IPAMRdma
+	alloc, providerBuiltin := allocatorProviders[ipamMode]
+	if !providerBuiltin {
+		log.Fatalf("%s allocator is not supported by this version of %s", ipamMode, binaryName)
+	}
+
+	if err := alloc.Init(ctx); err != nil {
+		log.WithError(err).Fatalf("Unable to init %s allocator", ipamMode)
+	}
+
+	nrsm, err := alloc.Start(ctx, operatorWatchers.NetResourceSetClient)
+	if err != nil {
+		log.WithError(err).Fatalf("Unable to start %s allocator", ipamMode)
+	}
+
+	netResourceSetManager = nrsm
+
+	// Specify fixed IP assignment
+	if ceh, ok := alloc.(endpoint.DirectAllocatorStarter); ok {
+		em, err := ceh.StartEndpointManager(ctx, operatorWatchers.CCEEndpointClient)
+		if err != nil {
+			log.WithError(err).Fatalf("Unable to start %s cce endpoint allocator", ipamMode)
+		}
+		cceEndpointManager = em
+	}
+
+	// task to sync ENI between ipam and cloud
+	eniSyncer, providerBuiltin := eniSyncerProviders[ipamMode]
+	if providerBuiltin {
+		err = eniSyncer.Init(ctx)
+		if err != nil {
+			log.WithError(err).Fatalf("Unable to init %s cce eni syncer", ipamMode)
+		}
+		eniHandler = eniSyncer.StartENISyncer(ctx, operatorWatchers.ENIClient)
+	}
+
+	if k8s.IsEnabled() &&
+		(operatorOption.Config.RemoveNetResourceSetTaints || operatorOption.Config.SetCCEIsUpCondition) {
+		stopCh := make(chan struct{})
+
+		log.WithFields(logrus.Fields{
+			logfields.K8sNamespace:               operatorOption.Config.CCEK8sNamespace,
+			"label-selector":                     operatorOption.Config.CCEPodLabels,
+			"remove-network-resource-set-taints": operatorOption.Config.RemoveNetResourceSetTaints,
+			"set-cce-is-up-condition":            operatorOption.Config.SetCCEIsUpCondition,
+		}).Info("Removing CCE Node Taints or Setting CCE Is Up Condition for Kubernetes Nodes")
+
+		operatorWatchers.HandleNodeTolerationAndTaints(stopCh)
+	}
+
+	if err := operatorWatchers.StartSynchronizingNetResourceSets(ctx, netResourceSetManager); err != nil {
+		log.WithError(err).Fatal("Unable to setup node watcher")
+	}
+
+	if err := operatorWatchers.StartSynchronizingCCEEndpoint(ctx, cceEndpointManager); err != nil {
+		log.WithError(err).Fatal("Unable to setup endpoint watcher")
+	}
+
+	if err := operatorWatchers.StartSynchronizingENI(ctx, eniHandler); err != nil {
+		log.WithError(err).Fatal("Unable to setup eni watcher")
+	}
+
+	log.Info("Initialization RDMA IPAM complete")
+}
+
+// onOperatorStartLeading is the function called once the operator starts leading
+// in HA mode.
+func onOperatorStartLeading(ctx context.Context) {
+	isLeader.Store(true)
+
+	// Restart kube-dns as soon as possible since it helps etcd-operator to be
+	// properly setup. If kube-dns is not managed by CCE it can prevent
+	// etcd from reaching out kube-dns in EKS.
+	// If this logic is modified, make sure the operator's clusterrole logic for
+	// pods/delete is also up-to-date.
+	if option.Config.DisableCCEEndpointCRD {
+		log.Infof("KubeDNS unmanaged pods controller disabled as %q option is set to 'disabled' in CCE ConfigMap", option.DisableCCEEndpointCRDName)
+	}
+
+	// wait all informer synced
+	operatorWatchers.StartWatchers(shutdownSignal)
+	operatorWatchers.WaitForCacheSync(shutdownSignal)
+
+	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing IPAM")
+	startEthernetOperator(ctx)
+	// if enabled rdma, start rdma-ipam-operator
+	if option.Config.EnableRDMA {
+		startRdmaOperator(ctx)
+	}
+
+	if operatorOption.Config.NodeGCInterval != 0 {
+		operatorWatchers.RunNetResourceSetGC(ctx, operatorOption.Config.NodeGCInterval)
+	}
 	log.Info("Initialization complete")
 
 	<-shutdownSignal

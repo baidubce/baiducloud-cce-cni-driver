@@ -50,7 +50,7 @@ func (n *ebcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 
 	// may should create a new primary ENI
 	if a.AvailableInterfaces == 0 && a.InterfaceID == "" && n.usePrimaryENIWithSecondaryMode {
-		n.manager.ForeachInstance(n.instanceID,
+		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				_, ok := iface.Resource.(*eniResource)
 				if !ok {

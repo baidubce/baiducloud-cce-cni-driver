@@ -103,6 +103,10 @@ var (
 
 	// AnnotationExternalENI means ENI primary IP was created by cce
 	AnnotationENIIPv6PrimaryIP = "cce.baidubce.com/ipv6-primary-ip"
+
+	// cce defined net resource set annotations in k8s
+	AnnotationRDMAInfoMacAddress  = CCEPrefix + "rdma-mac-address"
+	AnnotationRDMAInfoVifFeatures = CCEPrefix + "rdma-vif-features"
 )
 
 // crossvpc labels

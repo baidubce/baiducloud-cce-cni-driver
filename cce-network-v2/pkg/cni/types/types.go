@@ -97,6 +97,26 @@ func ReadNetConf(path string) (*NetConf, error) {
 	return LoadNetConf(b)
 }
 
+// ReadRdmaNetConf reads a RDMA CNI configuration file and returns the corresponding
+// RDMA NetConf structure
+func ReadRdmaNetConf(path string) (*NetConf, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read RDMA CNI configuration '%s': %s", path, err)
+	}
+
+	netConfList := &NetConfList{}
+	if err := json.Unmarshal(b, netConfList); err == nil {
+		for _, plugin := range netConfList.Plugins {
+			if plugin.Type == "roce" {
+				return parsePrevResult(plugin)
+			}
+		}
+	}
+
+	return LoadNetConf(b)
+}
+
 // LoadNetConf unmarshals a CCE network configuration from JSON and returns
 // a NetConf together with the CNI version
 func LoadNetConf(bytes []byte) (*NetConf, error) {

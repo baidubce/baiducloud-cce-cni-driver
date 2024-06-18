@@ -107,6 +107,10 @@ type bceNode struct {
 	// mutex protects members below this field
 	mutex lock.RWMutex
 
+	// enis is the list of ENIs attached to the node indexed by ENI ID.
+	// Protected by Node.mutex.
+	enis map[string]ccev2.ENI
+
 	// k8sObj is the NetResourceSet custom resource representing the node
 	k8sObj *ccev2.NetResourceSet
 
@@ -333,7 +337,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 	availabelENIsNumber := 0
 	usedENIsNumber := 0
 	haveCreatingENI := false
-	n.manager.ForeachInstance(n.instanceID,
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -406,7 +410,7 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 	if eniQuota == nil {
 		return 0, "", fmt.Errorf("eni quota is nil, please retry later")
 	}
-	n.manager.ForeachInstance(n.instanceID,
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			eni, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -459,6 +463,7 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	// Select only the ENI of the local node
 	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelInstanceID: n.instanceID,
+		k8s.LabelNodeName:   n.k8sObj.Name,
 	}))
 	enis, err := n.manager.enilister.List(selector)
 	if err != nil {
@@ -766,7 +771,7 @@ func (n *bceNode) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam
 
 	// Needed for selecting the same ENI to release IPs from
 	// when more than one ENI qualifies for release
-	n.manager.ForeachInstance(n.instanceID,
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// if r.IPsToRelease is not empty, don't excute the following code
 			if len(r.IPsToRelease) > 0 {
@@ -1234,6 +1239,7 @@ func (n *bceNode) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
 	now := time.Now()
 	for eniID := range resource.Status.ENIs {
 		eniStastic := resource.Status.ENIs[eniID]
+		eniStastic.LastAllocatedIPError = nil
 
 		if eniStatus, ok := n.eniAllocatedIPsErrorMap[eniID]; ok {
 			if now.Sub(n.eniAllocatedIPsErrorMap[eniID].Time.Time) < 10*time.Minute {

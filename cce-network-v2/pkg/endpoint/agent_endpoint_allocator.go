@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -53,11 +54,17 @@ var (
 	allocatorLog           = logging.DefaultLogger.WithField(logfields.LogSubsys, allocatorComponentName)
 )
 
+type rdmaEndpointAllocatorAttr struct {
+	isRdmaEndpointAllocator bool
+	primaryMacAddress       string
+}
+
 // EndpointAllocator It proxies the basic operation methods of ipam.
 // Each time an IP application succeeds, a CCEEndpoint object will be created.
 // During gc, the existing CCEEndpoint objects will be gc based on CCEEndpoint
 type EndpointAllocator struct {
 	dynamicIPAM ipam.IPAMAllocator
+	rdmaAttr    rdmaEndpointAllocatorAttr
 	c           ipam.Configuration
 
 	cceEndpointClient *watchers.CCEEndpointClient
@@ -66,10 +73,12 @@ type EndpointAllocator struct {
 	eventRecorder     record.EventRecorder
 }
 
-func NewIPAM(nodeAddressing types.NodeAddressing, c ipam.Configuration, owner ipam.Owner, watcher *watchers.K8sWatcher, mtuConfig ipam.MtuConfiguration) ipam.CNIIPAMServer {
-	dynamicIPAM := ipam.NewIPAM(nodeAddressing, c, owner, watcher, mtuConfig)
+func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primaryMacAddress string, nodeAddressing types.NodeAddressing, c ipam.Configuration, owner ipam.Owner, watcher *watchers.K8sWatcher, mtuConfig ipam.MtuConfiguration) ipam.CNIIPAMServer {
+	dynamicIPAM := ipam.NewIPAM(networkResourceSetName, nodeAddressing, c, owner, watcher, mtuConfig)
+	allocatorLog.Infof("init dynamicIPAM for %s %s", networkResourceSetName, primaryMacAddress)
 	e := &EndpointAllocator{
 		dynamicIPAM:       dynamicIPAM,
+		rdmaAttr:          rdmaEndpointAllocatorAttr{isRdmaEndpointAllocator, primaryMacAddress},
 		cceEndpointClient: watcher.NewCCEEndpointClient(),
 		podClient:         watcher.NewPodClient(),
 		c:                 c,
@@ -113,10 +122,15 @@ func (e *EndpointAllocator) RestoreFinished() {
 }
 
 func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
-	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
+	var name string
+	namespace, podName, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
 		return err
 	}
+
+	// rename for rdma cep, rdma cep is like "podname-rdma-primarymacaddressinhex"
+	// cep name is like "podname"
+	name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, podName, e.rdmaAttr.primaryMacAddress)
 
 	var (
 		logEntry = allocatorLog.WithFields(logrus.Fields{
@@ -160,18 +174,46 @@ func isSameContainerID(oldEP *ccev2.CCEEndpoint, containerID string) bool {
 	return oldEP != nil && oldEP.Spec.ExternalIdentifiers != nil && oldEP.Spec.ExternalIdentifiers.ContainerID == containerID
 }
 
+func hasRDMAResource(rl corev1.ResourceList) bool {
+	for key, _ := range rl {
+		arr := strings.Split(string(key), "/")
+		if len(arr) != 2 {
+			continue
+		}
+		if arr[0] == bceutils.PodResourceName {
+			return true
+		}
+	}
+	return false
+}
+
+func wantRoce(pod *corev1.Pod) bool {
+	for _, container := range pod.Spec.Containers {
+		if hasRDMAResource(container.Resources.Limits) || hasRDMAResource(container.Resources.Requests) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ADD allocates an IP for the given owner and returns the allocated IP.
 func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
+	var name string
 	namespace, podName, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// rename for rdma cep, rdma cep is like "podname-rdma-primarymacaddressinhex"
+	// cep name is like "podname"
+	name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, podName, e.rdmaAttr.primaryMacAddress)
+
 	var (
 		ctx, cancelFun = context.WithTimeout(logfields.NewContext(), e.c.GetFixedIPTimeout())
 		logEntry       = allocatorLog.WithFields(logrus.Fields{
 			"namespace":   namespace,
-			"name":        podName,
+			"name":        name,
 			"module":      "AllocateNext",
 			"ipv4":        logfields.Repr(ipv4Result),
 			"ipv6":        logfields.Repr(ipv6Result),
@@ -203,11 +245,16 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, podName, err)
 	}
 
+	// if it is RdmaEndpointAllocator, do not allocate IP for pods without RDMA resource
+	if e.rdmaAttr.isRdmaEndpointAllocator && !wantRoce(pod) {
+		return nil, nil, nil
+	}
+
 	isFixedPod := k8s.HaveFixedIPLabel(&pod.ObjectMeta)
 	// warning: old wep use node selector,
 	// So here oldWEP from the cache may not exist,
 	// we need to retrieve it from the api-server
-	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, podName)
+	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, name)
 	if err != nil {
 		return
 	}
@@ -232,6 +279,10 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 // allocateIP allocates an IP for the given owner and returns the allocated IP.
 func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Entry, containerID, family, owner, netns string, psts *ccev2.PodSubnetTopologySpread, oldEP *ccev2.CCEEndpoint, pod *corev1.Pod, isFixedIPPod bool) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
 	newEP := NewEndpointTemplate(containerID, netns, pod)
+	// rename for rdma cep, rdma cep is like "podname-rdma-primarymacaddressinhex"
+	// cep name is like "podname"
+	newEP.Name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, pod.Name, e.rdmaAttr.primaryMacAddress)
+
 	ipTTLSeconds := k8s.ExtractFixedIPTTLSeconds(pod)
 	if ipTTLSeconds != 0 {
 		newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &ipTTLSeconds
@@ -283,6 +334,48 @@ func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Ent
 
 // Restore all the IP addresses applied for by the current machine to the node cache pool
 func (e *EndpointAllocator) Restore() {
+	if e.rdmaAttr.isRdmaEndpointAllocator {
+		// restore dynamic rdma ip if need
+		logEntry := allocatorLog.WithField("module", "Restore")
+		eps, err := e.cceEndpointClient.List()
+		if err != nil {
+			logEntry.WithError(err).Error("list rdma endpoint error")
+			return
+		}
+		logEntry.Infof("start to restore rdma endpoint")
+		for _, ep := range eps {
+			// skip the non rdma endpoint which name is like "podname-rdma-primarymacaddressindex"
+			if !bceutils.IsCCERdmaEndpointName(ep.Name) {
+				continue
+			}
+			// skip the rdma endpoint which primary mac address is not equal to current NetworkResourceSet
+			if !bceutils.IsThisMasterMacCCERdmaEndpointName(ep.Name, e.rdmaAttr.primaryMacAddress) {
+				// skip the rdma endpoint which primary mac address is not equal to current node
+				// because the rdma endpoint is created by other node
+				continue
+			}
+			epLog := logEntry.WithFields(logrus.Fields{
+				"namespace": ep.Namespace,
+				"name":      ep.Name,
+			})
+			ips, err := e.extractEndpointIPs(ep)
+			if err != nil {
+				epLog.WithError(err).Error("extract rdma endpoint ip error")
+				continue
+			}
+			epLog.Infof("restore rdma ips %v", ips)
+			for _, ip := range ips {
+				podName := bceutils.GetPodNameFromCEPName(ep.Name)
+				_, err = e.dynamicIPAM.AllocateIPWithoutSyncUpstream(net.ParseIP(ip), ep.Namespace+"/"+podName)
+				if err != nil {
+					epLog.WithError(err).Error("AllocateIPWithoutSyncUpstream error")
+				}
+			}
+		}
+		logEntry.Infof("restore rdma endpoint end")
+		return
+	}
+
 	// restore route ip if need
 	if e.c.IPAMMode() == ipamOption.IPAMVpcRoute {
 		var (
@@ -330,7 +423,7 @@ func (e *EndpointAllocator) Restore() {
 			"namespace": ep.Namespace,
 			"name":      ep.Name,
 		})
-		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) {
+		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
 		ips, err := e.extractEndpointIPs(ep)
@@ -553,7 +646,8 @@ func (e *EndpointAllocator) gc() {
 		return
 	}
 	for _, ep := range eps {
-		pod, err := e.podClient.Get(ep.Namespace, ep.Name)
+		podName := bceutils.GetPodNameFromCEPName(ep.Name)
+		pod, err := e.podClient.Get(ep.Namespace, podName)
 		if err != nil && kerrors.IsNotFound(err) {
 			e.tryDeleteEndpointAfterPodDeleted(ep, logEntry)
 			continue

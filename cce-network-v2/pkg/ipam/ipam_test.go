@@ -32,6 +32,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
+	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 )
 
 func Test(t *testing.T) {
@@ -66,7 +67,7 @@ func (t *testConfiguration) GetFixedIPTimeout() time.Duration         { return 0
 
 func (s *IPAMSuite) TestLock(c *C) {
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	// Since the IPs we have allocated to the endpoints might or might not
 	// be in the allocrange specified in cce, we need to specify them
@@ -119,7 +120,7 @@ func BenchmarkIPAMRun(b *testing.B) {
 
 func (s *IPAMSuite) TestBlackList(c *C) {
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
 	nextIP(ipv4)
@@ -145,7 +146,7 @@ func (s *IPAMSuite) TestDeriveFamily(c *C) {
 
 func (s *IPAMSuite) TestOwnerRelease(c *C) {
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
 	nextIP(ipv4)

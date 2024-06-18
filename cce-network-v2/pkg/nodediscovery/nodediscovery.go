@@ -87,10 +87,12 @@ func NewNodeDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 	return &NodeDiscovery{
 		Manager: manager,
 		LocalConfig: datapath.LocalNodeConfiguration{
-			MtuConfig:               mtuConfig,
-			UseSingleClusterRoute:   option.Config.UseSingleClusterRoute,
-			EnableIPv4:              option.Config.EnableIPv4,
-			EnableIPv6:              option.Config.EnableIPv6,
+			MtuConfig:             mtuConfig,
+			UseSingleClusterRoute: option.Config.UseSingleClusterRoute,
+			EnableIPv4:            option.Config.EnableIPv4,
+			EnableIPv6:            option.Config.EnableIPv6,
+			// Ethernet NodeDiscovery is do not enable for RDMA, RDMA is only enabled in RdmaDiscovery
+			EnableRDMA:              false,
 			EnableAutoDirectRouting: option.Config.EnableAutoDirectRouting,
 			EnableLocalNodeRoute:    enableLocalNodeRoute(),
 			AuxiliaryPrefixes:       auxPrefixes,

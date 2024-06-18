@@ -28,7 +28,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: operator
-          image: "{{ .Values.network.operator.image.repository }}/{{ .Values.network.operator.image.name }}:{{ .Values.network.operator.image.tag | default .Chart.AppVersion }}{{ .Values.network.imageSuffix }}"
+          image: "{{ .Values.network.operator.image.repository }}/{{ .Values.network.operator.image.ethernetName }}:{{ .Values.network.operator.image.tag | default .Chart.AppVersion }}{{ .Values.network.imageSuffix }}"
           imagePullPolicy: {{ .Values.network.operator.image.pullPolicy }}
           command:
             - /bin/cce-network-operator
@@ -85,6 +85,10 @@ spec:
               name: log
             - mountPath: /etc/cce
               name: cce-network-v2-config
+
+        {{- if .Values.network.operator.rdma.enable }}
+
+        {{- end }}
 
         {{- if .Values.network.operator.webhook.enable }}
 

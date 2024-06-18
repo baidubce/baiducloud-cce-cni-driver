@@ -17,6 +17,7 @@ package client
 
 import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/client/rdmaipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/api"
 )
@@ -76,6 +77,47 @@ func (c *Client) IPAMAllocate(family, owner string, expiration bool) (*models.IP
 func (c *Client) IPAMAllocateIP(ip, owner string) error {
 	params := ipam.NewPostIpamIPParams().WithIP(ip).WithOwner(&owner).WithTimeout(api.ClientTimeout)
 	_, err := c.Ipam.PostIpamIP(params)
+	return Hint(err)
+}
+
+func (c *Client) IPAMCNIRDMAAllocate(family, owner, containerID, netns string) ([]*models.RDMAIPAMResponse, error) {
+	params := rdmaipam.NewPostRdmaipamParams().WithTimeout(api.ClientTimeout)
+
+	if family != "" {
+		params.SetFamily(&family)
+	}
+
+	if owner != "" {
+		params.SetOwner(&owner)
+	}
+	if containerID != "" {
+		params.SetContainerID(&containerID)
+	}
+	if netns != "" {
+		params.SetNetns(&netns)
+	}
+
+	resp, err := c.Rdmaipam.PostRdmaipam(params)
+	if err != nil {
+		return nil, Hint(err)
+	}
+	return resp.Payload, nil
+}
+
+func (c *Client) IPAMCNIRDMAReleaseIP(owner, containerID, netns string) error {
+	params := rdmaipam.NewDeleteRdmaipamRdmaipsParams().WithTimeout(api.ClientTimeout)
+
+	if owner != "" {
+		params.SetOwner(&owner)
+	}
+	if containerID != "" {
+		params.SetContainerID(&containerID)
+	}
+	if netns != "" {
+		params.SetNetns(&netns)
+	}
+
+	_, err := c.Rdmaipam.DeleteRdmaipamRdmaips(params)
 	return Hint(err)
 }
 

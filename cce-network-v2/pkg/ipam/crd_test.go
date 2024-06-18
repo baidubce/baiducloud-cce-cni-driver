@@ -33,6 +33,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
 
@@ -117,7 +118,7 @@ func (s *IPAMSuite) TestMarkForReleaseNoAllocate(c *C) {
 		sharedNetResourceSetStore = newFakeNetResourceSetStore(conf, c)
 		sharedNetResourceSetStore.ownNode = cn
 	})
-	ipam := NewIPAM(fakeAddressing, conf, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, conf, &ownerMock{}, &ownerMock{}, &mtuMock)
 	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 
 	// Allocate the first 3 IPs

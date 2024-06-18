@@ -63,7 +63,7 @@ func newBBCNode(super *bceNode) *bbcNode {
 }
 
 func (n *bbcNode) tryRefreshBBCENI() *ccev2.ENI {
-	n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 		e, ok := iface.Resource.(*eniResource)
 		if !ok {
 			return nil
@@ -277,7 +277,7 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 
 	eniQuota := n.getENIQuota()
 	if eniQuota != nil {
-		n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil

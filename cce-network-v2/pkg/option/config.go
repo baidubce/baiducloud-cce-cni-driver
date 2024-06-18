@@ -235,6 +235,9 @@ const (
 	// EnableIPv6Name is the name of the option to enable IPv6 support
 	EnableIPv6Name = "enable-ipv6"
 
+	// EnableRDMA is the name of the option to enable RDMA support
+	EnableRDMA = "enable-rdma"
+
 	// EnableIPv6NDPName is the name of the option to enable IPv6 NDP support
 	EnableIPv6NDPName = "enable-ipv6-ndp"
 
@@ -376,6 +379,9 @@ const (
 	IPPoolMaxAboveWatermark       = "ippool-max-above-watermark"
 
 	ExtCNIPluginsList = "ext-cni-plugins"
+
+	// this flags only use for vpc-rdma mode
+	MaxRDMAIPsPerENI = "max-rdma-ips-per-eni"
 )
 
 // Available option for DaemonConfig.Tunnel
@@ -587,6 +593,9 @@ type DaemonConfig struct {
 	// EnableIPv6NDP is true when NDP is enabled for IPv6
 	EnableIPv6NDP bool
 
+	// EnableRDMA is true when RDMA is enabled
+	EnableRDMA bool
+
 	// IPv6MCastDevice is the name of device that joins IPv6's solicitation multicast group
 	IPv6MCastDevice string
 	// MonitorQueueSize is the size of the monitor event queue
@@ -780,6 +789,7 @@ var (
 		EnableIPv4:                       defaults.EnableIPv4,
 		EnableIPv6:                       defaults.EnableIPv6,
 		EnableIPv6NDP:                    defaults.EnableIPv6NDP,
+		EnableRDMA:                       defaults.EnableRDMA,
 		LogOpt:                           make(map[string]string),
 		LoopbackIPv4:                     defaults.LoopbackIPv4,
 		ForceLocalPolicyEvalAtSource:     defaults.ForceLocalPolicyEvalAtSource,
@@ -1092,6 +1102,7 @@ func (c *DaemonConfig) Populate() {
 	c.EnableIPv4 = viper.GetBool(EnableIPv4Name)
 	c.EnableIPv6 = viper.GetBool(EnableIPv6Name)
 	c.EnableIPv6NDP = viper.GetBool(EnableIPv6NDPName)
+	c.EnableRDMA = viper.GetBool(EnableRDMA)
 	c.IPv6MCastDevice = viper.GetString(IPv6MCastDevice)
 	c.DisableCCEEndpointCRD = viper.GetBool(DisableCCEEndpointCRDName)
 	c.DisableENICRD = viper.GetBool(DisableENICRDName)
@@ -1273,6 +1284,16 @@ func (c *DaemonConfig) Populate() {
 			SubnetIDs:                   viper.GetStringSlice(ENISubnets),
 			RouteTableOffset:            viper.GetInt(ENIRouteTableOffset),
 			InstallSourceBasedRouting:   viper.GetBool(ENIInstallSourceBasedRouting),
+		}
+	case ipamOption.IPAMRdma:
+		c.ENI = &bceapi.ENISpec{
+			UseMode:                   viper.GetString(ENIUseMode),
+			MaxAllocateENI:            0,
+			PreAllocateENI:            0,
+			MaxIPsPerENI:              viper.GetInt(MaxRDMAIPsPerENI),
+			VpcID:                     viper.GetString(BCECloudVPCID),
+			RouteTableOffset:          viper.GetInt(ENIRouteTableOffset),
+			InstallSourceBasedRouting: viper.GetBool(ENIInstallSourceBasedRouting),
 		}
 	}
 	c.ConfigFile = viper.GetString(ConfigFile)

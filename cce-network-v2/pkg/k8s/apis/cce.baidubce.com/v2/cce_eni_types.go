@@ -234,4 +234,6 @@ const (
 	ENIForBCC     ENIType = "bcc"
 	ENIForBBC     ENIType = "bbc"
 	ENIForEBC     ENIType = "ebc"
+	ENIForHPC     ENIType = "rdma_roce"
+	ENIForERI     ENIType = "elastic_rdma"
 )

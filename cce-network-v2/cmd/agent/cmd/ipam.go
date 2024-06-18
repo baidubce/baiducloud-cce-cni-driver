@@ -30,6 +30,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
+	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/rate"
 )
@@ -248,6 +249,6 @@ func (d *Daemon) startIPAM() {
 	bootstrapStats.ipam.Start()
 	ipamLog.Info("Initializing ipam")
 	// Set up ipam conf after init() because we might be running d.conf.KVStoreIPv4Registration
-	d.ipam = endpoint.NewIPAM(d.nodeAddressing, option.Config, d.nodeDiscovery, d.k8sWatcher, nil)
+	d.ipam = endpoint.NewIPAM(nodeTypes.GetName(), false, "", d.nodeAddressing, option.Config, d.nodeDiscovery, d.k8sWatcher, nil)
 	bootstrapStats.ipam.End(true)
 }

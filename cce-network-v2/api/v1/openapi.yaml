@@ -124,6 +124,57 @@ paths:
         "501":
           description: Allocation for address family disabled
           x-go-name: Disabled
+  "/rdmaipam":
+    post:
+      summary: Allocate RDMA IP addresses
+      tags:
+        - rdmaipam
+      parameters:
+        - "$ref": "#/parameters/ipam-family"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-expiration"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/rdmaipam-ifnames"
+      responses:
+        "201":
+          description: Success
+          schema:
+            type: array
+            items:
+              "$ref": "#/definitions/RDMAIPAMResponse"
+        "502":
+          description: Allocation failure
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+  "/rdmaipam/{rdmaips}":
+    delete:
+      summary: Release allocated RDMA IP addresses
+      tags:
+        - rdmaipam
+      parameters:
+        - "$ref": "#/parameters/rdmaipam-release-arg"
+        - "$ref": "#/parameters/ipam-owner"
+        - "$ref": "#/parameters/ipam-containerid"
+        - "$ref": "#/parameters/ipam-netns"
+        - "$ref": "#/parameters/rdmaipam-ifnames"
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid IP address
+          x-go-name: Invalid
+        "404":
+          description: IP address not found
+        "500":
+          description: Address release failure
+          x-go-name: Failure
+          schema:
+            "$ref": "#/definitions/Error"
+        "501":
+          description: Allocation for address family disabled
+          x-go-name: Disabled
   "/eni":
     post:
       summary: Allocate an IP address for exclusive ENI
@@ -240,6 +291,12 @@ parameters:
     in: path
     required: true
     type: string
+  rdmaipam-release-arg:
+    name: rdmaips
+    description: RDMA IP addresses or owner name
+    in: path
+    required: true
+    type: string
   ipam-family:
     name: family
     in: query
@@ -270,6 +327,12 @@ parameters:
   ipam-ifname:
     name: ifname
     description: ifname provider by cni
+    in: query
+    required: false
+    type: string
+  rdmaipam-ifnames:
+    name: rdmaIfnames
+    description: rdma ifnames provider by cni
     in: query
     required: false
     type: string
@@ -339,6 +402,21 @@ definitions:
       state:
         "$ref": "#/definitions/EndpointState"
 
+  RDMAIPAMResponse:
+    description: IPAM configuration of an endpoint
+    type: object
+    required:
+      - address
+      - host-addressing
+    properties:
+      address:
+        "$ref": "#/definitions/AddressPair"
+      ipv4:
+        "$ref": "#/definitions/IPAMAddressResponse"
+      ipv6:
+        "$ref": "#/definitions/IPAMAddressResponse"
+      host-addressing:
+        "$ref": "#/definitions/NodeAddressing"
   IPAMResponse:
     description: IPAM configuration of an endpoint
     type: object

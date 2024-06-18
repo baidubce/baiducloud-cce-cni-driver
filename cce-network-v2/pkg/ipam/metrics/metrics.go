@@ -20,10 +20,15 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
 
 const ipamSubsystem = "ipam"
+
+var (
+	IMetrics ipam.MetricsAPI
+)
 
 type prometheusMetrics struct {
 	registry              *prometheus.Registry

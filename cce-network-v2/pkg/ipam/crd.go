@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
@@ -44,14 +45,15 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
-	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
 
 var (
-	sharedNetResourceSetStore *nodeStore
-	initNetResourceSetStore   sync.Once
+	sharedNetResourceSetStore     *nodeStore
+	initNetResourceSetStore       sync.Once
+	sharedRdmaNetResourceSetStore = map[string]*nodeStore{}
+	initRdmaNetResourceSetStore   = map[string]*sync.Once{}
 )
 
 const (
@@ -559,19 +561,32 @@ type crdAllocator struct {
 }
 
 // newCRDAllocator creates a new CRD-backed IP allocator
-func newCRDAllocator(family Family, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) Allocator {
-	initNetResourceSetStore.Do(func() {
-		sharedNetResourceSetStore = newNetResourceSetStore(nodeTypes.GetName(), c, owner, k8sEventReg, mtuConfig)
-	})
+func newCRDAllocator(networkResourceSetName string, family Family, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) Allocator {
+	var netResourceSetStore *nodeStore
+	if bceutils.IsRdmaNetResourceSet(networkResourceSetName) {
+		if _, ok := initRdmaNetResourceSetStore[networkResourceSetName]; !ok {
+			initRdmaNetResourceSetStore[networkResourceSetName] = &sync.Once{}
+		}
+		irs := initRdmaNetResourceSetStore[networkResourceSetName]
+		irs.Do(func() {
+			sharedRdmaNetResourceSetStore[networkResourceSetName] = newNetResourceSetStore(networkResourceSetName, c, owner, k8sEventReg, mtuConfig)
+		})
+		netResourceSetStore = sharedRdmaNetResourceSetStore[networkResourceSetName]
+	} else {
+		initNetResourceSetStore.Do(func() {
+			sharedNetResourceSetStore = newNetResourceSetStore(networkResourceSetName, c, owner, k8sEventReg, mtuConfig)
+		})
+		netResourceSetStore = sharedNetResourceSetStore
+	}
 
 	allocator := &crdAllocator{
 		allocated: ipamTypes.AllocationMap{},
 		family:    family,
-		store:     sharedNetResourceSetStore,
+		store:     netResourceSetStore,
 		conf:      c,
 	}
 
-	sharedNetResourceSetStore.addAllocator(allocator)
+	netResourceSetStore.addAllocator(allocator)
 
 	return allocator
 }
@@ -625,9 +640,10 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 		result.CIDRs = []string{cidr}
 		// this field presents the ENI ID
 		result.InterfaceNumber = ipInfo.Resource
-
-	// In ENI mode, the Resource points to the ENI so we can derive the
-	// master interface and all CIDRs of the VPC
+	case ipamOption.IPAMRdma:
+		// In RDMA mode, the Resource points to the ENI so we can derive the
+		// this field presents the ENI ID
+		result.InterfaceNumber = ipInfo.Resource
 	case ipamOption.IPAMPrivateCloudBase:
 		a.store.mutex.RLock()
 		defer a.store.mutex.RUnlock()

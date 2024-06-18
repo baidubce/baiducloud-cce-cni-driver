@@ -53,6 +53,13 @@ type LocalNodeConfiguration struct {
 	// subsequent calls to NodeConfigurationChanged().
 	EnableIPv6 bool
 
+	// EnableRDMA enables use of RDMA. Routing to the RDMA allocation CIDR
+	// of other nodes must be enabled.
+	//
+	// This field is immutable at runtime. The value will not change in
+	// subsequent calls to NodeConfigurationChanged().
+	EnableRDMA bool
+
 	// UseSingleClusterRoute enables the use of a single cluster-wide route
 	// to direct traffic from the host into the CCE datapath.  This
 	// avoids the requirement to install a separate route for each node

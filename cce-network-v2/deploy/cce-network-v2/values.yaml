@@ -10,11 +10,14 @@ network:
       # 注意 repository + name 才是完整的镜像名
       repository: registry.baidubce.com/cce-plugin-pro
       # 使用vpc-eni作为operator镜像
-      name: cce-network-operator-vpc-eni
+      ethernetName: cce-network-operator-vpc-eni
+      rdmaName: cce-network-operator-rdma
       pullPolicy: Always
       # Overrides the image tag whose default is the chart appVersion.
       tag: ""
     resources: { }
+    rdma:
+      enable: true
     webhook:
       mutating: cce-network-v2-mutating-webhook
       validating: ""
@@ -146,6 +149,7 @@ ccedConfig:
   # 启动ipv4
   enable-ipv4: true
   enable-ipv6: false
+  enable-rdma: true
   cce-endpoint-gc-interval: 30s
   # cni 固定IP申请等待超时时间
   fixed-ip-allocate-timeout: 30s
@@ -192,6 +196,12 @@ ccedConfig:
   # 每个节点缓存的IP数量
   ippool-pre-allocate-ips: 2
   ippool-max-above-watermark: 2
+    # RDMA IP池设置
+  rdmaippool:
+    enabled: true
+    minAllocate: 12
+    preAllocate: 12
+    maxAboveWatermark: 2
 
   # api 限流配置
   default-api-burst: 5

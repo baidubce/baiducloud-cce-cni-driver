@@ -171,6 +171,9 @@ const (
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP = "bce-customer-max-ip"
 
+	// BCECustomerMaxRdmaIP is the max rdma ip number of customer
+	BCECustomerMaxRdmaIP = "bce-customer-max-rdma-ip"
+
 	// CCEK8sNamespace is the namespace where CCE pods are running.
 	CCEK8sNamespace = "cce-pod-namespace"
 
@@ -334,6 +337,9 @@ type OperatorConfig struct {
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP int
 
+	// BCECustomerMaxRdmaIP is the max RDMA ip number of customer
+	BCECustomerMaxRdmaIP int
+
 	// CCEK8sNamespace is the namespace where CCE pods are running.
 	CCEK8sNamespace string
 
@@ -380,6 +386,9 @@ type OperatorConfig struct {
 
 	// EnableIPv6 enables IPv6 support
 	EnableIPv6 bool
+
+	// EnableRDMA enables RDMA support
+	EnableRDMA bool
 }
 
 // Populate sets all options with the values from viper.
@@ -418,6 +427,7 @@ func (c *OperatorConfig) Populate() {
 	c.PSTSSubnetReversedIPNum = viper.GetInt(PSTSSubnetReversedIPNum)
 	c.EnableIPv4 = viper.GetBool(option.EnableIPv4Name)
 	c.EnableIPv6 = viper.GetBool(option.EnableIPv6Name)
+	c.EnableRDMA = viper.GetBool(option.EnableRDMA)
 	c.CCEK8sNamespace = viper.GetString(CCEK8sNamespace)
 	if c.CCEK8sNamespace == "" {
 		if option.Config.K8sNamespace == "" {
@@ -448,6 +458,8 @@ func (c *OperatorConfig) Populate() {
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
+
+	c.BCECustomerMaxRdmaIP = viper.GetInt(BCECustomerMaxRdmaIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
 	c.FixedIPTimeout = viper.GetDuration(option.FixedIPTimeout)

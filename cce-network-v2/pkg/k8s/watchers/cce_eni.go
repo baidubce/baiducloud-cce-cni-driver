@@ -26,11 +26,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"k8s.io/client-go/tools/cache"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/resources"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
@@ -49,10 +48,23 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 	var once sync.Once
 	apiGroup := k8sAPIGroupCCEENIV2
 
+	// Select only the ENI of the local node,
+	// contains Ethernet NetResourceSet and RDMA NetResourceSet objects
+	values := []string{nodeTypes.GetName()}
+	rii, _ := bceutils.GetRdmaIFsInfo(nodeTypes.GetName(), nil)
+	for _, v := range rii {
+		values = append(values, v.NetResourceSetName)
+	}
+	requirement := metav1.LabelSelectorRequirement{
+		Key:      k8s.LabelNodeName,
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   values,
+	}
+	labelSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},
+	}
 	// Select only the ENI of the local node
-	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelNodeName: nodeTypes.GetName(),
-	}))
+	selector, _ := metav1.LabelSelectorAsSelector(labelSelector)
 	optionsModifier := func(options *metav1.ListOptions) {
 		options.LabelSelector = selector.String()
 	}

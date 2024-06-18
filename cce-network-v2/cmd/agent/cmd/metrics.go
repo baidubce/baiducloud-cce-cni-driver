@@ -69,6 +69,7 @@ type bootstrapStatistics struct {
 	initDaemon spanstat.SpanStat
 	cleanup    spanstat.SpanStat
 	ipam       spanstat.SpanStat
+	rdmaIpam   spanstat.SpanStat
 	daemonInit spanstat.SpanStat
 	enim       spanstat.SpanStat
 }
@@ -92,6 +93,7 @@ func (b *bootstrapStatistics) getMap() map[string]*spanstat.SpanStat {
 		"initAPI":    &b.initAPI,
 		"initDaemon": &b.initDaemon,
 		"ipam":       &b.ipam,
+		"rdmaIpam":   &b.rdmaIpam,
 		"daemonInit": &b.daemonInit,
 		"enim":       &b.enim,
 	}

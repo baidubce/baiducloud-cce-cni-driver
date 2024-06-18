@@ -28,6 +28,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/mtu"
+	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 )
 
 type ownerMock struct{}
@@ -44,7 +45,7 @@ var mtuMock = mtu.NewConfiguration(0, false, false, false, 1500, nil)
 
 func (s *IPAMSuite) TestAllocatedIPDump(c *C) {
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
 	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
@@ -76,7 +77,7 @@ func (s *IPAMSuite) TestExpirationTimer(c *C) {
 	timeout := 50 * time.Millisecond
 
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	err := ipam.AllocateIP(ip, "foo")
 	c.Assert(err, IsNil)
@@ -142,7 +143,7 @@ func (s *IPAMSuite) TestAllocateNextWithExpiration(c *C) {
 	timeout := 50 * time.Millisecond
 
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	ipv4, ipv6, err := ipam.AllocateNextWithExpiration("", "foo", timeout)
 	c.Assert(err, IsNil)

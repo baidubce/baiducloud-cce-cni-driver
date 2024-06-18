@@ -121,7 +121,7 @@ type MtuConfiguration interface {
 }
 
 // NewIPAM returns a new IP address manager
-func NewIPAM(nodeAddressing types.NodeAddressing, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) *IPAM {
+func NewIPAM(networkResourceSetName string, nodeAddressing types.NodeAddressing, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) *IPAM {
 	ipam := &IPAM{
 		nodeAddressing:   nodeAddressing,
 		config:           c,
@@ -155,14 +155,14 @@ func NewIPAM(nodeAddressing types.NodeAddressing, c Configuration, owner Owner, 
 		if c.IPv4Enabled() {
 			ipam.IPv4Allocator = newClusterPoolAllocator(IPv4, c, owner, k8sEventReg)
 		}
-	case ipamOption.IPAMCRD, ipamOption.IPAMVpcEni, ipamOption.IPAMPrivateCloudBase:
+	case ipamOption.IPAMCRD, ipamOption.IPAMVpcEni, ipamOption.IPAMRdma, ipamOption.IPAMPrivateCloudBase:
 		log.Info("Initializing CRD-based IPAM")
 		if c.IPv6Enabled() {
-			ipam.IPv6Allocator = newCRDAllocator(IPv6, c, owner, k8sEventReg, mtuConfig)
+			ipam.IPv6Allocator = newCRDAllocator(networkResourceSetName, IPv6, c, owner, k8sEventReg, mtuConfig)
 		}
 
 		if c.IPv4Enabled() {
-			ipam.IPv4Allocator = newCRDAllocator(IPv4, c, owner, k8sEventReg, mtuConfig)
+			ipam.IPv4Allocator = newCRDAllocator(networkResourceSetName, IPv4, c, owner, k8sEventReg, mtuConfig)
 		}
 	case ipamOption.IPAMDelegatedPlugin:
 		log.Info("Initializing no-op IPAM since we're using a CNI delegated plugin")

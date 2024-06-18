@@ -158,7 +158,7 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 	}
 	eniCount := 0
 
-	n.manager.ForeachInstance(n.instanceID,
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// available eni have been found
 			eniCount++

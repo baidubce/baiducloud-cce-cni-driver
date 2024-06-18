@@ -397,6 +397,100 @@ func init() {
           }
         }
       }
+    },
+    "/rdmaipam": {
+      "post": {
+        "tags": [
+          "rdmaipam"
+        ],
+        "summary": "Allocate RDMA IP addresses",
+        "parameters": [
+          {
+            "$ref": "#/parameters/ipam-family"
+          },
+          {
+            "$ref": "#/parameters/ipam-owner"
+          },
+          {
+            "$ref": "#/parameters/ipam-expiration"
+          },
+          {
+            "$ref": "#/parameters/ipam-containerid"
+          },
+          {
+            "$ref": "#/parameters/ipam-netns"
+          },
+          {
+            "$ref": "#/parameters/rdmaipam-ifnames"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RDMAIPAMResponse"
+              }
+            }
+          },
+          "502": {
+            "description": "Allocation failure",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          }
+        }
+      }
+    },
+    "/rdmaipam/{rdmaips}": {
+      "delete": {
+        "tags": [
+          "rdmaipam"
+        ],
+        "summary": "Release allocated RDMA IP addresses",
+        "parameters": [
+          {
+            "$ref": "#/parameters/rdmaipam-release-arg"
+          },
+          {
+            "$ref": "#/parameters/ipam-owner"
+          },
+          {
+            "$ref": "#/parameters/ipam-containerid"
+          },
+          {
+            "$ref": "#/parameters/ipam-netns"
+          },
+          {
+            "$ref": "#/parameters/rdmaipam-ifnames"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid IP address",
+            "x-go-name": "Invalid"
+          },
+          "404": {
+            "description": "IP address not found"
+          },
+          "500": {
+            "description": "Address release failure",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          },
+          "501": {
+            "description": "Allocation for address family disabled",
+            "x-go-name": "Disabled"
+          }
+        }
+      }
     }
   },
   "definitions": {
@@ -853,6 +947,28 @@ func init() {
         }
       }
     },
+    "RDMAIPAMResponse": {
+      "description": "IPAM configuration of an endpoint",
+      "type": "object",
+      "required": [
+        "address",
+        "host-addressing"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/definitions/AddressPair"
+        },
+        "host-addressing": {
+          "$ref": "#/definitions/NodeAddressing"
+        },
+        "ipv4": {
+          "$ref": "#/definitions/IPAMAddressResponse"
+        },
+        "ipv6": {
+          "$ref": "#/definitions/IPAMAddressResponse"
+        }
+      }
+    },
     "Status": {
       "description": "Status of an individual component\n\n+k8s:deepcopy-gen=true\n",
       "type": "object",
@@ -980,6 +1096,19 @@ func init() {
       "type": "string",
       "description": "K8s pod name\n",
       "name": "pod",
+      "in": "path",
+      "required": true
+    },
+    "rdmaipam-ifnames": {
+      "type": "string",
+      "description": "rdma ifnames provider by cni",
+      "name": "rdmaIfnames",
+      "in": "query"
+    },
+    "rdmaipam-release-arg": {
+      "type": "string",
+      "description": "RDMA IP addresses or owner name",
+      "name": "rdmaips",
       "in": "path",
       "required": true
     },
@@ -1450,6 +1579,134 @@ func init() {
           },
           "500": {
             "description": "Metrics cannot be retrieved"
+          }
+        }
+      }
+    },
+    "/rdmaipam": {
+      "post": {
+        "tags": [
+          "rdmaipam"
+        ],
+        "summary": "Allocate RDMA IP addresses",
+        "parameters": [
+          {
+            "enum": [
+              "ipv4",
+              "ipv6"
+            ],
+            "type": "string",
+            "name": "family",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "name": "owner",
+            "in": "query"
+          },
+          {
+            "type": "boolean",
+            "name": "expiration",
+            "in": "header"
+          },
+          {
+            "type": "string",
+            "description": "container id provider by cni",
+            "name": "containerID",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "netns provider by cni",
+            "name": "netns",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "rdma ifnames provider by cni",
+            "name": "rdmaIfnames",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RDMAIPAMResponse"
+              }
+            }
+          },
+          "502": {
+            "description": "Allocation failure",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          }
+        }
+      }
+    },
+    "/rdmaipam/{rdmaips}": {
+      "delete": {
+        "tags": [
+          "rdmaipam"
+        ],
+        "summary": "Release allocated RDMA IP addresses",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "RDMA IP addresses or owner name",
+            "name": "rdmaips",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "name": "owner",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "container id provider by cni",
+            "name": "containerID",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "netns provider by cni",
+            "name": "netns",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "rdma ifnames provider by cni",
+            "name": "rdmaIfnames",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid IP address",
+            "x-go-name": "Invalid"
+          },
+          "404": {
+            "description": "IP address not found"
+          },
+          "500": {
+            "description": "Address release failure",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            },
+            "x-go-name": "Failure"
+          },
+          "501": {
+            "description": "Allocation for address family disabled",
+            "x-go-name": "Disabled"
           }
         }
       }
@@ -1961,6 +2218,28 @@ func init() {
         }
       }
     },
+    "RDMAIPAMResponse": {
+      "description": "IPAM configuration of an endpoint",
+      "type": "object",
+      "required": [
+        "address",
+        "host-addressing"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/definitions/AddressPair"
+        },
+        "host-addressing": {
+          "$ref": "#/definitions/NodeAddressing"
+        },
+        "ipv4": {
+          "$ref": "#/definitions/IPAMAddressResponse"
+        },
+        "ipv6": {
+          "$ref": "#/definitions/IPAMAddressResponse"
+        }
+      }
+    },
     "Status": {
       "description": "Status of an individual component\n\n+k8s:deepcopy-gen=true\n",
       "type": "object",
@@ -2088,6 +2367,19 @@ func init() {
       "type": "string",
       "description": "K8s pod name\n",
       "name": "pod",
+      "in": "path",
+      "required": true
+    },
+    "rdmaipam-ifnames": {
+      "type": "string",
+      "description": "rdma ifnames provider by cni",
+      "name": "rdmaIfnames",
+      "in": "query"
+    },
+    "rdmaipam-release-arg": {
+      "type": "string",
+      "description": "RDMA IP addresses or owner name",
+      "name": "rdmaips",
       "in": "path",
       "required": true
     },

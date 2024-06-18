@@ -140,6 +140,7 @@ ccedConfig:
   # 启动ipv4
   enable-ipv4: true
   enable-ipv6: false
+  enable-rdma: false
   cce-endpoint-gc-interval: 30s
   # cni 固定IP申请等待超时时间
   fixed-ip-allocate-timeout: 30s

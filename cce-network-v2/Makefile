@@ -210,7 +210,7 @@ GIT_VERSION: force
 	@if [ "$(GIT_VERSION)" != "`cat 2>/dev/null GIT_VERSION`" ] ; then echo "$(GIT_VERSION)" >GIT_VERSION; fi
 
 # DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator
-DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni
+DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator-rdma
 docker: GOARCH = amd64
 docker: $(DOCKER_IMAGES)
 docker-arm: GOARCH = arm64

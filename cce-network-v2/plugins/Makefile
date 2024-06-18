@@ -3,7 +3,7 @@
 
 include ../Makefile.defs
 
-TARGETS := enim exclusive-device sbr-eip cipam cptp endpoint-probe
+TARGETS := enim exclusive-device sbr-eip cipam cptp endpoint-probe roce
 
 .PHONY: all $(TARGETS) clean install
 

@@ -486,6 +486,9 @@ func initializeFlags() {
 	flags.StringSlice(option.ENIEnterpriseSecurityGroupIds, []string{}, "enterprise security group ids")
 	option.BindEnv(option.ENIEnterpriseSecurityGroupIds)
 
+	flags.Int(option.MaxRDMAIPsPerENI, 0, "max RDMA IPs can be allocated to a RDMA ENI , 0 means no limit")
+	option.BindEnv(option.MaxRDMAIPsPerENI)
+
 	flags.Bool(option.EnableBandwidthManager, true, "enable bandwidth manager")
 	option.BindEnv(option.EnableBandwidthManager)
 
@@ -743,6 +746,8 @@ func (d *Daemon) instantiateAPI() *restapi.CceAPIAPI {
 	restAPI.IpamPostIpamHandler = NewPostIPAMHandler(d)
 	restAPI.IpamPostIpamIPHandler = NewPostIPAMIPHandler(d)
 	restAPI.IpamDeleteIpamIPHandler = NewDeleteIPAMIPHandler(d)
+	restAPI.RdmaipamPostRdmaipamHandler = NewPostRDMAIPAMHandler(d)
+	restAPI.RdmaipamDeleteRdmaipamRdmaipsHandler = NewDeleteRDMAIPAMIPHandler(d)
 
 	// /eni
 	restAPI.EniPostEniHandler = NewPostEniHandler(d)

@@ -10,7 +10,7 @@ VPC-ENI 模式容器网络，容器默认使用创建集群时通过 `eni-subnet
 ## 2. 设计方案
 CCE 上通过在创建 Pod 前为 Node 添加 `network.cce.baidubce.com/node-eni-subnet-ids` Annotation 实现给 Node 指定子网分配 IP。例如：
 ```bash
-kubectl annotate node cce-node-01 network.cce.baidubce.comnode-eni-subnet-ids="sbn-xxxxxx1,sbn-xxxxxx2"
+kubectl annotate node cce-node-01 network.cce.baidubce.com/node-eni-subnet-ids="sbn-xxxxxx1,sbn-xxxxxx2"
 ```
 
 为了兼容已有 BCC/EBC 集群使用集群子网的默认逻辑，在用户没有设置指定节点子网时，依然能够快速就绪工作，`cce-network-v2-config` 新增 `enable-node-annotation-sync` 配置项，默认为 false。如果 `enable-node-eni-subnet` 为 true，则开启 Node 到 nrs 对象的 annotation 同步逻辑，当用户为 Node 添加 `network.cce.baidubce.com/node-eni-subnet-ids` Annotation 时，会同步到 nrs 对象中。

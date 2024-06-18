@@ -24,7 +24,6 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/limit"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -33,6 +32,10 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+)
+
+const (
+	defaultBBCMaxIPsPerENI = 40
 )
 
 // bccNode is a wrapper of Node, which is used to distinguish bcc node
@@ -141,7 +144,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 			Spec: ccev2.ENISpec{
 				NodeName: n.k8sObj.Name,
 				Type:     ccev2.ENIForBBC,
-				UseMode:  ccev2.ENIUseModeSecondaryIP,
+				UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
 				ENI: models.ENI{
 					ID:               bbceni.Id,
 					Name:             bbceni.Name,
@@ -153,6 +156,8 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 					IPV6PrivateIPSet: ipv6IPSet,
 					MacAddress:       bbceni.MacAddress,
 				},
+				RouteTableOffset:          n.k8sObj.Spec.ENI.RouteTableOffset,
+				InstallSourceBasedRouting: false,
 			},
 			Status: ccev2.ENIStatus{},
 		}
@@ -172,7 +177,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 	return n.updateNrsSubnetIfNeed([]string{bbceni.SubnetId})
 }
 
-func (n *bbcNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceManager, error) {
+func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
 	client := k8s.WatcherClient()
 	if client == nil {
@@ -180,13 +185,15 @@ func (n *bbcNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceMana
 	}
 	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(n.k8sObj.Name)
 	if err != nil {
-		scopeLog.Errorf("Get node failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)
 	}
 
-	resourceManger := limit.NewBBCIPResourceManager(client, k8sNode)
-	n.capacity = resourceManger.CalaculateCapacity()
-	return resourceManger, nil
+	// default bbc ip quota
+	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
+	eniQuota.SetMaxENI(1)
+	eniQuota.SetMaxIP(defaultBBCMaxIPsPerENI)
+
+	return eniQuota, nil
 }
 
 // allocateIPs implements realNodeInf
@@ -268,14 +275,14 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 		return allocation, nil
 	}
 
-	if n.capacity != nil {
-		err := n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+	eniQuota := n.getENIQuota()
+	if eniQuota != nil {
+		n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil
 			}
-
-			allocation.AvailableForAllocationIPv4 = n.capacity.MaxIPPerENI - len(e.Spec.PrivateIPSet)
+			allocation.AvailableForAllocationIPv4 = eniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
 			allocation.InterfaceID = e.Name
 
 			if n.enableNodeAnnotationSubnet() {
@@ -308,8 +315,8 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 }
 
 // GetMaximumAllocatable implements realNodeInf
-func (*bbcNode) getMaximumAllocatable(capacity *limit.NodeCapacity) int {
-	return capacity.MaxIPPerENI - 1
+func (*bbcNode) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
+	return eniQuota.GetMaxIP() - 1
 }
 
 // GetMinimumAllocatable implements realNodeInf

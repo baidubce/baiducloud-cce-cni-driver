@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -214,6 +215,18 @@ func SetupLogging(loggers []string, logOpts LogOptions, tag string, debug bool) 
 		AddHooks(hooks.NewFileRotationLogHook(filepath.Join(logOpts.GetLogFile(), tag, ".log"), hooks.WithMaxSize(1024)))
 	}
 
+	return nil
+}
+
+func SetupCNILogging(tag string, debug bool) error {
+	opt := LogOptions(map[string]string{"syslog.level": "info", "syslog.facility": "local5"})
+	if debug {
+		opt["syslog.level"] = "debug"
+	}
+	// Logging should always be bootstrapped first. Do not add any code above this!
+	if err := SetupLogging([]string{"syslog"}, opt, tag, debug); err != nil {
+		log.Fatalf("failed to setup syslog: %v", err)
+	}
 	return nil
 }
 

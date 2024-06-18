@@ -1,5 +1,8 @@
 go 1.20
 
-use ./cce-network-v2
+use (
+    ./cce-network-v2
+    ./eip-operator
+    ./bce-sdk-go
+)
 
-use ./eip-operator

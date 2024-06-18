@@ -413,6 +413,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			nodeResource.Spec.IPAM.PodCIDRReleaseThreshold = c.IPAM.PodCIDRReleaseThreshold
 		}
 	case ipamOption.IPAMVpcEni:
+		// only generate eni spec when it is not set
 		if nodeResource.Spec.ENI == nil {
 			eni, err := agent.GenerateENISpec()
 			if err != nil {
@@ -431,11 +432,31 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 				}
 			}
 
+			// reset eni spec when it is restart
+			if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+				if option.Config.IPPoolMinAllocateIPs != 0 {
+					nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
+				}
+				if option.Config.IPPoolPreAllocate != 0 {
+					nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
+				}
+				if option.Config.IPPoolMaxAboveWatermark != 0 {
+					nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
+				}
+				if option.Config.ENI.RouteTableOffset > 0 {
+					nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
+				}
+			}
+
+			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
 			// update subnet and security group ids
 			if len(nodeResource.Spec.ENI.SubnetIDs) == 0 {
 				nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
 			}
-			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
+
+			if option.Config.ENI.UsePrimaryAddress != nil {
+				nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
+			}
 		}
 	case ipamOption.IPAMPrivateCloudBase:
 		if c := n.NetConf; c != nil {

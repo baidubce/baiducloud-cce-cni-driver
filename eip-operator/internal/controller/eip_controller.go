@@ -350,6 +350,7 @@ func (r *EIPReconciler) initBCEClient() error {
 		"",             /*BCE Secure Key*/
 		k8s.Client(),
 		false,
+		30 * time.Second, /*DefaultAPIRequestTimeout*/
 	)
 	if err != nil {
 		return err

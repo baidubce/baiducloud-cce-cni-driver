@@ -138,9 +138,8 @@ func (eem *eniEndpointAllocator) ADD(owner, containerID, netnsPath string) (
 
 // allocateENI task:
 //  1. build the endpoint template
-//
-// 2. try to allocate eni, if error occured, try rollback eni status
-// 3. update eni status
+//  2. try to allocate eni, if error occured, try rollback eni status
+//  3. update eni status
 func (eem *eniEndpointAllocator) allocateENI(
 	ctx context.Context, logEntry *logrus.Entry,
 	namespace, name, containerID, netnsPath string) (

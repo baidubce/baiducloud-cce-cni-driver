@@ -16,7 +16,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -37,8 +35,6 @@ import (
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	"github.com/sirupsen/logrus"
 )
-
-const firstTableID = 100
 
 var logger *logrus.Entry
 
@@ -89,50 +85,26 @@ func parseConfig(stdin []byte) (*PluginConf, error) {
 	return &conf, nil
 }
 
-func setupLogging(n *PluginConf, args *skel.CmdArgs, method string) error {
-	f := n.LogFormat
-	if f == "" {
-		f = string(logging.DefaultLogFormat)
-	}
-	logOptions := logging.LogOptions{
-		logging.FormatOpt: f,
-	}
-	if len(n.LogFile) != 0 {
-		err := logging.SetupLogging([]string{}, logOptions, "endpoint-probe", n.EnableDebug)
-		if err != nil {
-			return err
-		}
-		logging.AddHooks(hooks.NewFileRotationLogHook(n.LogFile,
-			hooks.EnableCompression(),
-			hooks.WithMaxBackups(1),
-		))
-	} else {
-		logOptions["syslog.facility"] = "local5"
-		err := logging.SetupLogging([]string{"syslog"}, logOptions, "endpoint-probe", true)
-		if err != nil {
-			return err
-		}
-	}
-	logger = logging.DefaultLogger.WithFields(logrus.Fields{
-		"containerID": args.ContainerID,
-		"netns":       args.Netns,
-		"plugin":      "endpoint-probe",
-		"method":      method,
-	})
-
-	return nil
-}
-
 // cmdAdd is called for ADD requests
-func cmdAdd(args *skel.CmdArgs) error {
-	conf, err := parseConfig(args.StdinData)
+func cmdAdd(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "endpoint-probe",
+		"mod":     "ADD",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Errorf("cni plugin failed")
+		}
+	}()
+
+	var conf *PluginConf
+	conf, err = parseConfig(args.StdinData)
 	if err != nil {
 		return fmt.Errorf("endpoint-probe failed to parse config: %v", err)
 	}
-	err = setupLogging(conf, args, "ADD")
-	if err != nil {
-		return fmt.Errorf("endpoint-probe failed to set up logging: %v", err)
-	}
+
 	defer func() {
 		if err != nil {
 			logger.Errorf("cni plugin failed: %v", err)
@@ -145,18 +117,21 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("this plugin must be called as chained plugin")
 	}
 
-	netns, err := ns.GetNS(args.Netns)
+	var netns ns.NetNS
+	netns, err = ns.GetNS(args.Netns)
 	if err != nil {
 		return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
 	}
 	defer netns.Close()
 
-	cctx, err := link.NewContainerContext(args.ContainerID, args.Netns)
+	var cctx *link.ContainerContext
+	cctx, err = link.NewContainerContext(args.ContainerID, args.Netns)
 	if err != nil {
 		return fmt.Errorf("failed to create container context: %v", err)
 	}
 
-	response, err := probeEndpointFeature(args, cctx.Driver)
+	var response *models.EndpointProbeResponse
+	response, err = probeEndpointFeature(args, cctx.Driver)
 	if err != nil {
 		return fmt.Errorf("failed to exec endpoint probe: %v", err)
 	}
@@ -164,44 +139,9 @@ func cmdAdd(args *skel.CmdArgs) error {
 	if err != nil {
 		return fmt.Errorf("failed to set bandwidth: %v", err)
 	}
+	logger.WithField("result", logfields.Json(conf.PrevResult)).Info("success to exec plugin")
 	// Pass through the result for the next plugin
 	return types.PrintResult(conf.PrevResult, conf.CNIVersion)
-}
-
-func checkExtStatus(ctx context.Context, args *skel.CmdArgs, featureGates []*models.EndpointProbeFeatureGate) (bool, error) {
-	cniArgs := plugintypes.ArgsSpec{}
-	if err := types.LoadArgs(args.Args, &cniArgs); err != nil {
-		return false, fmt.Errorf("unable to extract CNI arguments: %s", err)
-	}
-	var (
-		extPluginData map[string]map[string]string
-		err           error
-		owner         = string(cniArgs.K8S_POD_NAMESPACE + "/" + cniArgs.K8S_POD_NAME)
-		containerID   = args.ContainerID
-	)
-
-	c, err := client.NewDefaultClientWithTimeout(defaults.ClientConnectTimeout)
-	if err != nil {
-		err = fmt.Errorf("unable to connect to cce-network-v2-agent: %s", client.Hint(err))
-		return false, err
-	}
-	param := endpoint.NewGetEndpointExtpluginStatusParams().WithOwner(&owner).WithContainerID(&containerID).WithContext(ctx)
-	result, err := c.Endpoint.GetEndpointExtpluginStatus(param)
-	if err != nil {
-		err = fmt.Errorf("unable to get endpoint extplugin status: %s", client.Hint(err))
-		return false, err
-	}
-	extPluginData = result.Payload
-	for _, featureGate := range featureGates {
-		if featureGate.WaitReady {
-			pluginData, ok := extPluginData[featureGate.Name]
-			if !ok {
-				return false, nil
-			}
-			logger.WithField("feature", featureGate).WithField("pluginData", logfields.Repr(pluginData)).Infof("found feature gate")
-		}
-	}
-	return true, nil
 }
 
 func probeEndpointFeature(args *skel.CmdArgs, driver string) (*models.EndpointProbeResponse, error) {
@@ -231,7 +171,13 @@ func probeEndpointFeature(args *skel.CmdArgs, driver string) (*models.EndpointPr
 
 // cmdDel is called for DELETE requests
 func cmdDel(args *skel.CmdArgs) error {
-
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "endpoint-probe",
+		"mod":     "DEL",
+	})
+	logger.Infof("success to exec endpoint-probe")
 	return nil
 }
 

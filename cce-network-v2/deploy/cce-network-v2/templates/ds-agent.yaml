@@ -77,9 +77,6 @@ spec:
               name: etc-host
             - mountPath: /lib/modules
               name: lib-modules
-            - mountPath: /etc/cce/cni-config-template
-              readOnly: true
-              name: cni-config-template  
           ports:
             - name: healthz
               containerPort: 19879
@@ -147,10 +144,6 @@ spec:
                 path: network-v2-config.yaml
             name: cce-network-v2-config
           name: cce-network-v2-config
-        - configMap:
-            defaultMode: 420
-            name: cni-config-template 
-          name: cni-config-template  
 
       {{- with .Values.tolerations }}
       tolerations:
@@ -163,5 +156,5 @@ spec:
 
   updateStrategy:
     rollingUpdate:
-      maxUnavailable: 1
+      maxUnavailable: 10
     type: RollingUpdate

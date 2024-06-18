@@ -162,7 +162,7 @@ func isSameContainerID(oldEP *ccev2.CCEEndpoint, containerID string) bool {
 
 // ADD allocates an IP for the given owner and returns the allocated IP.
 func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
-	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
+	namespace, podName, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,7 +171,7 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		ctx, cancelFun = context.WithTimeout(logfields.NewContext(), e.c.GetFixedIPTimeout())
 		logEntry       = allocatorLog.WithFields(logrus.Fields{
 			"namespace":   namespace,
-			"name":        name,
+			"name":        podName,
 			"module":      "AllocateNext",
 			"ipv4":        logfields.Repr(ipv4Result),
 			"ipv6":        logfields.Repr(ipv6Result),
@@ -198,16 +198,16 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		logEntry.Infof("cni ADD success")
 	}()
 
-	pod, err = e.podClient.Get(namespace, name)
+	pod, err = e.podClient.Get(namespace, podName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, name, err)
+		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, podName, err)
 	}
 
 	isFixedPod := k8s.HaveFixedIPLabel(&pod.ObjectMeta)
 	// warning: old wep use node selector,
 	// So here oldWEP from the cache may not exist,
 	// we need to retrieve it from the api-server
-	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, name)
+	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, podName)
 	if err != nil {
 		return
 	}
@@ -655,7 +655,7 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		if ip != "" {
 			err = e.dynamicIPAM.ReleaseIPString(ip)
 			if err != nil {
-				logEntry.Warningf("failed to release ip %s", ip)
+				logEntry.WithField("err", err).Warningf("failed to release ip %s", ip)
 			}
 		}
 	}

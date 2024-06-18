@@ -130,6 +130,35 @@ func (mr *MockInterfaceMockRecorder) BBCBatchDelIP(arg0, arg1 interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchDelIP), arg0, arg1)
 }
 
+// BCCBatchAddIP mocks base method.
+func (m *MockInterface) BCCBatchAddIP(arg0 context.Context, arg1 *api.BatchAddIpArgs) (*api.BatchAddIpResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BCCBatchAddIP", arg0, arg1)
+	ret0, _ := ret[0].(*api.BatchAddIpResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BCCBatchAddIP indicates an expected call of BCCBatchAddIP.
+func (mr *MockInterfaceMockRecorder) BCCBatchAddIP(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchAddIP), arg0, arg1)
+}
+
+// BCCBatchDelIP mocks base method.
+func (m *MockInterface) BCCBatchDelIP(arg0 context.Context, arg1 *api.BatchDelIpArgs) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BCCBatchDelIP", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// BCCBatchDelIP indicates an expected call of BCCBatchDelIP.
+func (mr *MockInterfaceMockRecorder) BCCBatchDelIP(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchDelIP), arg0, arg1)
+}
+
 // BatchAddHpcEniPrivateIP mocks base method.
 func (m *MockInterface) BatchAddHpcEniPrivateIP(arg0 context.Context, arg1 *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
 	m.ctrl.T.Helper()
@@ -377,6 +406,21 @@ func (mr *MockInterfaceMockRecorder) GetBCCInstanceDetail(arg0, arg1 interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBCCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBCCInstanceDetail), arg0, arg1)
 }
 
+// GetENIQuota mocks base method.
+func (m *MockInterface) GetENIQuota(arg0 context.Context, arg1 string) (*eni.EniQuoteInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetENIQuota", arg0, arg1)
+	ret0, _ := ret[0].(*eni.EniQuoteInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetENIQuota indicates an expected call of GetENIQuota.
+func (mr *MockInterfaceMockRecorder) GetENIQuota(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIQuota", reflect.TypeOf((*MockInterface)(nil).GetENIQuota), arg0, arg1)
+}
+
 // GetHPCEniID mocks base method.
 func (m *MockInterface) GetHPCEniID(arg0 context.Context, arg1 string) (*hpc.EniList, error) {
 	m.ctrl.T.Helper()
@@ -390,6 +434,21 @@ func (m *MockInterface) GetHPCEniID(arg0 context.Context, arg1 string) (*hpc.Eni
 func (mr *MockInterfaceMockRecorder) GetHPCEniID(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHPCEniID", reflect.TypeOf((*MockInterface)(nil).GetHPCEniID), arg0, arg1)
+}
+
+// ListBCCInstanceEni mocks base method.
+func (m *MockInterface) ListBCCInstanceEni(arg0 context.Context, arg1 string) ([]api.Eni, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListBCCInstanceEni", arg0, arg1)
+	ret0, _ := ret[0].([]api.Eni)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListBCCInstanceEni indicates an expected call of ListBCCInstanceEni.
+func (mr *MockInterfaceMockRecorder) ListBCCInstanceEni(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListBCCInstanceEni", reflect.TypeOf((*MockInterface)(nil).ListBCCInstanceEni), arg0, arg1)
 }
 
 // ListEIPs mocks base method.

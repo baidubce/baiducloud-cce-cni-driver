@@ -24,16 +24,17 @@ import (
 
 	"github.com/sirupsen/logrus"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	ipPkg "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/revert"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
@@ -161,7 +162,6 @@ var updateK8sInterval = 15 * time.Second
 type NodesPodCIDRManager struct {
 	k8sReSyncController *controller.Manager
 	k8sReSync           *trigger.Trigger
-	nodeGetter          ipam.NetResourceSetGetterUpdater
 
 	// Lock protects all fields below
 	lock.Mutex
@@ -217,7 +217,6 @@ func NewNodesPodCIDRManager(
 		nodes:                map[string]*nodeCIDRs{},
 		netResourceSetsToK8s: map[string]*netResourceSetK8sOp{},
 		k8sReSyncController:  controller.NewManager(),
-		nodeGetter:           nodeGetter,
 	}
 
 	// Have a trigger so that multiple calls, within a second, to sync with k8s
@@ -370,8 +369,64 @@ func (n *NodesPodCIDRManager) Create(node *v2.NetResourceSet) error {
 func (n *NodesPodCIDRManager) Update(node *v2.NetResourceSet) error {
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
+	return n.update(node)
+}
 
-	n.upsertLocked(node)
+// Needs n.Mutex to be held.
+func (n *NodesPodCIDRManager) update(node *v2.NetResourceSet) error {
+	var (
+		updateStatus, updateSpec bool
+		cn                       *v2.NetResourceSet
+		err                      error
+	)
+	if option.Config.IPAMMode() == ipamOption.IPAMClusterPoolV2 || option.Config.IPAMMode() == ipamOption.IPAMVpcRoute {
+		cn, updateSpec, updateStatus, err = n.allocateNodeV2(node)
+		if err != nil {
+			return err
+		}
+	} else {
+		// FIXME: This code block falls back to the old behavior of clusterpool,
+		// where we only assign one pod CIDR for IPv4 and IPv6. Once v2 becomes
+		// fully backwards compatible with v1, we can remove this else block.
+		var allocated bool
+		cn, allocated, updateStatus, err = n.allocateNode(node)
+		if err != nil {
+			return err
+		}
+		// if allocated is false it means that we were unable to allocate
+		// a CIDR so we need to update the status of the node into k8s.
+		updateStatus = !allocated && updateStatus
+		// ClusterPool v1 never updates both the spec and the status
+		updateSpec = !updateStatus
+	}
+	if cn == nil {
+		// no-op
+		return nil
+	}
+	if updateStatus {
+		// the n.syncNode will never fail because it's only adding elements to a
+		// map.
+		// NodesPodCIDRManager will later on sync the node into k8s by the
+		// controller defined, which keeps retrying to create the node in k8s
+		// until it succeeds.
+
+		// If the resource version is != "" it means the object already exists
+		// in kubernetes so we should perform an update status instead of a create.
+		if cn.GetResourceVersion() != "" {
+			n.syncNode(k8sOpUpdateStatus, cn)
+		} else {
+			n.syncNode(k8sOpCreate, cn)
+		}
+	}
+	if updateSpec {
+		// If the resource version is != "" it means the object already exists
+		// in kubernetes so we should perform an update instead of a create.
+		if cn.GetResourceVersion() != "" {
+			n.syncNode(k8sOpUpdate, cn)
+		} else {
+			n.syncNode(k8sOpCreate, cn)
+		}
+	}
 	return nil
 }
 
@@ -400,66 +455,18 @@ func (n *NodesPodCIDRManager) Delete(nodeName string) error {
 func (n *NodesPodCIDRManager) Resync(context.Context, time.Time) {
 	n.Mutex.Lock()
 	if !n.canAllocatePodCIDRs {
-		nrsDatas, err := n.nodeGetter.Lister().List(labels.Everything())
-		if err != nil {
-			log.WithError(err).Fatal("Failed to list NetResourceSet")
-		}
-		for _, nrs := range nrsDatas {
-			n.upsertLocked(nrs)
-		}
-
-		log.Infof("completed to resync %d nrs cidr", len(nrsDatas))
-		// We can now allocate podCIDRs
 		n.canAllocatePodCIDRs = true
 		// Iterate over all nodes that we have kept stored up until Resync
 		// is called as now we are allowed to allocate podCIDRs for nodes
 		// without any podCIDR.
 		for _, cn := range n.nodesToAllocate {
-			n.upsertLocked(cn)
+			n.update(cn)
 		}
 		n.nodesToAllocate = nil
-		log.Infof("completed to allocate new %d nodes cidr", len(n.nodesToAllocate))
 	}
 	n.Mutex.Unlock()
 
 	n.k8sReSync.Trigger()
-}
-
-// Needs n.Mutex to be held.
-func (n *NodesPodCIDRManager) upsertLocked(node *v2.NetResourceSet) {
-	cn, allocated, updateStatus, err := n.allocateNode(node)
-	if err != nil {
-		return
-	}
-	if cn == nil {
-		// no-op
-		return
-	}
-	// if allocated is false it means that we were unable to allocate
-	// a CIDR so we need to update the status of the node into k8s.
-	if !allocated && updateStatus {
-		// the n.syncNode will never fail because it's only adding elements to a
-		// map.
-		// NodesPodCIDRManager will later on sync the node into k8s by the
-		// controller defined, which keeps retrying to create the node in k8s
-		// until it succeeds.
-
-		// If the resource version is != "" it means the object already exists
-		// in kubernetes so we should perform an update status instead of a create.
-		if cn.GetResourceVersion() != "" {
-			n.syncNode(k8sOpUpdateStatus, cn)
-		} else {
-			n.syncNode(k8sOpCreate, cn)
-		}
-		return
-	}
-	// If the resource version is != "" it means the object already exists
-	// in kubernetes so we should perform an update instead of a create.
-	if cn.GetResourceVersion() != "" {
-		n.syncNode(k8sOpUpdate, cn)
-	} else {
-		n.syncNode(k8sOpCreate, cn)
-	}
 }
 
 // AllocateNode allocates the podCIDRs for the given node. Returns a DeepCopied

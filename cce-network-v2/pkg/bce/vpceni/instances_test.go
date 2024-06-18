@@ -1,8 +1,6 @@
 package vpceni
 
 import (
-	"testing"
-
 	"github.com/golang/mock/gomock"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
@@ -10,8 +8,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 )
 
-func newMockInstancesManager(t *testing.T) *InstancesManager {
-	mockCtl := gomock.NewController(t)
+func newMockInstancesManager(mockCtl *gomock.Controller) *InstancesManager {
 	mockCloudInterface := cloudtesting.NewMockInterface(mockCtl)
 
 	im := newInstancesManager(mockCloudInterface,

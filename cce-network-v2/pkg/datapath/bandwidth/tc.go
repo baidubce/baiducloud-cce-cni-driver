@@ -18,11 +18,11 @@ const (
 func (manager *BandwidthManager) setVethTC(cctx *link.ContainerContext, opt *ccev2.BindwidthOption) error {
 	err := SetupTBFQdisc(cctx.HostDev, uint64(opt.Ingress))
 	if err != nil {
-		return errors.Wrapf(err, "can not setup tbf qdisc on host device %v/%s", cctx.HostDev.Attrs().Name)
+		return errors.Wrapf(err, "can not setup tbf qdisc on host device %s", cctx.HostDev.Attrs().Name)
 	}
 	err = SetupTBFQdisc(cctx.ContainerDev, uint64(opt.Egress))
 	if err != nil {
-		return errors.Wrapf(err, "can not setup tbf qdisc on container device %v/%s", cctx.ContainerDev.Attrs().Name)
+		return errors.Wrapf(err, "can not setup tbf qdisc on container device %s", cctx.ContainerDev.Attrs().Name)
 	}
 	return nil
 }

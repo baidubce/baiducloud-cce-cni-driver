@@ -217,7 +217,7 @@ func checkStatus() error {
 // built-in leader election capbility in kubernetes.
 // See: https://github.com/kubernetes/client-go/blob/master/examples/leader-election/main.go
 func runOperator() {
-	log.Infof("cee ipam v2 Operator %s", version.Version)
+	log.Infof("cce ipam v2 Operator %s", version.Version)
 	k8sInitDone := make(chan struct{})
 	isLeader.Store(false)
 
@@ -343,17 +343,17 @@ func onOperatorStartLeading(ctx context.Context) {
 	}
 
 	var (
-		nodeManager        operatorWatchers.NodeEventHandler
-		cceEndpointManager operatorWatchers.EndpointEventHandler
-		sbnHandler         syncer.SubnetEventHandler
-		eniHandler         syncer.ENIEventHandler
+		netResourceSetManager operatorWatchers.NodeEventHandler
+		cceEndpointManager    operatorWatchers.EndpointEventHandler
+		sbnHandler            syncer.SubnetEventHandler
+		eniHandler            syncer.ENIEventHandler
 	)
 
 	// wait all informer synced
 	operatorWatchers.StartWatchers(shutdownSignal)
 	operatorWatchers.WaitForCacheSync(shutdownSignal)
 
-	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing IPAM")
+	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing Ethernet IPAM")
 
 	switch ipamMode := option.Config.IPAM; ipamMode {
 	case ipamOption.IPAMClusterPool,
@@ -370,12 +370,12 @@ func onOperatorStartLeading(ctx context.Context) {
 			log.WithError(err).Fatalf("Unable to init %s allocator", ipamMode)
 		}
 
-		nm, err := alloc.Start(ctx, operatorWatchers.NetResourceSetClient)
+		nrsm, err := alloc.Start(ctx, operatorWatchers.NetResourceSetClient)
 		if err != nil {
 			log.WithError(err).Fatalf("Unable to start %s allocator", ipamMode)
 		}
 
-		nodeManager = nm
+		netResourceSetManager = nrsm
 
 		// Specify fixed IP assignment
 		if ceh, ok := alloc.(endpoint.DirectAllocatorStarter); ok {
@@ -422,7 +422,7 @@ func onOperatorStartLeading(ctx context.Context) {
 		operatorWatchers.HandleNodeTolerationAndTaints(stopCh)
 	}
 
-	if err := operatorWatchers.StartSynchronizingNetResourceSets(ctx, nodeManager); err != nil {
+	if err := operatorWatchers.StartSynchronizingNetResourceSets(ctx, netResourceSetManager); err != nil {
 		log.WithError(err).Fatal("Unable to setup node watcher")
 	}
 
@@ -458,7 +458,7 @@ func onOperatorStartLeading(ctx context.Context) {
 		// knows all podCIDRs that are currently set in the cluster, that
 		// it can allocate podCIDRs for the nodes that don't have a podCIDR
 		// set.
-		nodeManager.Resync(ctx, time.Time{})
+		netResourceSetManager.Resync(ctx, time.Time{})
 	}
 
 	if option.Config.IPAM == ipamOption.IPAMVpcEni {

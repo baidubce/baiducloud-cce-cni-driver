@@ -62,7 +62,7 @@ type VPCRouteOperator struct {
 	allocator *clusterpool.AllocatorOperator
 	updater   ipam.NetResourceSetGetterUpdater
 	// realHandler is the real handler to handle node event
-	realHandler allocator.NodeEventHandler
+	realHandler allocator.NetResourceSetEventHandler
 
 	bceClient     cloud.Interface
 	vpcRouteMap   map[string]*vpc.RouteRule
@@ -82,7 +82,7 @@ func (operator *VPCRouteOperator) Init(ctx context.Context) error {
 	return operator.allocator.Init(ctx)
 }
 
-func (operator *VPCRouteOperator) Start(ctx context.Context, updater ipam.NetResourceSetGetterUpdater) (allocator.NodeEventHandler, error) {
+func (operator *VPCRouteOperator) Start(ctx context.Context, updater ipam.NetResourceSetGetterUpdater) (allocator.NetResourceSetEventHandler, error) {
 	operator.updater = updater
 
 	manager := controller.NewManager()
@@ -124,12 +124,12 @@ func (operator *VPCRouteOperator) doSyncVPCRouteRules(ctx context.Context) error
 	return nil
 }
 
-// Create implements allocator.NodeEventHandler
+// Create implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Create(resource *ccev2.NetResourceSet) error {
 	return operator.realHandler.Create(resource)
 }
 
-// Delete implements allocator.NodeEventHandler
+// Delete implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Delete(nodeName string) error {
 	oldNode, err := operator.updater.Get(nodeName)
 	if err == nil && oldNode != nil {
@@ -138,12 +138,12 @@ func (operator *VPCRouteOperator) Delete(nodeName string) error {
 	return operator.realHandler.Delete(nodeName)
 }
 
-// Resync implements allocator.NodeEventHandler
+// Resync implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Resync(context.Context, time.Time) {
 	operator.realHandler.Resync(context.Background(), time.Now())
 }
 
-// Update implements allocator.NodeEventHandler
+// Update implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
 	if len(resource.Status.IPAM.VPCRouteCIDRs) == 0 {
 		resource.Status.IPAM.VPCRouteCIDRs = make(ipamTypes.VPCRouteStatuMap)
@@ -374,7 +374,7 @@ func (operator *VPCRouteOperator) determineNodeActions(netResourceSet *ccev2.Net
 	return
 }
 
-var _ allocator.NodeEventHandler = &VPCRouteOperator{}
+var _ allocator.NetResourceSetEventHandler = &VPCRouteOperator{}
 
 func cidrToVPCRouteRule(cidrkey, instanceID, routeTableID string) (*vpc.RouteRule, error) {
 	cidrNet, err := cidr.ParseCIDR(cidrkey)

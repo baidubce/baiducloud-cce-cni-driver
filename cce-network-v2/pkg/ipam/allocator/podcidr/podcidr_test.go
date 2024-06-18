@@ -71,7 +71,7 @@ func mustNewTrigger(f func(), minInterval time.Duration) *trigger.Trigger {
 	return t
 }
 
-var defaultIPAMModes = []string{ipamOption.IPAMClusterPool}
+var defaultIPAMModes = []string{ipamOption.IPAMClusterPool, ipamOption.IPAMClusterPoolV2}
 
 func runWithIPAMModes(ipamModes []string, testFunc func(mode string)) {
 	oldIPAMMode := option.Config.IPAM

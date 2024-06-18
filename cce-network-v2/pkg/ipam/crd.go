@@ -24,8 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
-
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -45,14 +43,15 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/informer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
 
 var (
-	sharedNodeStore *nodeStore
-	initNodeStore   sync.Once
+	sharedNetResourceSetStore *nodeStore
+	initNetResourceSetStore   sync.Once
 )
 
 const (
@@ -91,10 +90,10 @@ type nodeStore struct {
 	mtuConfig MtuConfiguration
 }
 
-// newNodeStore initializes a new store which reflects the NetResourceSet custom
+// newNetResourceSetStore initializes a new store which reflects the NetResourceSet custom
 // resource of the specified node name
-func newNodeStore(nodeName string, conf Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) *nodeStore {
-	log.WithField(fieldName, nodeName).Info("Subscribed to NetResourceSet custom resource")
+func newNetResourceSetStore(networkResourceSetName string, conf Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) *nodeStore {
+	log.WithField(fieldName, networkResourceSetName).Info("Subscribed to NetResourceSet custom resource")
 
 	store := &nodeStore{
 		allocators:         []*crdAllocator{},
@@ -119,7 +118,7 @@ func newNodeStore(nodeName string, conf Configuration, owner Owner, k8sEventReg 
 	// the custom resource has been created
 	owner.UpdateNetResourceSetResource()
 	apiGroup := "cce.baidubce.com/v2::NetResourceSet"
-	netResourceSetSelector := fields.ParseSelectorOrDie("metadata.name=" + nodeName)
+	netResourceSetSelector := fields.ParseSelectorOrDie("metadata.name=" + networkResourceSetName)
 	netResourceSetStore := cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
 	netResourceSetInformer := informer.NewInformerWithStore(
 		cache.NewListWatchFromClient(cceClient.CceV2().RESTClient(),
@@ -130,9 +129,9 @@ func newNodeStore(nodeName string, conf Configuration, owner Owner, k8sEventReg 
 			AddFunc: func(obj interface{}) {
 				var valid, equal bool
 				defer func() { k8sEventReg.K8sEventReceived(apiGroup, "NetResourceSet", "create", valid, equal) }()
-				if node, ok := obj.(*ccev2.NetResourceSet); ok {
+				if nrs, ok := obj.(*ccev2.NetResourceSet); ok {
 					valid = true
-					store.updateLocalNodeResource(node.DeepCopy())
+					store.updateLocalNodeResource(nrs.DeepCopy())
 					k8sEventReg.K8sEventProcessed("NetResourceSet", "create", true)
 				} else {
 					log.Warningf("Unknown NetResourceSet object type %s received: %+v", reflect.TypeOf(obj), obj)
@@ -141,17 +140,17 @@ func newNodeStore(nodeName string, conf Configuration, owner Owner, k8sEventReg 
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				var valid, equal bool
 				defer func() { k8sEventReg.K8sEventReceived(apiGroup, "NetResourceSet", "update", valid, equal) }()
-				if oldNode, ok := oldObj.(*ccev2.NetResourceSet); ok {
-					if newNode, ok := newObj.(*ccev2.NetResourceSet); ok {
+				if oldNrs, ok := oldObj.(*ccev2.NetResourceSet); ok {
+					if newNrs, ok := newObj.(*ccev2.NetResourceSet); ok {
 						valid = true
-						newNode = newNode.DeepCopy()
-						store.updateLocalNodeResource(newNode)
+						newNrs = newNrs.DeepCopy()
+						store.updateLocalNodeResource(newNrs)
 						k8sEventReg.K8sEventProcessed("NetResourceSet", "update", true)
 					} else {
-						log.Warningf("Unknown NetResourceSet object type %T received: %+v", oldNode, oldNode)
+						log.Warningf("Unknown NetResourceSet object type %T received: %+v", oldNrs, oldNrs)
 					}
 				} else {
-					log.Warningf("Unknown NetResourceSet object type %T received: %+v", oldNode, oldNode)
+					log.Warningf("Unknown NetResourceSet object type %T received: %+v", oldNrs, oldNrs)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
@@ -171,17 +170,17 @@ func newNodeStore(nodeName string, conf Configuration, owner Owner, k8sEventReg 
 
 	go netResourceSetInformer.Run(wait.NeverStop)
 
-	log.WithField(fieldName, nodeName).Info("Waiting for NetResourceSet custom resource to become available...")
+	log.WithField(fieldName, networkResourceSetName).Info("Waiting for NetResourceSet custom resource to become available...")
 	if ok := cache.WaitForCacheSync(wait.NeverStop, netResourceSetInformer.HasSynced); !ok {
-		log.WithField(fieldName, nodeName).Fatal("Unable to synchronize NetResourceSet custom resource")
+		log.WithField(fieldName, networkResourceSetName).Fatal("Unable to synchronize NetResourceSet custom resource")
 	} else {
-		log.WithField(fieldName, nodeName).Info("Successfully synchronized NetResourceSet custom resource")
+		log.WithField(fieldName, networkResourceSetName).Info("Successfully synchronized NetResourceSet custom resource")
 	}
 
 	for {
 		minimumReached, required, numAvailable := store.hasMinimumIPsInPool()
 		logFields := logrus.Fields{
-			fieldName:   nodeName,
+			fieldName:   networkResourceSetName,
 			"required":  required,
 			"available": numAvailable,
 		}
@@ -561,18 +560,18 @@ type crdAllocator struct {
 
 // newCRDAllocator creates a new CRD-backed IP allocator
 func newCRDAllocator(family Family, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) Allocator {
-	initNodeStore.Do(func() {
-		sharedNodeStore = newNodeStore(nodeTypes.GetName(), c, owner, k8sEventReg, mtuConfig)
+	initNetResourceSetStore.Do(func() {
+		sharedNetResourceSetStore = newNetResourceSetStore(nodeTypes.GetName(), c, owner, k8sEventReg, mtuConfig)
 	})
 
 	allocator := &crdAllocator{
 		allocated: ipamTypes.AllocationMap{},
 		family:    family,
-		store:     sharedNodeStore,
+		store:     sharedNetResourceSetStore,
 		conf:      c,
 	}
 
-	sharedNodeStore.addAllocator(allocator)
+	sharedNetResourceSetStore.addAllocator(allocator)
 
 	return allocator
 }
@@ -606,6 +605,8 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 
 	switch a.conf.IPAMMode() {
 	case ipamOption.IPAMVpcEni:
+		// In ENI mode, the Resource points to the ENI so we can derive the
+		// master interface and all CIDRs of the VPC
 		if ipInfo.SubnetID == "" {
 			err = fmt.Errorf("subnet ID is for %s in %s empty", ip.String(), ipInfo.Resource)
 			return

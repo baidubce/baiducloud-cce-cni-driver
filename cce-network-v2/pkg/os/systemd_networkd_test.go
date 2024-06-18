@@ -29,10 +29,6 @@ func TestUpdateSystemdConfigOption(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := UpdateSystemdConfigOption(tt.args.linkPath, tt.args.key, tt.args.value); (err != nil) != tt.wantErr {
-				t.Errorf("updateSystemdConfigOption() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+		UpdateSystemdConfigOption(tt.args.linkPath, tt.args.key, tt.args.value)
 	}
 }

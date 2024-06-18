@@ -146,7 +146,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	var (
-		limiter           = n.bceNode.calculateLimiter()
+		eniQuota          = n.bceNode.getENIQuota()
 		availableENICount = 0
 		inuseENICount     = 0
 	)
@@ -164,7 +164,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 				}
 			} else if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
 				// if the length of private ip set is greater than the MaxIPPerENI, then the ENI is in use
-				if len(e.Spec.ENI.PrivateIPSet) >= limiter.MaxIPPerENI {
+				if len(e.Spec.ENI.PrivateIPSet) >= eniQuota.GetMaxIP() {
 					inuseENICount++
 				}
 			}
@@ -172,7 +172,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 			return nil
 		})
 
-	if availableENICount >= limiter.MaxENINum {
+	if availableENICount >= eniQuota.GetMaxENI() {
 		msg = errUnableToDetermineLimits
 		err = fmt.Errorf(msg)
 		return
@@ -253,7 +253,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 			},
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-			Type:                      ccev2.ENIForBCC,
+			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
 		},
 	}
 
@@ -268,7 +268,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
 
-	n.creatingEni.addCreatingENI(newENI)
+	n.creatingEni.addCreatingENI(newENI.Name, time.Now())
 
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
@@ -315,8 +315,7 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 		EnterpriseSecurityGroupIds: resource.Spec.ENI.EnterpriseSecurityGroupIds,
 		Description:                defaults.DefaultENIDescription,
 		PrivateIpSet: []enisdk.PrivateIp{{
-			Primary:          true,
-			PrivateIpAddress: "",
+			Primary: true,
 		}},
 	}
 	if createENIArgs.EnterpriseSecurityGroupIds == nil {
@@ -324,19 +323,20 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 	}
 
 	// use the given ip to create a new ENI
-	var privateIPs []*enisdk.PrivateIp
+	var privateIPs []enisdk.PrivateIp
 	for i := 0; i < len(resource.Spec.ENI.PrivateIPSet); i++ {
-		privateIPs = append(privateIPs, &enisdk.PrivateIp{
+		privateIPs = append(privateIPs, enisdk.PrivateIp{
 			PublicIpAddress:  resource.Spec.ENI.PrivateIPSet[i].PublicIPAddress,
 			Primary:          resource.Spec.ENI.PrivateIPSet[i].Primary,
 			PrivateIpAddress: resource.Spec.ENI.PrivateIPSet[i].PrivateIPAddress,
 		})
 	}
 	if len(privateIPs) == 0 {
-		privateIPs = append(privateIPs, &enisdk.PrivateIp{
+		privateIPs = append(privateIPs, enisdk.PrivateIp{
 			Primary: true,
 		})
 	}
+	createENIArgs.PrivateIpSet = privateIPs
 
 	eniID, err := n.manager.bceclient.CreateENI(ctx, createENIArgs)
 	if err != nil {

@@ -52,7 +52,9 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonSubnetHasNoMoreIP
 		case caseInsensitiveContains(errMsg, "RateLimit"):
 			return ErrorReasonRateLimit
-		case caseInsensitiveContains(errMsg, "NoSuchObject") || caseInsensitiveContains(errMsg, "is invalid"):
+		case caseInsensitiveContains(errMsg, "NoSuchObject"):
+			return ErrorReasonNoSuchObject
+		case caseInsensitiveContains(errMsg, "is invalid"):
 			// TODO: remove BadRequest when IaaS fixes their API
 			return ErrorReasonBBCENIPrivateIPNotFound
 		case caseInsensitiveContains(errMsg, "VmMemoryCanNotAttachMoreIpException"):
@@ -117,7 +119,8 @@ func IsErrorRouteRuleRepeated(err error) bool {
 }
 
 func IsErrorQuotaLimitExceeded(err error) bool {
-	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded
+	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded ||
+		IsErrorQuotaLimitExceeded(err)
 }
 
 func IsErrorCreateRouteRuleExceededQuota(err error) bool {

@@ -7,12 +7,12 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	k8sutilnet "k8s.io/utils/net"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/limit"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -257,11 +257,18 @@ func Test_bbcNode_allocateIPs(t *testing.T) {
 // 包含初始化 mock 对象，保存到 clientgo缓存中，并返回 BCCNode 实例
 func bbcTestContext(t *testing.T) (*bceNode, error) {
 	ccemock.InitMockEnv()
-	im := newMockInstancesManager(t)
+	mockCtl := gomock.NewController(t)
+	im := newMockInstancesManager(mockCtl)
 
 	k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "bbc")
 	err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 	if !assert.NoError(t, err, "ensure nrs to informer failed") {
+		return nil, err
+	}
+
+	k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+	err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+	if !assert.NoError(t, err, "ensure node to informer failed") {
 		return nil, err
 	}
 
@@ -278,10 +285,9 @@ func bbcTestContext(t *testing.T) (*bceNode, error) {
 	node := NewNode(nil, k8sObj, im)
 	assert.NotNil(t, node)
 
-	node.capacity = &limit.NodeCapacity{
-		MaxENINum:   1,
-		MaxIPPerENI: 40,
-	}
+	node.eniQuota = newCustomerIPQuota(log, k8s.Client(), nil, k8sObj.Spec.InstanceID, im.bceclient)
+	node.eniQuota.SetMaxENI(1)
+	node.eniQuota.SetMaxIP(40)
 
 	return node, nil
 }

@@ -48,6 +48,9 @@ const (
 	// AnnotationNodeLabelSynced node speicified subnets id use to create eni and allocate ip
 	AnnotationNodeEniSubnetIDs = "network.cce.baidubce.com/node-eni-subnet-ids"
 
+	AnnotationNodeMaxENINum       = "network.cce.baidubce.com/node-max-eni-num"
+	AnnotationNodeMaxPerENIIPsNum = "network.cce.baidubce.com/node-eni-max-ips-num"
+
 	// FinalizerOfCCEEndpointRemoteIP finalizer to remove ip from remote iaas
 	FinalizerOfCCEEndpointRemoteIP = "RemoteIPFinalizer"
 
@@ -63,8 +66,8 @@ const (
 	// VPCIDLabel is the label used to store the VPC ID of the node.
 	VPCIDLabel = "cce.baidubce.com/vpc-id"
 
-	// LabelIPResourceCapacitySynced is the label used to store the ip resource capacity synced status of the node.
-	LabelIPResourceCapacitySynced = "cce.baidubce.com/ip-resource-capacity-synced"
+	// AnnotationIPResourceCapacitySynced is the annotation used to store the ip resource capacity synced status of the node.
+	AnnotationIPResourceCapacitySynced = "cce.baidubce.com/ip-resource-capacity-synced"
 
 	// LabelAvailableZone is the label used to store the available zone of the node.
 	LabelAvailableZone = "cce.baidubce.com/available-zone"

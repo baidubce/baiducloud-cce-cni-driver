@@ -168,8 +168,6 @@ const (
 	ResourceENIResyncInterval = "resource-eni-resync-interval"
 	ResourceResyncWorkers     = "resource-resync-workers"
 
-	// BCECustomerMaxENI is the max eni number of customer
-	BCECustomerMaxENI = "bce-customer-max-eni"
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP = "bce-customer-max-ip"
 
@@ -333,8 +331,6 @@ type OperatorConfig struct {
 	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
 	ResourceResyncWorkers int64
 
-	// BCECustomerMaxENI is the max eni number of customer
-	BCECustomerMaxENI int
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP int
 
@@ -451,7 +447,6 @@ func (c *OperatorConfig) Populate() {
 	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
-	c.BCECustomerMaxENI = viper.GetInt(BCECustomerMaxENI)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)

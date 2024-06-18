@@ -48,7 +48,8 @@ func BCEClient() cloud.Interface {
 		operatorOption.Config.CCEClusterID,
 		operatorOption.Config.BCECloudAccessKey,
 		operatorOption.Config.BCECloudSecureKey,
-		k8s.Client(), option.Config.Debug)
+		k8s.Client(),
+		option.Config.Debug, operatorOption.Config.DefaultAPITimeoutLimit)
 	if err != nil {
 		log.Fatalf("[InitBCEClient] failed to init bce client %v", err)
 	}

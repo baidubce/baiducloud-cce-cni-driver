@@ -193,8 +193,6 @@ tags: $(GOLANG_SRCFILES) $(BPF_SRCFILES) cscope.files ## Generate tags for Go an
 
 clean: ## Perform overall cleanup for CCE.
 	-$(QUIET) for i in $(SUBDIRS); do $(MAKE) $(SUBMAKEOPTS) -C $$i clean; done
-	-$(QUIET) $(MAKE) $(SUBMAKEOPTS) -C ./contrib/packaging/deb clean
-	-$(QUIET) $(MAKE) $(SUBMAKEOPTS) -C ./contrib/packaging/rpm clean
 
 veryclean: ## Perform complete cleanup for container engine images(including build cache).
 	-$(QUIET) $(CONTAINER_ENGINE) image prune -af
@@ -212,7 +210,7 @@ GIT_VERSION: force
 	@if [ "$(GIT_VERSION)" != "`cat 2>/dev/null GIT_VERSION`" ] ; then echo "$(GIT_VERSION)" >GIT_VERSION; fi
 
 # DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator
-DOCKER_IMAGES := cce-network-operator-vpc-eni cce-network-agent
+DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni
 docker: GOARCH = amd64
 docker: $(DOCKER_IMAGES)
 docker-arm: GOARCH = arm64
@@ -220,13 +218,13 @@ docker-arm: image-suffix = -arm64
 docker-arm: $(DOCKER_IMAGES)
 
 # use docker build base on profile variable
-ifeq ($(PROFILE), dev)
-# build docker image with  native arch when profile is dev
+# build docker image for amd64 and arm64 when GOARCH is amd64 and arm64
+ifeq ($(GOARCH), amd64)
+# for amd64
 $(DOCKER_IMAGES): build
 	docker build -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION) -f deploy/dockerfile/$(@).Dockerfile .
 	docker push registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)
 else
-# build docker image for amd64 and arm64 when prifile is pro
 # for amd64
 $(DOCKER_IMAGES): build
 	echo "GOARCH=$(GOARCH)"

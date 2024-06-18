@@ -27,10 +27,9 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	iputils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	gops "github.com/google/gops/agent"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -54,13 +53,22 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		inter    *current.Interface
 	)
 
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "enim",
+		"mod":     "ADD",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
 	n, err = plugintypes.LoadNetConf(args.StdinData)
 	if err != nil {
 		err = fmt.Errorf("unable to parse CNI configuration \"%s\": %s", args.StdinData, err)
-		return
-	}
-	if innerErr := setupLogging(n, args, "ADD"); innerErr != nil {
-		err = fmt.Errorf("unable to setup logging: %w", innerErr)
 		return
 	}
 
@@ -72,9 +80,8 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		}
 	}
 
-	logger.Debugf("Processing CNI ADD request %#v", args)
+	logger.Info("processing CNI ADD request")
 
-	logger.Debugf("CNI NetConf: %#v", n)
 	if n.PrevResult != nil {
 		logger.Debugf("CNI Previous result: %#v", n.PrevResult)
 	}
@@ -135,21 +142,30 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 }
 
 func cmdDel(args *skel.CmdArgs) error {
+	var err error
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "enim",
+		"mod":     "DEL",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
+
 	// Note about when to return errors: kubelet will retry the deletion
 	// for a long time. Therefore, only return an error for errors which
 	// are guaranteed to be recoverable.
-	n, err := plugintypes.LoadNetConf(args.StdinData)
+	var n *plugintypes.NetConf
+	n, err = plugintypes.LoadNetConf(args.StdinData)
 	if err != nil {
 		err = fmt.Errorf("unable to parse CNI configuration \"%s\": %s", args.StdinData, err)
 		return err
 	}
-
-	if err := setupLogging(n, args, "DEL"); err != nil {
-		return fmt.Errorf("unable to setup logging: %w", err)
-	}
-	logger := logging.DefaultLogger.WithField("mod", "DEL")
-	logger = logger.WithField("eventUUID", uuid.New()).
-		WithField("containerID", args.ContainerID)
 
 	if n.IPAM.EnableDebug {
 		if err := gops.Listen(gops.Options{}); err != nil {
@@ -158,23 +174,23 @@ func cmdDel(args *skel.CmdArgs) error {
 			defer gops.Close()
 		}
 	}
-	logger.Debugf("Processing CNI DEL request %#v", args)
-
-	logger.Debugf("CNI NetConf: %#v", n)
+	logger.Infof("Processing CNI DEL request %#v", args)
 
 	cniArgs := plugintypes.ArgsSpec{}
 	if err = cnitypes.LoadArgs(args.Args, &cniArgs); err != nil {
 		return fmt.Errorf("unable to extract CNI arguments: %s", err)
 	}
-	logger.Debugf("CNI Args: %#v", cniArgs)
 
-	c, err := client.NewDefaultClientWithTimeout(defaults.ClientConnectTimeout)
+	var c *client.Client
+	c, err = client.NewDefaultClientWithTimeout(defaults.ClientConnectTimeout)
 	if err != nil {
 		// this error can be recovered from
 		return fmt.Errorf("unable to connect to CCE daemon: %s", client.Hint(err))
 	}
 	owner := cniArgs.K8S_POD_NAMESPACE + "/" + cniArgs.K8S_POD_NAME
-	return releaseENI(c, string(owner), args.ContainerID, args.Netns)
+
+	err = releaseENI(c, string(owner), args.ContainerID, args.Netns)
+	return err
 }
 
 func allocateENIWithCCEAgent(client *client.Client, cniArgs plugintypes.ArgsSpec, containerID, netns string) (
@@ -259,40 +275,6 @@ func wrapperENI(ipam *models.IPAMResponse, n *plugintypes.NetConf, isIPv6 bool) 
 		Address:   net.IPNet{IP: ip, Mask: mask},
 		Gateway:   gw,
 	}, routes, inter, nil
-}
-
-func setupLogging(n *plugintypes.NetConf, args *skel.CmdArgs, method string) error {
-	f := n.IPAM.LogFormat
-	if f == "" {
-		f = string(logging.DefaultLogFormat)
-	}
-	logOptions := logging.LogOptions{
-		logging.FormatOpt: f,
-	}
-	if len(n.IPAM.LogFile) != 0 {
-		err := logging.SetupLogging([]string{}, logOptions, "enim", n.IPAM.EnableDebug)
-		if err != nil {
-			return err
-		}
-		logging.AddHooks(hooks.NewFileRotationLogHook(n.IPAM.LogFile,
-			hooks.EnableCompression(),
-			hooks.WithMaxBackups(1),
-		))
-	} else {
-		logOptions["syslog.facility"] = "local5"
-		err := logging.SetupLogging([]string{"syslog"}, logOptions, "enim", true)
-		if err != nil {
-			return err
-		}
-	}
-	logger = logging.DefaultLogger.WithFields(logrus.Fields{
-		"containerID": args.ContainerID,
-		"netns":       args.Netns,
-		"plugin":      "enim",
-		"method":      method,
-	})
-
-	return nil
 }
 
 func ipv6IsEnabled(ipam *models.IPAMResponse) bool {

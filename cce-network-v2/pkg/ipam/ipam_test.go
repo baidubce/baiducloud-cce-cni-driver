@@ -22,17 +22,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
-
 	. "gopkg.in/check.v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/addressing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/checker"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 )
 
 func Test(t *testing.T) {

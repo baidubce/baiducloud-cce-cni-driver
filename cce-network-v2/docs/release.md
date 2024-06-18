@@ -2,6 +2,9 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.10 (2024/03/05)
+### 2.10.2 [20240403]
+1. [BUG] 修复 vpc-route 模式下，重写 cni 文件错误问题
+
 ### 2.10.1 [20240325]
 1. [BUG] 修复 vpc-route 模式下，重启 operator 可能导致多个节点的 cidr 重复的问题
 2. [BUG] 修复调用 bce sdk 出错时，可能出现的stack overflow，导致operator重启的问题

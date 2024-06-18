@@ -132,7 +132,11 @@ func (ciq *customerIPQuota) SetMaxIP(max int) {
 
 // SyncCapacityToK8s implements IPResourceManager.
 func (ciq *customerIPQuota) SyncCapacityToK8s(ctx context.Context) error {
-	return ciq.patchENICapacityInfoToNode(ctx, ciq.maxENINum, ciq.maxIPPerENI)
+	maxIP := ciq.maxENINum * (ciq.maxIPPerENI -1)
+	if maxIP <= 0 {
+		maxIP = ciq.maxIPPerENI -1
+	}
+	return ciq.patchENICapacityInfoToNode(ctx, ciq.maxENINum, maxIP)
 }
 
 // calculateMaxIPPerENI returns the max num of IPs that can be attached to single ENI

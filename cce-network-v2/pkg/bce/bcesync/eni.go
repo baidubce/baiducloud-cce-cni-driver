@@ -377,7 +377,11 @@ func (es *eniSyncher) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
 		return err
 	}
 
-	if eniCache != nil && eniCache.MacAddress != "" {
+	if eniCache != nil {
+		if eniCache.MacAddress == "" {
+			return errors.New("vpc mac address is empty")
+		}
+
 		newObj.Spec.ENI.ID = eniCache.EniId
 		newObj.Spec.ENI.Name = eniCache.Name
 		newObj.Spec.ENI.MacAddress = eniCache.MacAddress

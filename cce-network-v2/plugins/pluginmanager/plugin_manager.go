@@ -131,7 +131,7 @@ func defaultCNIPlugin() *CniListConfig {
 	}
 
 	// primary eni plugin
-	if option.Config.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+	if option.Config.ENI != nil && option.Config.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		result.Plugins = append(result.Plugins, ccePlugins[pluginNameExclusiveDevice])
 	} else {
 		// use cptp plugin defalt

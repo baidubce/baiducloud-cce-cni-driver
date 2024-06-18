@@ -2,6 +2,7 @@ package bcesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
@@ -81,6 +82,10 @@ func (es *remoteBCCPrimarySyncher) statENI(ctx context.Context, eniID string) (*
 	for _, bcceni := range eniResult {
 		if bcceni.EniId != k8seni.Spec.ENI.ID {
 			continue
+		}
+
+		if bcceni.MacAddress == "" {
+			return nil, errors.New("vpc mac address is empty")
 		}
 		trancelateENI := eni.Eni{
 			Eni: enisdk.Eni{

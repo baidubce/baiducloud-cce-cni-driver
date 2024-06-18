@@ -45,28 +45,6 @@ func containerSet(hostVeth, contVeth *net.Interface, pr *current.Result) error {
 	return err
 }
 
-// hostSet sets up the host interface
-// this method is called at host network namespace
-func hostSet(hostVeth, contVeth *net.Interface, pr *current.Result) error {
-	var err error
-	for _, ipc := range pr.IPs {
-		// Add a permanent ARP entry for the gateway
-		err = netlink.NeighAdd(&netlink.Neigh{
-			LinkIndex: hostVeth.Index,
-			State:     netlink.NUD_PERMANENT,
-			IP:        ipc.Address.IP,
-			HardwareAddr: func() net.HardwareAddr {
-				return contVeth.HardwareAddr
-			}(),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to add permanent ARP entry for the gateway %q: %v", ipc.Gateway, err)
-		}
-	}
-
-	return err
-}
-
 // AddLinkRoute adds a link-scoped route to a device.
 func AddLinkRoute(ipn *net.IPNet, gw net.IP, dev netlink.Link) error {
 	return netlink.RouteAdd(&netlink.Route{

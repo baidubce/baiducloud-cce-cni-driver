@@ -2,6 +2,11 @@
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
 
 ### 2.10 (2024/03/05)
+### 2.10.1 [20240325]
+1. [BUG] 修复 vpc-route 模式下，重启 operator 可能导致多个节点的 cidr 重复的问题
+2. [BUG] 修复调用 bce sdk 出错时，可能出现的stack overflow，导致operator重启的问题
+3. [Opimize] vpc-eni 增加 mac 地址合法性校验，避免误操作其它网卡
+
 ### 2.10.0 （2024/03/05）
 1. [Feature] VPC-ENI 支持自动获取节点 eni 配额信息，去掉了自定义 ENI 配额的参数。
 2. [Feature] VPC-ENI 支持 ebc 主网卡辅助 IP 模式 
@@ -21,6 +26,10 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. CRD 字段变更: NetworkResourceSet 资源池增加了节点上 ENI 的异常状态，报错单机 IP 容量状态，整机 ENI 网卡状态。
 3. 新特性: 支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
 4. 新特性：支持 pod 级 Qos
+
+### 2.9.5 [20240325]
+1. [BUG] 修复 vpc-route 模式下，重启 operator 可能导致多个节点的 cidr 重复的问题
+2. [BUG] 修复调用 bce sdk 出错时，可能出现的stack overflow，导致operator重启的问题
 
 ### 2.9.4 [20240305]
 1. [Feature] 支持 BBC 实例通过 Node 上增加 `network.cce.baidubce.com/node-eni-subnet` Anotation 配置指定节点上 ENI 的子网。 

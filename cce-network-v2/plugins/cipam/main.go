@@ -24,13 +24,12 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netns"
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	gops "github.com/google/gops/agent"
-	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 
 	plugintypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
@@ -39,6 +38,8 @@ import (
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/cni/pkg/version"
 )
+
+var logger *log.Entry
 
 func main() {
 	skel.PluginMain(cmdAdd, nil, cmdDel, version.All, bv.BuildString("cipam"))
@@ -52,44 +53,46 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		routes   []*cnitypes.Route
 	)
 
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "cipam",
+		"mod":     "ADD",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
+
 	n, err = plugintypes.LoadNetConf(args.StdinData)
 	if err != nil {
 		err = fmt.Errorf("unable to parse CNI configuration \"%s\": %s", args.StdinData, err)
 		return
 	}
-	if innerErr := setupLogging(n); innerErr != nil {
-		err = fmt.Errorf("unable to setup logging: %w", innerErr)
-		return
-	}
-	logger := logging.DefaultLogger.WithField("mod", "ADD")
-	logger = logger.WithField("eventUUID", uuid.New()).
-		WithField("containerID", args.ContainerID)
 
 	if n.IPAM.EnableDebug {
 		if err := gops.Listen(gops.Options{}); err != nil {
-			log.WithError(err).Warn("Unable to start gops")
+			logger.WithError(err).Warn("Unable to start gops")
 		} else {
 			defer gops.Close()
 		}
 	}
 
-	logger.Debugf("Processing CNI ADD request %#v", args)
-
-	logger.Debugf("CNI NetConf: %#v", n)
-	if n.PrevResult != nil {
-		logger.Debugf("CNI Previous result: %#v", n.PrevResult)
-	}
+	logger.WithField("netConf", logfields.Json(n)).Infof("Processing CNI ADD request %#v", args)
 
 	cniArgs := plugintypes.ArgsSpec{}
 	if err = cnitypes.LoadArgs(args.Args, &cniArgs); err != nil {
 		err = fmt.Errorf("unable to extract CNI arguments: %s", err)
 		return
 	}
-	logger.Debugf("CNI Args: %#v", cniArgs)
 
 	c, err := client.NewDefaultClientWithTimeout(defaults.ClientConnectTimeout)
 	if err != nil {
 		err = fmt.Errorf("unable to connect to network-v2-agent: %s", client.Hint(err))
+		logger.WithError(err).Error("unable to connect to network-v2-agent")
 		return
 	}
 
@@ -100,24 +103,27 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 	nns.Path()
 	ns, err := netns.GetProcNSPath(args.Netns)
 	if err != nil {
+		logger.Warning("unable to get netns path from procfs, use the netns from args")
 		ns = args.Netns
 	}
 	var releaseIPsFunc func(context.Context)
 	ipam, releaseIPsFunc, err = allocateIPsWithCCEAgent(c, cniArgs, args.ContainerID, ns)
-
 	// release addresses on failure
 	defer func() {
 		if err != nil && releaseIPsFunc != nil {
+			logger.WithError(err).Warn("do release IPs")
 			releaseIPsFunc(context.TODO())
 		}
 	}()
-
 	if err != nil {
+		logger.WithError(err).Error("unable to allocate IP addresses with cce agent")
 		return
 	}
+	logger.WithField("agentResult", logfields.Json(ipam)).Infof("success allocated IP addresses with cce agent")
 
 	if !ipv6IsEnabled(ipam) && !ipv4IsEnabled(ipam) {
 		err = fmt.Errorf("IPAM did not provide IPv4 or IPv6 address")
+		logger.WithError(err).Error("unable to allocate IP addresses with cce agent")
 		return
 	}
 
@@ -137,6 +143,7 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		ipConfig, routes, err = prepareIP(ipam, n, false)
 		if err != nil {
 			err = fmt.Errorf("unable to prepare IP addressing for '%s': %s", ipam.IPV4.IP, err)
+			logger.WithError(err).Error("unable to prepare IP addresses")
 			return
 		}
 		ipConfig.Interface = &zoreInterface
@@ -144,10 +151,25 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		result.Routes = append(result.Routes, routes...)
 	}
 
+	logger.WithField("result", logfields.Json(result)).Info("success to exec ipam add")
+
 	return cnitypes.PrintResult(result, current.ImplementedSpecVersion)
 }
 
-func cmdDel(args *skel.CmdArgs) error {
+func cmdDel(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "cipam",
+		"mod":     "DEL",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
 	// Note about when to return errors: kubelet will retry the deletion
 	// for a long time. Therefore, only return an error for errors which
 	// are guaranteed to be recoverable.
@@ -157,23 +179,14 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
-	if err := setupLogging(n); err != nil {
-		return fmt.Errorf("unable to setup logging: %w", err)
-	}
-	logger := logging.DefaultLogger.WithField("mod", "DEL")
-	logger = logger.WithField("eventUUID", uuid.New()).
-		WithField("containerID", args.ContainerID)
-
 	if n.IPAM.EnableDebug {
 		if err := gops.Listen(gops.Options{}); err != nil {
-			log.WithError(err).Warn("Unable to start gops")
+			logger.WithError(err).Warn("Unable to start gops")
 		} else {
 			defer gops.Close()
 		}
 	}
-	logger.Debugf("Processing CNI DEL request %#v", args)
-
-	logger.Debugf("CNI NetConf: %#v", n)
+	logger.Info("Processing CNI DEL request")
 
 	cniArgs := plugintypes.ArgsSpec{}
 	if err = cnitypes.LoadArgs(args.Args, &cniArgs); err != nil {
@@ -187,7 +200,13 @@ func cmdDel(args *skel.CmdArgs) error {
 		return fmt.Errorf("unable to connect to CCE daemon: %s", client.Hint(err))
 	}
 	owner := cniArgs.K8S_POD_NAMESPACE + "/" + cniArgs.K8S_POD_NAME
-	return releaseIP(c, string(owner), args.ContainerID, args.Netns)
+	err = releaseIP(c, string(owner), args.ContainerID, args.Netns)
+	if err != nil {
+		return fmt.Errorf("unable to release IP: %w", err)
+	}
+
+	logger.Info("success to exec ipam del")
+	return nil
 }
 
 func allocateIPsWithCCEAgent(client *client.Client, cniArgs plugintypes.ArgsSpec, containerID, netns string) (*models.IPAMResponse, func(context.Context), error) {
@@ -297,29 +316,6 @@ func prepareIP(ipam *models.IPAMResponse, n *plugintypes.NetConf, isIPv6 bool) (
 		Address: *ipnet,
 		Gateway: gw,
 	}, routes, nil
-}
-
-func setupLogging(n *plugintypes.NetConf) error {
-	f := n.IPAM.LogFormat
-	if f == "" {
-		f = string(logging.DefaultLogFormat)
-	}
-	logOptions := logging.LogOptions{
-		logging.FormatOpt: f,
-	}
-	err := logging.SetupLogging([]string{}, logOptions, "cipam", n.IPAM.EnableDebug)
-	if err != nil {
-		return err
-	}
-
-	if len(n.IPAM.LogFile) != 0 {
-		logging.AddHooks(hooks.NewFileRotationLogHook(n.IPAM.LogFile,
-			hooks.EnableCompression(),
-			hooks.WithMaxBackups(1),
-		))
-	}
-
-	return nil
 }
 
 func ipv6IsEnabled(ipam *models.IPAMResponse) bool {

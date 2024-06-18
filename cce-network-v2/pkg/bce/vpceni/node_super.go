@@ -165,6 +165,7 @@ func NewNode(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *Inst
 		default:
 			anode.real = newBCCNode(anode)
 		}
+		anode.getENIQuota()
 	}
 
 	return anode
@@ -188,8 +189,8 @@ func (n *bceNode) getENIQuota() ENIQuotaManager {
 	// fast path to claculate eni quota when operaor has been restarted
 	// isSetLimiter returns true if the node has set limiter
 	// if the node has set limiter, it will return a limiter from the ENI spec
-	if n.k8sObj.Labels != nil && n.k8sObj.Labels[k8s.LabelIPResourceCapacitySynced] != "" {
-		lastResyncTime := n.k8sObj.Labels[k8s.LabelIPResourceCapacitySynced]
+	if n.k8sObj.Annotations != nil && n.k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] != "" {
+		lastResyncTime := n.k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced]
 		t, err := time.Parse(time.RFC3339, lastResyncTime)
 		if err != nil || t.Add(DayDuration).Before(time.Now()) {
 			goto slowPath
@@ -198,9 +199,10 @@ func (n *bceNode) getENIQuota() ENIQuotaManager {
 		eniQuota.SetMaxENI(n.k8sObj.Spec.ENI.MaxAllocateENI)
 		eniQuota.SetMaxIP(n.k8sObj.Spec.ENI.MaxIPsPerENI)
 		// use customer max ip nums if defiend
-		if operatorOption.Config.BCECustomerMaxIP != 0 && operatorOption.Config.BCECustomerMaxIP == n.eniQuota.GetMaxIP() {
+		if operatorOption.Config.BCECustomerMaxIP != 0 && operatorOption.Config.BCECustomerMaxIP == eniQuota.GetMaxIP() {
 			goto slowPath
 		}
+		n.eniQuota = eniQuota
 		return n.eniQuota
 	}
 
@@ -213,7 +215,7 @@ func (n *bceNode) slowCalculateRealENICapacity(scopedLog *logrus.Entry) ENIQuota
 	eniQuota, err := n.real.refreshENIQuota(scopedLog)
 	if err != nil {
 		scopedLog.Errorf("calculate eniQuota failed: %v", err)
-		return n.eniQuota
+		return nil
 	}
 
 	// if eniQuota is empty, it means the node has not set quota
@@ -255,18 +257,19 @@ func (n *bceNode) overrideENICapacityToNode(eniQuota ENIQuotaManager) error {
 		k8sObj = k8sObj.DeepCopy()
 		k8sObj.Spec.ENI.MaxAllocateENI = eniQuota.GetMaxENI()
 		k8sObj.Spec.ENI.MaxIPsPerENI = eniQuota.GetMaxIP()
-		if k8sObj.Labels == nil {
-			k8sObj.Labels = map[string]string{}
+		if k8sObj.Annotations == nil {
+			k8sObj.Annotations = map[string]string{}
 		}
 
 		now := time.Now().Format(time.RFC3339)
-		k8sObj.Labels[k8s.LabelIPResourceCapacitySynced] = now
+		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = now
 		updated, err := k8s.CCEClient().CceV2().NetResourceSets().Update(ctx, k8sObj, metav1.UpdateOptions{})
 		if err == nil {
 			k8sObj = updated
 			n.k8sObj = k8sObj
 			return true, nil
 		}
+		n.log.Errorf("failed to override nrs %s capacity: %v", n.k8sObj.Name, err)
 		return false, nil
 	})
 	if err != nil {
@@ -289,7 +292,8 @@ func (n *bceNode) UpdatedNode(obj *ccev2.NetResourceSet) {
 // of the functions AllocateIPs(), ReleaseIPs() and CreateInterface().
 func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.Entry) (ipamTypes.AllocationMap, error) {
 	var (
-		a = ipamTypes.AllocationMap{}
+		a        = ipamTypes.AllocationMap{}
+		allENIId []string
 	)
 	n.waitForENISynced(ctx)
 
@@ -305,11 +309,13 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 			if !ok {
 				return nil
 			}
+			allENIId = append(allENIId, e.Name)
 
 			// eni is not ready to use
 			eniSubnet := e.Spec.ENI.SubnetID
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
 				haveCreatingENI = true
+				n.creatingEni.addCreatingENI(e.Name, e.CreationTimestamp.Time)
 				return nil
 			}
 
@@ -344,6 +350,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 
 			return nil
 		})
+	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
 
 	// the 	CreateInterface function will not be called in the primary IP mode
 	// so we need to create a new ENI in the primary IP mode at this time
@@ -357,34 +364,27 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 	return a, nil
 }
 
-func (n *bceNode) alignDualStackIPs(ctx context.Context, scopedLog *logrus.Entry, e *eniResource) {
-	if operatorOption.Config.EnableIPv6 && operatorOption.Config.EnableIPv4 {
-		if len(e.Spec.ENI.PrivateIPSet) != len(e.Spec.ENI.IPV6PrivateIPSet) {
-			scopedLog.Warnf("eni %s ipv4 and ipv6 private ip number not equal", e.Name)
-			a, err := n.PrepareIPAllocation(scopedLog)
-			if err != nil {
-				scopedLog.WithError(err).Errorf("prepare ip allocation failed")
-			}
-			err = n.AllocateIPs(ctx, a)
-			if err != nil {
-				scopedLog.WithError(err).Errorf("allocate ip failed")
-			}
-		}
-	}
-}
-
 // CreateInterface create a new ENI
 func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
-	availableENICount := 0
+	var (
+		availableENICount int
+		allENIId          []string
+		eniQuota          = n.getENIQuota()
+	)
+	if eniQuota == nil {
+		return 0, "", fmt.Errorf("eni quota is nil, please retry later")
+	}
 	n.manager.ForeachInstance(n.instanceID,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
-			_, ok := iface.Resource.(*eniResource)
+			eni, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil
 			}
 			availableENICount++
+			allENIId = append(allENIId, eni.Name)
 			return nil
 		})
+	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
 
 	if n.creatingEni.hasCreatingENI() {
 		scopedLog.Debugf("skip to creating new eni, concurrent eni creating")
@@ -395,8 +395,9 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 	inums, msg, err := n.real.createInterface(ctx, allocation, scopedLog)
 	n.creatingEni.add(-1)
 
-	preAllocateENI := n.k8sObj.Spec.ENI.PreAllocateENI - availableENICount - 1
-	for i := 0; i < preAllocateENI; i++ {
+	preAllocateNum := math.IntMin(eniQuota.GetMaxENI()-1, n.k8sObj.Spec.ENI.PreAllocateENI)
+	preAllocateNum = preAllocateNum - availableENICount
+	for i := 0; i < preAllocateNum; i++ {
 		inums++
 		go func() {
 			n.creatingEni.add(1)
@@ -464,12 +465,16 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 			addCrossSubnetAddr(addr)
 		}
 
-		// if IPv6 is enabled, we need to allocate 2 * maxIPPerENI
-		capacity := n.eniQuota.GetMaxIP()
-		if len(enis[i].Spec.IPV6PrivateIPSet) > 0 {
-			capacity = 2 * capacity
+		// eni quota may be nil
+		if eniQuota := n.getENIQuota(); eniQuota != nil {
+			capacity := eniQuota.GetMaxIP()
+			// if IPv6 is enabled, we need to allocate 2 * maxIPPerENI
+			if len(enis[i].Spec.IPV6PrivateIPSet) > 0 {
+				capacity = 2 * capacity
+			}
+			simple.AvailableIPNum = capacity - len(enis[i].Spec.PrivateIPSet) - len(enis[i].Spec.IPV6PrivateIPSet)
 		}
-		simple.AvailableIPNum = capacity - len(enis[i].Spec.PrivateIPSet) - len(enis[i].Spec.IPV6PrivateIPSet)
+
 		simple.AllocatedCrossSubnetIPNum = allocatedCrossSubnetIPNum
 		simple.AllocatedIPNum = len(enis[i].Spec.PrivateIPSet) + len(enis[i].Spec.IPV6PrivateIPSet)
 
@@ -495,7 +500,9 @@ func (n *bceNode) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 // can be allocated on the node and whether a new network interface
 // must be attached to the node.
 func (n *bceNode) PrepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
-	n.getENIQuota()
+	if quota := n.getENIQuota(); quota == nil {
+		return nil, fmt.Errorf("eniQuota is nil, please retry later")
+	}
 	return n.real.prepareIPAllocation(scopedLog)
 }
 
@@ -1083,27 +1090,48 @@ var (
 type creatingEniSet struct {
 	mutex *lock.Mutex
 	// The node currently being created by ENI should have only one.
-	creatingENI     map[string]*ccev2.ENI
+	creatingENI     map[string]time.Time
 	creatingENINums int
 }
 
 func newCreatingEniSet() *creatingEniSet {
 	return &creatingEniSet{
 		mutex:       &lock.Mutex{},
-		creatingENI: map[string]*ccev2.ENI{},
+		creatingENI: map[string]time.Time{},
 	}
 }
 
-func (c *creatingEniSet) addCreatingENI(eni *ccev2.ENI) {
+func (c *creatingEniSet) addCreatingENI(eniID string, createTime time.Time) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	c.creatingENI[eni.Name] = eni
+	c.creatingENI[eniID] = createTime
 }
 
-func (c *creatingEniSet) removeCreatingENI(eniName string) {
+func (c *creatingEniSet) removeCreatingENI(eniID string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	delete(c.creatingENI, eniName)
+	delete(c.creatingENI, eniID)
+}
+
+// clean expired creating eni
+// eniIDs: slice of eniIDs that are not being expired
+// duration: the max time that a creating eni can be expired
+func (c *creatingEniSet) cleanExpiredCreatingENI(eniIDs []string, duration time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	now := time.Now()
+
+	exsitENIIDs := make(map[string]bool)
+	for _, eniID := range eniIDs {
+		exsitENIIDs[eniID] = true
+	}
+	for eniID := range c.creatingENI {
+		if _, ok := exsitENIIDs[eniID]; !ok {
+			if now.Sub(c.creatingENI[eniID]) > duration {
+				delete(c.creatingENI, eniID)
+			}
+		}
+	}
 }
 
 func (c *creatingEniSet) add(num int) {

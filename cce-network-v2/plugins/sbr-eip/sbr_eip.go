@@ -27,7 +27,6 @@ import (
 	plugintypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -127,40 +126,6 @@ func parseConfig(stdin []byte) (*PluginConf, error) {
 	return &conf, nil
 }
 
-func setupLogging(n *PluginConf, args *skel.CmdArgs, method string) error {
-	f := n.LogFormat
-	if f == "" {
-		f = string(logging.DefaultLogFormat)
-	}
-	logOptions := logging.LogOptions{
-		logging.FormatOpt: f,
-	}
-	if len(n.LogFile) != 0 {
-		err := logging.SetupLogging([]string{}, logOptions, "sbr-eip", n.EnableDebug)
-		if err != nil {
-			return err
-		}
-		logging.AddHooks(hooks.NewFileRotationLogHook(n.LogFile,
-			hooks.EnableCompression(),
-			hooks.WithMaxBackups(1),
-		))
-	} else {
-		logOptions["syslog.facility"] = "local5"
-		err := logging.SetupLogging([]string{"syslog"}, logOptions, "sbr-eip", true)
-		if err != nil {
-			return err
-		}
-	}
-	logger = logging.DefaultLogger.WithFields(logrus.Fields{
-		"containerID": args.ContainerID,
-		"netns":       args.Netns,
-		"plugin":      "sbr-eip",
-		"method":      method,
-	})
-
-	return nil
-}
-
 // getIPCfgs finds the IPs on the supplied interface, returning as IPConfig structures
 func getIPCfgs(iface string, prevResult *current.Result) ([]*current.IPConfig, error) {
 	if len(prevResult.IPs) == 0 {
@@ -190,20 +155,25 @@ func getIPCfgs(iface string, prevResult *current.Result) ([]*current.IPConfig, e
 }
 
 // cmdAdd is called for ADD requests
-func cmdAdd(args *skel.CmdArgs) error {
+func cmdAdd(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "sbr-eip",
+		"mod":     "ADD",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
+
 	conf, err := parseConfig(args.StdinData)
 	if err != nil {
 		return fmt.Errorf("sbnr-eip failed to parse config: %v", err)
 	}
-	err = setupLogging(conf, args, "ADD")
-	if err != nil {
-		return fmt.Errorf("sbr-eip failed to set up logging: %v", err)
-	}
-	defer func() {
-		if err != nil {
-			logger.Errorf("cni plugin failed: %v", err)
-		}
-	}()
 	logger.Debugf("configure SBR for new interface %s - previous result: %v",
 		args.IfName, conf.PrevResult)
 
@@ -461,19 +431,18 @@ func doRoutes(ipCfg *current.IPConfig, iface string) error {
 }
 
 // cmdDel is called for DELETE requests
-func cmdDel(args *skel.CmdArgs) error {
-	// We care a bit about config because it sets log level.
-	conf, err := parseConfig(args.StdinData)
-	if err != nil {
-		return err
-	}
-	err = setupLogging(conf, args, "DEL")
-	if err != nil {
-		return fmt.Errorf("sbr-eip failed to set up logging: %v", err)
-	}
+func cmdDel(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "sbr-eip",
+		"mod":     "ADD",
+	})
 	defer func() {
 		if err != nil {
-			logger.Errorf("cni plugin failed: %v", err)
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
 		}
 	}()
 

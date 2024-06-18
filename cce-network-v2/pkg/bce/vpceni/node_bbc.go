@@ -232,7 +232,8 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
 	findEni := false
-	if n.eniQuota != nil {
+	eniQuota := n.getENIQuota()
+	if eniQuota != nil {
 		n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -240,7 +241,7 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 			}
 
 			findEni = true
-			allocation.AvailableForAllocationIPv4 = n.eniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
+			allocation.AvailableForAllocationIPv4 = eniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
 			allocation.InterfaceID = e.Name
 			allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
 			return nil

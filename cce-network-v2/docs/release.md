@@ -6,6 +6,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 1. [Feature] VPC-ENI 支持自动获取节点 eni 配额信息，去掉了自定义 ENI 配额的参数。
 2. [Feature] VPC-ENI 支持 ebc 主网卡辅助 IP 模式 
 3. [Feature] VPC-ENI bbc 升级为主网卡辅助 IP 模式
+4. [Opimize] 增加 CNI 插件日志持久化
+5. [Feature] 重构 CNI 配置文件管理逻辑，支持保留自定义 CNI 插件配置
+6. [Feature] 增加对portmap 插件的支持，默认开启
+7. [BUG] 修复arm64架构下，cni 插件无法执行的问题
+8. [Opimize] 增加 BCE SDK 日志持久化
 
 ### 2.9 (2023/11/10)
 新特性功能：

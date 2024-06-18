@@ -73,10 +73,8 @@ func New(
 	debug bool,
 ) (Interface, error) {
 	ctx := context.TODO()
-
-	if debug {
-		sdklog.SetLogHandler(sdklog.STDOUT)
-	}
+	// set logrus as bce sdk default logger
+	sdklog.SetLogger(&bceLogger{})
 
 	var auth Auth
 	var err error

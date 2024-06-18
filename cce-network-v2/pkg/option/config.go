@@ -374,6 +374,8 @@ const (
 	IPPoolMinAllocateIPs          = "ippool-min-allocate-ips"
 	IPPoolPreAllocate             = "ippool-pre-allocate"
 	IPPoolMaxAboveWatermark       = "ippool-max-above-watermark"
+
+	ExtCNIPluginsList = "ext-cni-plugins"
 )
 
 // Available option for DaemonConfig.Tunnel
@@ -388,22 +390,12 @@ const (
 	TunnelDisabled = "disabled"
 )
 
-// Envoy option names
 const (
-
-	// ReadCNIConfiguration reads the CNI configuration file and extracts
-	// CCE relevant information. This can be used to pass per node
-	// configuration to CCE.
-	ReadCNIConfiguration = "read-cni-conf"
-
 	// WriteCNIConfigurationWhenReady writes the CNI configuration to the
 	// specified location once the agent is ready to serve requests. This
 	// allows to keep a Kubernetes node NotReady until CCE is up and
 	// running and able to schedule endpoints.
 	WriteCNIConfigurationWhenReady = "write-cni-conf-when-ready"
-
-	// OverwriteCNIConfigurationWhenStart Overwrite the CNI configuration when agent starts
-	OverwriteCNIConfigurationWhenStart = "overwrite-cni-conf"
 
 	// EnableCCEEndpointSlice enables the cce endpoint slicing feature.
 	EnableCCEEndpointSlice = "enable-cce-endpoint-slice"
@@ -685,19 +677,11 @@ type DaemonConfig struct {
 	// RunMonitorAgent indicates whether to run the monitor agent
 	RunMonitorAgent bool
 
-	// ReadCNIConfiguration reads the CNI configuration file and extracts
-	// CCE relevant information. This can be used to pass per node
-	// configuration to CCE.
-	ReadCNIConfiguration string
-
 	// WriteCNIConfigurationWhenReady writes the CNI configuration to the
 	// specified location once the agent is ready to serve requests. This
 	// allows to keep a Kubernetes node NotReady until CCE is up and
 	// running and able to schedule endpoints.
 	WriteCNIConfigurationWhenReady string
-
-	// OverwriteCNIConfigurationWhenStart Overwrite the CNI configuration when agent starts
-	OverwriteCNIConfigurationWhenStart bool
 
 	// EnableHealthDatapath enables IPIP health probes data path
 	EnableHealthDatapath bool
@@ -777,6 +761,9 @@ type DaemonConfig struct {
 	EnableBandwidthManager   bool
 	EnableEgressPriority     bool
 	EnableEgressPriorityDSCP bool
+
+	// ExtCNIPluginsList Expand the list of CNI plugins, such as 'sbr-eip'
+	ExtCNIPluginsList []string
 }
 
 var (
@@ -1009,9 +996,6 @@ func (c *DaemonConfig) Validate() error {
 	if err := c.checkIPAMDelegatedPlugin(); err != nil {
 		return err
 	}
-	if c.WriteCNIConfigurationWhenReady != "" && c.ReadCNIConfiguration == "" {
-		return fmt.Errorf("%s must be set when using %s", ReadCNIConfiguration, WriteCNIConfigurationWhenReady)
-	}
 
 	return nil
 }
@@ -1152,12 +1136,10 @@ func (c *DaemonConfig) Populate() {
 	c.PProfPort = viper.GetInt(PProfPort)
 	c.ProcFs = viper.GetString(ProcFs)
 	c.PrometheusServeAddr = viper.GetString(PrometheusServeAddr)
-	c.ReadCNIConfiguration = viper.GetString(ReadCNIConfiguration)
 	c.RunDir = viper.GetString(StateDir)
 	c.TracePayloadlen = viper.GetInt(TracePayloadlen)
 	c.Version = viper.GetString(Version)
 	c.WriteCNIConfigurationWhenReady = viper.GetString(WriteCNIConfigurationWhenReady)
-	c.OverwriteCNIConfigurationWhenStart = viper.GetBool(OverwriteCNIConfigurationWhenStart)
 	c.CRDWaitTimeout = viper.GetDuration(CRDWaitTimeout)
 	c.EnableBandwidthManager = viper.GetBool(EnableBandwidthManager)
 	c.EnableEgressPriority = viper.GetBool(EnableEgressPriority)
@@ -1299,6 +1281,7 @@ func (c *DaemonConfig) Populate() {
 	c.MaxControllerInterval = viper.GetInt(MaxCtrlIntervalName)
 	c.EndpointGCInterval = viper.GetDuration(EndpointGCInterval)
 	c.ResourceResyncInterval = viper.GetDuration(ResourceResyncInterval)
+	c.ExtCNIPluginsList = viper.GetStringSlice(ExtCNIPluginsList)
 }
 
 func (c *DaemonConfig) checkIPAMDelegatedPlugin() error {

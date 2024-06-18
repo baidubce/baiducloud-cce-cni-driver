@@ -273,7 +273,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
 
-	n.creatingEni.addCreatingENI(newENI)
+	n.creatingEni.addCreatingENI(newENI.Name, time.Now())
 
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
@@ -320,8 +320,7 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 		EnterpriseSecurityGroupIds: resource.Spec.ENI.EnterpriseSecurityGroupIds,
 		Description:                defaults.DefaultENIDescription,
 		PrivateIpSet: []enisdk.PrivateIp{{
-			Primary:          true,
-			PrivateIpAddress: "",
+			Primary: true,
 		}},
 	}
 	if createENIArgs.EnterpriseSecurityGroupIds == nil {
@@ -329,19 +328,20 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 	}
 
 	// use the given ip to create a new ENI
-	var privateIPs []*enisdk.PrivateIp
+	var privateIPs []enisdk.PrivateIp
 	for i := 0; i < len(resource.Spec.ENI.PrivateIPSet); i++ {
-		privateIPs = append(privateIPs, &enisdk.PrivateIp{
+		privateIPs = append(privateIPs, enisdk.PrivateIp{
 			PublicIpAddress:  resource.Spec.ENI.PrivateIPSet[i].PublicIPAddress,
 			Primary:          resource.Spec.ENI.PrivateIPSet[i].Primary,
 			PrivateIpAddress: resource.Spec.ENI.PrivateIPSet[i].PrivateIPAddress,
 		})
 	}
 	if len(privateIPs) == 0 {
-		privateIPs = append(privateIPs, &enisdk.PrivateIp{
+		privateIPs = append(privateIPs, enisdk.PrivateIp{
 			Primary: true,
 		})
 	}
+	createENIArgs.PrivateIpSet = privateIPs
 
 	eniID, err := n.manager.bceclient.CreateENI(ctx, createENIArgs)
 	if err != nil {

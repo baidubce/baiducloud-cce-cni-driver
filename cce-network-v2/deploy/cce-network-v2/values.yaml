@@ -138,9 +138,7 @@ ccedConfig:
     {"syslog.level":"info","syslog.facility":"local5"}
 
   # cni 配置，从指定文件读取，写入到另一个路径
-  read-cni-conf: ""
   write-cni-conf-when-ready: ""
-  overwrite-cni-conf: true
 
 
   # ipam 模式. privatecloudbase: 私有云底座;vpc-eni: BCE VPC ENI
@@ -208,3 +206,9 @@ ccedConfig:
     bcecloud/apis/v1/DescribeSubnet: "rate-limit:5/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:5"
     bcecloud/apis/v1/StatENI: "rate-limit:10/1s,rate-burst:15,max-wait-duration:30s,parallel-requests:10"
     # cni 接口限流
+  # 扩展插件列表
+  ext-cni-plugins:
+  - "portmap"
+  - "endpoint-probe"
+  # - "cilium-cni"
+  # - "portmap"

@@ -35,8 +35,6 @@ func newEBCNode(super *bccNode) *ebcNode {
 		bccNode: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExEBC)
-
-	node.refreshBCCInfo()
 	return node
 }
 

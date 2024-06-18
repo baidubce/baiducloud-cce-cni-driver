@@ -24,6 +24,9 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -36,6 +39,8 @@ import (
 	"github.com/containernetworking/plugins/pkg/utils"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
+
+var logger *logrus.Entry
 
 func init() {
 	// this ensures that main runs only on main thread (thread group leader).
@@ -144,10 +149,24 @@ func setupHostVeth(host *current.Interface, container *current.Interface, result
 	return nil
 }
 
-func cmdAdd(args *skel.CmdArgs) error {
+func cmdAdd(args *skel.CmdArgs) (err error) {
 	var pK8Sargs *K8SArgs
 
-	pK8Sargs, err := loadK8SArgs(args.Args)
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "cptp",
+		"mod":     "ADD",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
+
+	pK8Sargs, err = loadK8SArgs(args.Args)
 	if err != nil {
 		return fmt.Errorf("failed to load CNI_ARGS: %v", err)
 	}
@@ -160,7 +179,8 @@ func cmdAdd(args *skel.CmdArgs) error {
 	// run the IPAM plugin and get back the config to apply
 	r, err := ipam.ExecAdd(conf.IPAM.Type, args.StdinData)
 	if err != nil {
-		return err
+		logger.WithError(err).Error("failed to exec IPAM plugin")
+		return fmt.Errorf("failed to execute IPAM plugin: %w", err)
 	}
 
 	// Invoke ipam del if err to avoid ip leak
@@ -173,8 +193,9 @@ func cmdAdd(args *skel.CmdArgs) error {
 	// Convert whatever the IPAM result was into the current Result type
 	result, err := current.NewResultFromResult(r)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not convert result of IPAM plugin: %v", err)
 	}
+	logger.WithField("ipamResult", result).Infof("got result from IPAM")
 
 	if len(result.IPs) == 0 {
 		return errors.New("IPAM plugin returned missing IP config")
@@ -200,11 +221,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 	hostInterface, containerInterface, err := setupContainerVethLegacy(string(pK8Sargs.K8S_POD_NAME), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to setup container veth: %w", err)
 	}
 
 	if err = setupHostVeth(hostInterface, containerInterface, result); err != nil {
-		return err
+		return fmt.Errorf("failed to setup host veth: %w", err)
 	}
 
 	if conf.IPMasq {
@@ -212,7 +233,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		comment := utils.FormatComment(conf.Name, args.ContainerID)
 		for _, ipc := range result.IPs {
 			if err = ip.SetupIPMasq(&ipc.Address, chain, comment); err != nil {
-				return err
+				return fmt.Errorf("failed to setup IP masquerade: %w", err)
 			}
 		}
 	}
@@ -224,6 +245,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		result.DNS = conf.DNS
 	}
 
+	logger.WithField("result", logfields.Json(result)).Infof("success to exec plugin")
 	return types.PrintResult(result, conf.CNIVersion)
 }
 
@@ -234,15 +256,30 @@ func dnsConfSet(dnsConf types.DNS) bool {
 		dnsConf.Domain != ""
 }
 
-func cmdDel(args *skel.CmdArgs) error {
+func cmdDel(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "cptp",
+		"mod":     "DEL",
+	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
+
 	conf := NetConf{}
 	if err := json.Unmarshal(args.StdinData, &conf); err != nil {
 		return fmt.Errorf("failed to load netconf: %v", err)
 	}
 
 	if err := ipam.ExecDel(conf.IPAM.Type, args.StdinData); err != nil {
-		return err
+		return fmt.Errorf("failed to exec ipam del: %v", err)
 	}
+	logger.Info("success to executing cipam DEL")
 
 	if args.Netns == "" {
 		return nil
@@ -252,7 +289,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	// so don't return an error if the device is already removed.
 	// If the device isn't there then don't try to clean up IP masq either.
 	var ipnets []*net.IPNet
-	err := ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
 		var err error
 		ipnets, err = ip.DelLinkByNameAddr(args.IfName)
 		if err != nil && err == ip.ErrLinkNotFound {
@@ -268,7 +305,7 @@ func cmdDel(args *skel.CmdArgs) error {
 		if ok {
 			return nil
 		}
-		return err
+		return fmt.Errorf("failed to clean container interface: %v", err)
 	}
 
 	if len(ipnets) != 0 && conf.IPMasq {
@@ -276,6 +313,9 @@ func cmdDel(args *skel.CmdArgs) error {
 		comment := utils.FormatComment(conf.Name, args.ContainerID)
 		for _, ipn := range ipnets {
 			err = ip.TeardownIPMasq(ipn, chain, comment)
+			if err != nil {
+				logger.WithError(err).Error("failed to teardown ip masquerade")
+			}
 		}
 	}
 

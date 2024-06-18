@@ -27,6 +27,7 @@ import (
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/sirupsen/logrus"
@@ -51,7 +52,6 @@ func newBCCNode(super *bceNode) *bccNode {
 		bceNode: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExBCC)
-	node.refreshBCCInfo()
 	return node
 }
 
@@ -64,7 +64,17 @@ func (n *bccNode) refreshBCCInfo() error {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return err
 	}
+	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
 	n.bccInfo = bccInfo
+
+	// TODO delete this test code block after bcc instance eniQuota is fixed
+	// The tentative plan is for April 15th
+	{
+		if n.bccInfo.Spec == "ebc.la2.c256m1024.2d" {
+			bccInfo.EniQuota = 0
+		}
+	}
+
 	if bccInfo.EniQuota == 0 {
 		n.usePrimaryENIWithSecondaryMode = true
 	}
@@ -144,7 +154,7 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 	a = &ipam.AllocationAction{}
 	eniQuota := n.bceNode.getENIQuota()
 	if eniQuota == nil {
-		return nil, fmt.Errorf("eniQuota is nil")
+		return nil, fmt.Errorf("eniQuota is nil, please retry later")
 	}
 	eniMax := eniQuota.GetMaxENI()
 	eniCount := 0
@@ -255,7 +265,7 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 			}
 			return nil
 		})
-	a.AvailableInterfaces = eniMax - eniCount + a.AvailableInterfaces
+	a.AvailableInterfaces = math.IntMax(eniMax-eniCount+a.AvailableInterfaces, 0)
 	return
 }
 

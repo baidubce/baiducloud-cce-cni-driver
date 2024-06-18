@@ -1,6 +1,21 @@
 # VPC Route 网络
-## 1 关键数据结构
-### 1.1 NetResourceSet
+## 1. 功能简介
+VPC-Route 模式，将容器IP分配给VPC路由表，通过VPC路由转发到Pod IP。这种模式的容器网络有以下特点：
+* 容器IP范围和 VPC CIDR 范围不同，但是 VPC 内所有实例可以访问容器IP。
+* 单机容器 IP 数量无限，可以灵活的扩容。VPC 路由模式的容器网络，每个节点上可以分配一个或多个 CIDR，每个节点上可以分配的容器IP数量是节点上多个 CIDR 的可用 IP 数量。
+* 使用分布式 IPAM，节点和容器弹性能力强。
+* 性能较高，容器使用 underlay 网络无额外封装性能损耗。
+
+> VPC 路由模式的容器网络每个节点都有独立的 CIDR，所以不支持固定 IP 等网络特性。
+## 2. 使用限制
+### 2.1 操作系统限制
+* 节点加入 CCE 集群前，请确保是纯净的节点，即节点上没有运行过任何容器。推荐将节点执行操作系统重装。
+* 使用 VPC-ENI 模式，推荐内核版本为 5.7 以上。
+### 2.2 规格限制
+1. 默认每个VPC的路由表条目最多50条。可以通过配额中心申请提高配额。
+
+## 3 关键数据结构
+### 3.1 NetResourceSet
 ```
 apiVersion: cce.baidubce.com/v2
 kind: NetResourceSet
@@ -46,7 +61,7 @@ status:
 *
 * `status.ipam.vpc-router-cidrs`：PodCIDR和VPC路由表之间的同步状态。
 
-### 1.2 CCEEndpoint
+### 3.2 CCEEndpoint
 ```
 apiVersion: cce.baidubce.com/v2
   kind: CCEEndpoint
@@ -87,18 +102,18 @@ apiVersion: cce.baidubce.com/v2
 ```
 CCEEndpoint 记录了网络端点的状态信息。
 
-## 2 控制逻辑
-### 2.1 节点就绪
+## 4 控制逻辑
+### 4.1 节点就绪
 只有所有CIDR成功写入VPC路由，节点才就绪。
 如果CIDR未成功写入VPC路由，则cce-network-v2-agent Pod的健康检查会失败，并有以下日志：
 ```
 level=error msg="fail to health check manager" error="cluster-pool-watcher's health plugin check failed:no VPCRouteCIDRs have been received yet" subsys=daemon-health
 ```
 
-## 3 数据面
+## 5 数据面
 vpc 路由使用cptp网络驱动，它具备以下特征。
-### 3.1 容器内
-#### 3.1.1 容器地址
+### 5.1 容器内
+#### 5.1.1 容器地址
 使用32/128位的地址，不归属任何子网。
 ```
 # ip addr
@@ -112,7 +127,7 @@ vpc 路由使用cptp网络驱动，它具备以下特征。
        valid_lft forever preferred_lft forever
 ```
 
-#### 3.1.2 容器路由
+#### 5.1.2 容器路由
 ```
 # ip route
 default via 172.10.3.9 dev eth0 
@@ -121,15 +136,15 @@ default via 172.10.3.9 dev eth0
 ```
 值得注意的是网关地址是宿主机端veth的地址。这个地址是 cce-network-v2-agent 在Pod CIDR中申请的。该机器上所有的容器都使用这个gateway地址。且机器重启后，路由地址不变。
 
-#### 3.1.3 邻居信息
+#### 5.1.3 邻居信息
 容器内只有一条邻居信息，即默认网关的地址。mac地址是host端的veth的地址。
 ```
 # ip neigh
 172.10.3.9 dev eth0 lladdr 06:c5:90:3b:4d:6d PERMANENT
 ```
 
-### 3.2 宿主机
-#### 3.2.1 宿主机veth地址
+### 5.2 宿主机
+#### 5.2.1 宿主机veth地址
 宿主机上，每个veth的地址都是默认网关的地址
 ```
 # ip addr
@@ -140,7 +155,7 @@ default via 172.10.3.9 dev eth0
     inet6 fe80::4c5:90ff:fe3b:4d6d/64 scope link 
        valid_lft forever preferred_lft forever
 ```
-#### 3.2.2 路由
+#### 5.2.2 路由
 ```
 # ip r
 default via 192.168.10.1 dev eth0 
@@ -149,7 +164,7 @@ default via 192.168.10.1 dev eth0
 172.10.3.21 dev vethda5db5af scope host
 ```
 宿主机上有一条到容器的路由，关联到host上的veth设备，scope为host。
-#### 3.2.3 邻居表项
+#### 5.2.3 邻居表项
 宿主机上有一条到容器的静态邻居表，关联到host上的veth设备，mac地址是容器内的mac地址。
 ```
 # ip neigh

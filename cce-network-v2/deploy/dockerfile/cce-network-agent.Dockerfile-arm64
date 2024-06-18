@@ -10,7 +10,7 @@ WORKDIR /home/cce
 COPY output/bin/cmd/agent /bin/agent
 
 # install cni binaries
-COPY tools/cni /cni
+COPY tools/cni-arm /cni
 COPY output/bin/plugins /cni
 COPY deploy/dockerfile/install-cni.sh install-cni.sh
 

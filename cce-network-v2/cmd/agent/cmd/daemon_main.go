@@ -27,6 +27,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/plugins/pluginmanager"
 	"github.com/go-openapi/loads"
 	gops "github.com/google/gops/agent"
 	"github.com/sirupsen/logrus"
@@ -360,9 +361,6 @@ func initializeFlags() {
 	flags.String(option.IPv4NodeAddr, "auto", "IPv4 address of node")
 	option.BindEnv(option.IPv4NodeAddr)
 
-	flags.String(option.ReadCNIConfiguration, "", "Read to the CNI configuration at specified path to extract per node configuration")
-	option.BindEnv(option.ReadCNIConfiguration)
-
 	flags.Bool(option.Restore, true, "Restores state, if possible, from previous daemon")
 	option.BindEnv(option.Restore)
 
@@ -424,11 +422,8 @@ func initializeFlags() {
 	flags.MarkHidden(option.EndpointGCInterval)
 	option.BindEnv(option.EndpointGCInterval)
 
-	flags.String(option.WriteCNIConfigurationWhenReady, "", fmt.Sprintf("Write the CNI configuration as specified via --%s to path when agent is ready", option.ReadCNIConfiguration))
+	flags.String(option.WriteCNIConfigurationWhenReady, "", "Write the CNI configuration as specified  path when agent is ready")
 	option.BindEnv(option.WriteCNIConfigurationWhenReady)
-
-	flags.Bool(option.OverwriteCNIConfigurationWhenStart, true, "Overwrite the CNI configuration when agent starts")
-	option.BindEnv(option.OverwriteCNIConfigurationWhenStart)
 
 	flags.Duration(option.K8sHeartbeatTimeout, 30*time.Second, "Configures the timeout for api-server heartbeat, set to 0 to disable")
 	option.BindEnv(option.K8sHeartbeatTimeout)
@@ -499,6 +494,9 @@ func initializeFlags() {
 
 	flags.Bool(option.EnableEgressPriorityDSCP, false, "enable engress priority by dscp")
 	option.BindEnv(option.EnableEgressPriorityDSCP)
+
+	flags.StringSlice(option.ExtCNIPluginsList, []string{}, "external cni plugins list")
+	option.BindEnv(option.ExtCNIPluginsList)
 
 	viper.BindPFlags(flags)
 }
@@ -678,34 +676,19 @@ func runDaemon() {
 	log.WithField("bootstrapTime", time.Since(bootstrapTimestamp)).
 		Info("Daemon initialization completed")
 
-	firstWriteCNIConfig := false
-	if option.Config.OverwriteCNIConfigurationWhenStart {
-		firstWriteCNIConfig = true
-	}
 	if option.Config.WriteCNIConfigurationWhenReady != "" {
 		d.controllers.UpdateController(cniUpdateControllerName, controller.ControllerParams{
 			RunInterval: option.Config.ResourceResyncInterval,
 			DoFunc: func(ctx context.Context) error {
 				// Overwrite the CNI configuration when agent starts, so we should skip read config file which has been existed.
-				if !firstWriteCNIConfig {
-					_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
-					if err == nil {
-						return nil
-					}
-				}
-				firstWriteCNIConfig = false
 
-				input, err := os.ReadFile(option.Config.ReadCNIConfiguration)
+				override, err := pluginmanager.OverwriteCNIConfigList(option.Config.WriteCNIConfigurationWhenReady)
 				if err != nil {
-					log.WithError(err).Fatal("Unable to read CNI configuration file")
+					log.WithError(err).Error("Unable to overwrite CNI configuration")
 				}
-
-				if err = os.WriteFile(option.Config.WriteCNIConfigurationWhenReady, input, 0644); err != nil {
-					log.WithError(err).Fatalf("Unable to write CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
-				} else {
-					log.Infof("Wrote CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
+				if override {
+					log.Infof("Overwrite CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
 				}
-
 				return nil
 			},
 		})

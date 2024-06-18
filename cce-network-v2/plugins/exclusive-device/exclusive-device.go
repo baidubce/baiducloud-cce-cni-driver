@@ -24,7 +24,6 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/hooks"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -49,11 +48,6 @@ var logger *logrus.Entry
 // NetConf for exclusive-device config, look the README to learn how to use those parameters
 type NetConf struct {
 	types.NetConf
-
-	// Add plugin-specific flags here
-	EnableDebug bool   `json:"enable-debug"`
-	LogFormat   string `json:"log-format"`
-	LogFile     string `json:"log-file"`
 }
 
 func init() {
@@ -73,41 +67,21 @@ func loadConf(bytes []byte) (*NetConf, error) {
 	return n, nil
 }
 
-func setupLogging(n *NetConf, args *skel.CmdArgs, method string) error {
-	f := n.LogFormat
-	if f == "" {
-		f = string(logging.DefaultLogFormat)
-	}
-	logOptions := logging.LogOptions{
-		logging.FormatOpt: f,
-	}
-	if len(n.LogFile) != 0 {
-		err := logging.SetupLogging([]string{}, logOptions, "exclude-device", n.EnableDebug)
-		if err != nil {
-			return err
-		}
-		logging.AddHooks(hooks.NewFileRotationLogHook(n.LogFile,
-			hooks.EnableCompression(),
-			hooks.WithMaxBackups(1),
-		))
-	} else {
-		logOptions["syslog.facility"] = "local5"
-		err := logging.SetupLogging([]string{"syslog"}, logOptions, "exclude-device", true)
-		if err != nil {
-			return err
-		}
-	}
+func cmdAdd(args *skel.CmdArgs) (err error) {
+	logging.SetupCNILogging("cni", true)
 	logger = logging.DefaultLogger.WithFields(logrus.Fields{
-		"containerID": args.ContainerID,
-		"netns":       args.Netns,
-		"plugin":      "exclude-device",
-		"method":      method,
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "exclusive-device",
+		"mod":     "ADD",
 	})
+	defer func() {
+		if err != nil {
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
+		}
+	}()
 
-	return nil
-}
-
-func cmdAdd(args *skel.CmdArgs) error {
 	cfg, err := loadConf(args.StdinData)
 	if err != nil {
 		return err
@@ -115,16 +89,6 @@ func cmdAdd(args *skel.CmdArgs) error {
 	if cfg.IPAM.Type == "" {
 		return fmt.Errorf("ipam must be specifed")
 	}
-
-	err = setupLogging(cfg, args, "ADD")
-	if err != nil {
-		return fmt.Errorf("exclusive-device failed to set up logging: %v", err)
-	}
-	defer func() {
-		if err != nil {
-			logger.Errorf("cni plugin failed: %v", err)
-		}
-	}()
 
 	// run the IPAM plugin and get back the config to apply
 	r, err := ipam.ExecAdd(cfg.IPAM.Type, args.StdinData)
@@ -194,6 +158,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	newResult.IPs[0].Interface = &defaultIndex
 	newResult.DNS = cfg.DNS
 
+	logger.WithField("result", newResult).Infof("successfully exec plugin")
 	return types.PrintResult(newResult, cfg.CNIVersion)
 }
 
@@ -203,13 +168,17 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
-	err = setupLogging(cfg, args, "DEL")
-	if err != nil {
-		return fmt.Errorf("exclusive-device failed to set up logging: %v", err)
-	}
+	logging.SetupCNILogging("cni", true)
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json(args),
+		"plugin":  "exclusive-device",
+		"mod":     "DEL",
+	})
 	defer func() {
 		if err != nil {
-			logger.Errorf("cni plugin failed: %v", err)
+			logger.WithError(err).Error("failed to exec plugin")
+		} else {
+			logger.Info("successfully to exec plugin")
 		}
 	}()
 

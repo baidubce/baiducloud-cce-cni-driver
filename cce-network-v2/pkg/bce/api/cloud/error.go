@@ -117,8 +117,7 @@ func IsErrorRouteRuleRepeated(err error) bool {
 }
 
 func IsErrorQuotaLimitExceeded(err error) bool {
-	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded ||
-		IsErrorQuotaLimitExceeded(err)
+	return ReasonForError(err) == ErrorReasonQuotaLimitExceeded
 }
 
 func IsErrorCreateRouteRuleExceededQuota(err error) bool {

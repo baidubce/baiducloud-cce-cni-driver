@@ -112,7 +112,7 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 		Log:              true,
 	}, StatENI: {
 		RateLimit:        5,
-		RateBurst:        5,
+		RateBurst:        10,
 		ParallelRequests: 5,
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
@@ -123,9 +123,9 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
 	}, ListERIs: {
-		RateLimit:        1,
-		RateBurst:        1,
-		ParallelRequests: 1,
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
 	},
@@ -189,15 +189,60 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 	},
 	// for instance
 	GetBCCInstanceDetail: {
-		RateLimit:        1,
-		RateBurst:        1,
-		ParallelRequests: 1,
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
 	}, GetBBCInstanceDetail: {
-		RateLimit:        1,
-		RateBurst:        1,
-		ParallelRequests: 1,
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  30 * time.Second,
+		Log:              false,
+	},
+
+	// for bbc
+	BBCBatchAddIP: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  30 * time.Second,
+		Log:              false,
+	},
+	BBCBatchDelIP: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  30 * time.Second,
+		Log:              false,
+	},
+	BBCBatchAddIPCrossSubnet: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  30 * time.Second,
+		Log:              false,
+	},
+	// for RDMA
+	GetHPCEniID: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  60 * time.Second,
+		Log:              true,
+	},
+	BatchDeleteHpcEniPrivateIP: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
+		MaxWaitDuration:  30 * time.Second,
+		Log:              false,
+	},
+	BatchAddHpcEniPrivateIP: {
+		RateLimit:        5,
+		RateBurst:        10,
+		ParallelRequests: 5,
 		MaxWaitDuration:  30 * time.Second,
 		Log:              false,
 	},

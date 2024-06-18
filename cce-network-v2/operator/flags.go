@@ -47,9 +47,6 @@ func init() {
 		"Subnets IDs (separated by commas)")
 	option.BindEnv(operatorOption.IPAMSubnetsIDs)
 
-	flags.Int64(operatorOption.ParallelAllocWorkers, defaults.ParallelAllocWorkers, "Maximum number of parallel IPAM workers")
-	option.BindEnv(operatorOption.ParallelAllocWorkers)
-
 	// Operator-specific flags
 	flags.String(option.ConfigFile, "", `Configuration file (default "$HOME/cced.yaml")`)
 	option.BindEnv(option.ConfigFile)
@@ -280,12 +277,60 @@ func init() {
 	flags.Bool(operatorOption.EnableRemoteFixedIPGC, true, "gc remote fixed ip when endpoint have been deleted")
 	option.BindEnv(operatorOption.EnableRemoteFixedIPGC)
 
+	flags.Bool(operatorOption.EnableExcessIPRelease, false, "enable release excess ips for eni")
+	option.BindEnv(operatorOption.EnableExcessIPRelease)
+
 	flags.Int(operatorOption.PSTSSubnetReversedIPNum, 1, "the number of reversed IP in subnet, this flag is useful for psts mode")
 	option.BindEnv(operatorOption.PSTSSubnetReversedIPNum)
 
 	flags.Int64(operatorOption.ResourceResyncWorkers, defaults.DefaultResourceResyncWorkers, "Number of workers to process resource event")
 	option.BindEnv(operatorOption.ResourceResyncWorkers)
+	flags.Int64(operatorOption.RdmaResourceResyncWorkers, defaults.DefaultResourceResyncWorkers*50, "Number of workers to process resource event")
+	option.BindEnv(operatorOption.RdmaResourceResyncWorkers)
+	flags.Int64(operatorOption.NrsResourceResyncWorkers, defaults.DefaultResourceResyncWorkers*50, "Number of workers to process resource event")
+	option.BindEnv(operatorOption.NrsResourceResyncWorkers)
+	flags.Int64(operatorOption.EniResourceResyncWorkers, defaults.DefaultResourceResyncWorkers*50, "Number of workers to process resource event")
+	option.BindEnv(operatorOption.EniResourceResyncWorkers)
+	flags.Int64(operatorOption.SubnetResourceResyncWorkers, defaults.DefaultResourceResyncWorkers, "Number of workers to process resource event")
+	option.BindEnv(operatorOption.SubnetResourceResyncWorkers)
 
 	flags.Int(operatorOption.ExcessIPReleaseDelay, 180, "controls how long operator would wait before an IP previously marked as excess is released. default is 180 seconds")
+
+	flags.String(operatorOption.BCECloudAccessKey, "", "BCE OpenApi AccessKeyID.")
+	option.BindEnv(operatorOption.BCECloudAccessKey)
+
+	flags.String(operatorOption.BCECloudSecureKey, "", "BCE OpenApi AccessKeySecret.")
+	option.BindEnv(operatorOption.BCECloudSecureKey)
+
+	flags.String(operatorOption.BCECloudHost, "", "host name for BCE api")
+	option.BindEnv(operatorOption.BCECloudHost)
+
+	flags.String(operatorOption.BCECloudContry, "", "contry for BCE api")
+	option.BindEnv(operatorOption.BCECloudContry)
+
+	flags.String(operatorOption.BCECloudRegion, "", "region for BCE api")
+	option.BindEnv(operatorOption.BCECloudRegion)
+
+	flags.String(operatorOption.BCECloudVPCID, "", "vpc id")
+	option.BindEnv(operatorOption.BCECloudVPCID)
+
+	flags.Duration(option.ResourceResyncInterval, operatorOption.DefaultResourceResyncInterval, "synchronization cycle of vpc resources, such as subnet and ENI")
+	option.BindEnv(option.ResourceResyncInterval)
+
+	// duration for resource resync
+	flags.Duration(operatorOption.ResourceHPCResyncInterval, operatorOption.DefaultResourceResyncInterval*10, "How often to resync resources")
+	option.BindEnv(operatorOption.ResourceHPCResyncInterval)
+
+	flags.Duration(operatorOption.ResourceENIResyncInterval, operatorOption.DefaultResourceResyncInterval*2, "How often to resync resources")
+	option.BindEnv(operatorOption.ResourceENIResyncInterval)
+
+	flags.String(operatorOption.CCEClusterID, "", "cluster id defined in CCE")
+	option.BindEnv(operatorOption.CCEClusterID)
+
+	flags.Int(operatorOption.BCECustomerMaxIP, 0, "max ip number of eni for customer")
+	option.BindEnv(operatorOption.BCECustomerMaxIP)
+
+	flags.Int(operatorOption.BCECustomerMaxRdmaIP, 0, "max rdma ip number of rdma-interface for customer")
+	option.BindEnv(operatorOption.BCECustomerMaxRdmaIP)
 	viper.BindPFlags(flags)
 }

@@ -762,6 +762,10 @@ func (n *NodesPodCIDRManager) reuseIPNets(
 	return oldNodeCIDRs, allocated, nil
 }
 
+func (n *NodesPodCIDRManager) ResourceType() string {
+	return v2.NetResourceSetEventHandlerTypeEth
+}
+
 // allocateIPNet allocates the `newCidr` in the cidrSet allocator. If the
 // the `newCIDR` is already allocated an error is returned.
 // In case the function returns successfully, it's up to the caller to execute

@@ -83,8 +83,6 @@ func (n *bbcNode) tryRefreshBBCENI() *ccev2.ENI {
 // createBBCENI means create a eni object for bbc node
 // bbc node has only one eni, so we use bbc instance id as eni name
 func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
 	if n.bbceni != nil {
 		return nil
 	}
@@ -172,8 +170,10 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 		return err
 	}
 	scopedLog.Debugf("got bbc ENI resource successed")
+	n.mutex.Lock()
 	n.bbceni = eni
 	n.primaryENISubnetID = bbceni.SubnetId
+	n.mutex.Unlock()
 	return n.updateNrsSubnetIfNeed([]string{bbceni.SubnetId})
 }
 

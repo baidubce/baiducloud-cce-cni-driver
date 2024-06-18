@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
@@ -29,6 +30,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
@@ -149,16 +151,27 @@ type Statistics struct {
 func (n *NetResource) IsRunning() bool {
 	n.mutex.RLock()
 	defer n.mutex.RUnlock()
-	return n.instanceRunning
+	return n.instanceRunning && n.instanceStoppedRunning.Add(time.Minute).Before(time.Now())
 }
 
-func (n *NetResource) SetRunning(running bool) {
+func (n *NetResource) SetRunning() {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
+	if n.resource == nil {
+		return
+	}
 
-	n.loggerLocked().Infof("Set running %t", running)
-	n.instanceRunning = running
-	if !n.instanceRunning {
+	oldRunning := n.instanceRunning
+	obj, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(n.resource.Name)
+	if err != nil || obj == nil {
+		n.instanceRunning = false
+	} else if obj != nil {
+		n.instanceRunning = true
+	}
+
+	n.loggerLocked().Debugf("Set running %t", n.instanceRunning)
+
+	if oldRunning && !n.instanceRunning {
 		n.instanceStoppedRunning = time.Now()
 	}
 }
@@ -187,9 +200,6 @@ func (n *NetResource) logger() *logrus.Entry {
 	if n == nil {
 		return log
 	}
-
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
 
 	return n.loggerLocked()
 }
@@ -355,6 +365,9 @@ func (n *NetResource) InstanceID() (id string) {
 func (n *NetResource) UpdatedResource(resource *v2.NetResourceSet) bool {
 	// Deep copy the resource before storing it. This way we are not
 	// dependent on caller not using the resource after this call.
+	if resource == nil {
+		return false
+	}
 	resource = resource.DeepCopy()
 
 	n.ops.UpdatedNode(resource)
@@ -362,14 +375,13 @@ func (n *NetResource) UpdatedResource(resource *v2.NetResourceSet) bool {
 	n.mutex.Lock()
 	// Any modification to the custom resource is seen as a sign that the
 	// instance is alive
-	n.instanceRunning = true
 	n.resource = resource
 	n.mutex.Unlock()
+	n.SetRunning()
 
 	n.recalculate()
 	allocationNeeded := n.allocationNeeded()
 	if allocationNeeded {
-		n.requirePoolMaintenance()
 		n.poolMaintainer.Trigger()
 	}
 
@@ -894,16 +906,9 @@ func (n *NetResource) maintainIPPool(ctx context.Context) (instanceMutated bool,
 	return n.handleIPAllocation(ctx, a)
 }
 
-func (n *NetResource) isInstanceRunning() (isRunning bool) {
-	n.mutex.RLock()
-	isRunning = n.instanceRunning
-	n.mutex.RUnlock()
-	return
-}
-
 func (n *NetResource) requireResync() {
 	n.mutex.Lock()
-	n.resyncNeeded = time.Now()
+	n.resyncNeeded = time.Now().Add(operatorOption.Config.ResourceResyncInterval)
 	n.mutex.Unlock()
 }
 
@@ -919,19 +924,24 @@ func (n *NetResource) updateLastResync(syncTime time.Time) {
 // MaintainIPPool attempts to allocate or release all required IPs to fulfill
 // the needed gap. If required, interfaces are created.
 func (n *NetResource) MaintainIPPool(ctx context.Context) error {
+	// it is neccessary to update pool maintenance time before the actual
+	// this operation can effectively reduce duplicate synchronization
+	n.requirePoolMaintenance()
+	defer n.poolMaintenanceComplete()
+
 	// As long as the instances API is unstable, don't perform any
 	// operation that can mutate state.
 	if !n.manager.InstancesAPIIsReady() {
 		if n.retry != nil {
 			n.retry.Trigger()
 		}
-		return fmt.Errorf("instances API is unstable. Blocking mutating operations. See logs for details.")
+		return fmt.Errorf("instances API is unstable. Blocking mutating operations. See logs for details")
 	}
 
 	// If the instance has stopped running for less than a minute, don't attempt any deficit
 	// resolution and wait for the custom resource to be updated as a sign
 	// of life.
-	if !n.isInstanceRunning() && n.instanceStoppedRunning.Add(time.Minute).After(time.Now()) {
+	if !n.IsRunning() {
 		return nil
 	}
 
@@ -940,7 +950,6 @@ func (n *NetResource) MaintainIPPool(ctx context.Context) error {
 		n.logger().Debug("Setting resync needed")
 		n.requireResync()
 	}
-	n.poolMaintenanceComplete()
 	n.recalculate()
 	if instanceMutated || err != nil {
 		n.logger().Debug("MaintainIPPool triggering resync")
@@ -1022,6 +1031,10 @@ func (n *NetResource) syncToAPIServer() (err error) {
 		err = n.update(origNode, node, retry, true)
 		if err == nil {
 			break
+		}
+		if kerrors.IsNotFound(err) {
+			scopedLog.WithError(err).Warning("skipping to update NetResourceSet status")
+			return nil
 		}
 	}
 

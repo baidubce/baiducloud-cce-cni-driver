@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 
-	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
@@ -85,8 +84,9 @@ type nodeStore struct {
 	allocationPoolSize map[Family]int
 
 	// signal for completion of restoration
-	restoreFinished  chan struct{}
-	restoreCloseOnce sync.Once
+	restoreFinished    chan struct{}
+	hasRestoreFinished bool
+	restoreCloseOnce   sync.Once
 
 	conf      Configuration
 	mtuConfig MtuConfiguration
@@ -298,9 +298,17 @@ func (n *nodeStore) deleteLocalNodeResource() {
 // on the custom resource passed into the function.
 func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 	n.mutex.Lock()
+	n.ownNode = node
+	restore := n.hasRestoreFinished
+	n.mutex.Unlock()
+
+	if !restore {
+		log.Infof("skipping restore due to missing preallocated IPs")
+		return
+	}
+	n.mutex.Lock()
 
 	var markedToReleaseIPMap = make(map[string]*crdAllocator)
-	n.ownNode = node
 	n.allocationPoolSize[IPv4] = 0
 	n.allocationPoolSize[IPv6] = 0
 	if node.Spec.IPAM.Pool != nil {
@@ -563,7 +571,7 @@ type crdAllocator struct {
 // newCRDAllocator creates a new CRD-backed IP allocator
 func newCRDAllocator(networkResourceSetName string, family Family, c Configuration, owner Owner, k8sEventReg K8sEventRegister, mtuConfig MtuConfiguration) Allocator {
 	var netResourceSetStore *nodeStore
-	if bceutils.IsRdmaNetResourceSet(networkResourceSetName) {
+	if owner.ResourceType() != ccev2.NetResourceSetEventHandlerTypeEth {
 		if _, ok := initRdmaNetResourceSetStore[networkResourceSetName]; !ok {
 			initRdmaNetResourceSetStore[networkResourceSetName] = &sync.Once{}
 		}
@@ -823,6 +831,9 @@ func (a *crdAllocator) Dump() (map[string]string, string) {
 func (a *crdAllocator) RestoreFinished() {
 	a.store.restoreCloseOnce.Do(func() {
 		close(a.store.restoreFinished)
+		a.store.mutex.Lock()
+		a.store.hasRestoreFinished = true
+		a.store.mutex.Unlock()
 	})
 }
 

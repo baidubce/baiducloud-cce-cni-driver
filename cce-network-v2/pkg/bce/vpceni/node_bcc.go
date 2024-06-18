@@ -17,6 +17,7 @@ package vpceni
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
@@ -42,6 +43,7 @@ type bccNode struct {
 
 	// bcc instance info
 	bccInfo *bccapi.InstanceModel
+	bccLock sync.RWMutex
 
 	// usePrimaryENIWithSecondaryMode primary eni with secondary IP mode only use by ebc instance
 	usePrimaryENIWithSecondaryMode bool
@@ -55,30 +57,37 @@ func newBCCNode(super *bceNode) *bccNode {
 	return node
 }
 
-func (n *bccNode) refreshBCCInfo() error {
+// refreshBCCInfo refresh bcc instance info
+// caller should ensure be locked
+func (n *bccNode) refreshBCCInfo() (*bccapi.InstanceModel, error) {
+	n.bccLock.RLock()
 	if n.bccInfo != nil {
-		return nil
+		n.bccLock.RUnlock()
+		return n.bccInfo, nil
 	}
+	n.bccLock.RUnlock()
+
 	bccInfo, err := n.manager.bceclient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
 	if err != nil {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
-		return err
+		return n.bccInfo, err
 	}
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
-	n.bccInfo = bccInfo
-
 	// TODO delete this test code block after bcc instance eniQuota is fixed
 	// The tentative plan is for April 15th
 	{
-		if n.bccInfo.Spec == "ebc.la2.c256m1024.2d" {
+		if bccInfo.Spec == "ebc.la2.c256m1024.2d" {
 			bccInfo.EniQuota = 0
 		}
 	}
 
+	n.bccLock.Lock()
+	defer n.bccLock.Unlock()
 	if bccInfo.EniQuota == 0 {
 		n.usePrimaryENIWithSecondaryMode = true
 	}
-	return nil
+	n.bccInfo = bccInfo
+	return n.bccInfo, nil
 }
 
 func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
@@ -93,13 +102,9 @@ func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, erro
 		return nil, err
 	}
 
-	err = n.refreshBCCInfo()
+	bccInfo, err := n.refreshBCCInfo()
 	if err != nil {
 		return nil, err
-	}
-	// if bcc instance is not created by cce-network-v2, there is no need to check IP resouce
-	if n.bccInfo == nil {
-		return nil, fmt.Errorf("bcc info instance is nil")
 	}
 
 	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
@@ -109,9 +114,9 @@ func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, erro
 	// Expect all BCC models to support ENI
 	// EBC models may not support eni, and there are also some non console created
 	// BCCs that do not support this parameter
-	if n.bccInfo.EniQuota != 0 || n.k8sObj.Spec.ENI.InstanceType == string(ccev2.ENIForBCC) {
-		eniQuota.SetMaxENI(n.bccInfo.EniQuota)
-		if n.bccInfo.EniQuota == 0 {
+	if bccInfo.EniQuota != 0 || n.k8sObj.Spec.ENI.InstanceType == string(ccev2.ENIForBCC) {
+		eniQuota.SetMaxENI(bccInfo.EniQuota)
+		if bccInfo.EniQuota == 0 {
 			eniQuota.SetMaxENI(defaltENINums)
 		}
 	}
@@ -142,7 +147,7 @@ func getDefaultBCCEniQuota(k8sNode *corev1.Node) (int, int) {
 // can be allocated on the node and whether a new network interface
 // must be attached to the node.
 func (n *bccNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
-	err = n.refreshBCCInfo()
+	_, err = n.refreshBCCInfo()
 	if err != nil {
 		scopedLog.Errorf("failed to refresh ebc info: %v", err)
 		return nil, fmt.Errorf("failed to refresh ebc info")

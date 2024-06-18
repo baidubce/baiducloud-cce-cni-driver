@@ -20,10 +20,8 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 )
@@ -131,19 +129,6 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 	}
 
 	return ris, nil
-}
-
-func IsRdmaNetResourceSet(resourceName string) bool {
-	client := k8s.WatcherClient()
-	if client == nil {
-		log.Fatal("K8s client is nil")
-	}
-	_, err := client.Informers.Core().V1().Nodes().Lister().Get(resourceName)
-	// on RDMA resource ,the NetResourceSet Name != Node Name
-	if err != nil {
-		return errors.IsNotFound(err)
-	}
-	return false
 }
 
 func IsCCERdmaEndpointName(cepName string) bool {

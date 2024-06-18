@@ -98,7 +98,6 @@ func (n *bceRDMANetResourceSet) waitForENISynced(ctx context.Context) {
 					return nil
 				}
 				n.mutex.Lock()
-				defer n.mutex.Unlock()
 				if version, ok := n.expiredVPCVersion[interfaceID]; ok {
 					if e.Spec.VPCVersion == version {
 						haveSynced = false
@@ -106,6 +105,7 @@ func (n *bceRDMANetResourceSet) waitForENISynced(ctx context.Context) {
 						delete(n.expiredVPCVersion, interfaceID)
 					}
 				}
+				n.mutex.Unlock()
 
 				return nil
 			})

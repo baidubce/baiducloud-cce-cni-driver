@@ -68,6 +68,9 @@ const (
 	// fatalSleep is the duration CCE should sleep before existing in case
 	// of a log.Fatal is issued or a CLI flag is specified but does not exist.
 	fatalSleep = 2 * time.Second
+
+	// cniMountPath is the hostpath for cce-network-agent to the directory where CNI configuration files
+	cniMountPath = "/etc/cni/net.d"
 )
 
 var (
@@ -262,15 +265,15 @@ func initializeFlags() {
 	flags.Int(option.MaxRDMAIPsPerENI, 0, "max RDMA IPs can be allocated to a RDMA ENI , 0 means no limit")
 	option.BindEnv(option.MaxRDMAIPsPerENI)
 
-	flags.Int(option.RDMAIPPoolMinAllocateIPs, 2,
+	flags.Int(option.RDMAIPPoolMinAllocateIPs, 10,
 		"RDMAIPPoolMinAllocateIPs is the minimum number of IPs that must be allocated when the RDMA NetResourceSet of the node is first bootstrapped.")
 	option.BindEnv(option.RDMAIPPoolMinAllocateIPs)
 
-	flags.Int(option.RDMAIPPoolPreAllocate, 2,
+	flags.Int(option.RDMAIPPoolPreAllocate, 12,
 		"RDMAIPPoolPreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec of the RDMA NetResourceSet. ")
 	option.BindEnv(option.RDMAIPPoolPreAllocate)
 
-	flags.Int(option.RDMAIPPoolMaxAboveWatermark, 2,
+	flags.Int(option.RDMAIPPoolMaxAboveWatermark, 96,
 		"RDMAIPPoolMaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark for the RDMA NetResourceSet.")
 	option.BindEnv(option.RDMAIPPoolMaxAboveWatermark)
 
@@ -695,6 +698,12 @@ func runDaemon() {
 		Info("Daemon initialization completed")
 
 	if option.Config.WriteCNIConfigurationWhenReady != "" {
+		// if the hostpath for cce-network-agent to the directory where CNI configuration files is not exist, panic.
+		_, err := os.Stat(cniMountPath)
+		if os.IsNotExist(err) {
+			panic("the hostpath for cce-network-agent to the directory where CNI configuration files is not exist")
+		}
+
 		d.controllers.UpdateController(cniUpdateControllerName, controller.ControllerParams{
 			RunInterval: option.Config.ResourceResyncInterval,
 			DoFunc: func(ctx context.Context) error {

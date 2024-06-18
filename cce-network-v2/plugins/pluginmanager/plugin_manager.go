@@ -85,53 +85,53 @@ func (plugin CniPlugin) GetType() string {
 // Automatically generate network plugin configuration files for CCE
 // 1. defautl cptp plugin
 //
-//	{
-//		"name":"cce",
-//		"cniVersion":"0.4.0",
-//		"plugins":[
-//			{
-//				"type":"cptp",
-//				"ipam":{
-//					"type":"cipam",
-//				},
-//				"mtu": {{ .Values.ccedConfig.mtu }}
-//			}
-//			{{- range .Values.extplugins }}
-//			,{
-//				"type": "{{ .type }}"
-//			}
-//			{{- end }}
-//			,{
-//				"type": "endpoint-probe"
-//			}
-//          ,{
-//				"type": "roce"
-//			}
-//		]
-//	}
+//		{
+//			"name":"cce",
+//			"cniVersion":"0.4.0",
+//			"plugins":[
+//				{
+//					"type":"cptp",
+//					"ipam":{
+//						"type":"cipam",
+//					},
+//					"mtu": {{ .Values.ccedConfig.mtu }}
+//				}
+//				{{- range .Values.extplugins }}
+//				,{
+//					"type": "{{ .type }}"
+//				}
+//				{{- end }}
+//				,{
+//					"type": "endpoint-probe"
+//				}
+//	         ,{
+//					"type": "roce"
+//				}
+//			]
+//		}
 //
 // 2. primary eni plugin
 //
-//	{
-//		"name":"podlink",
-//		"cniVersion":"0.4.0",
-//		"plugins":[
-//			{
-//				"type":"exclusive-device",
-//				"ipam":{
-//					"type":"enim"
+//		{
+//			"name":"podlink",
+//			"cniVersion":"0.4.0",
+//			"plugins":[
+//				{
+//					"type":"exclusive-device",
+//					"ipam":{
+//						"type":"enim"
+//					}
 //				}
-//			}
-//			{{- range .Values.extplugins }}
-//			,{
-//				"type": "{{ .type }}"
-//			}
-//			{{- end }}
-//          ,{
-//				"type": "roce"
-//			}
-//		]
-//	}
+//				{{- range .Values.extplugins }}
+//				,{
+//					"type": "{{ .type }}"
+//				}
+//				{{- end }}
+//	         ,{
+//					"type": "roce"
+//				}
+//			]
+//		}
 func defaultCNIPlugin() *CniListConfig {
 	result := &CniListConfig{
 		NetConf: cniTypes.NetConf{

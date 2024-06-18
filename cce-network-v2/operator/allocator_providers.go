@@ -17,11 +17,8 @@ package main
 
 import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/allocator"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 )
 
 var (
-	allocatorProviders    = make(map[string]allocator.AllocatorProvider)
-	subnetSyncerProviders = make(map[string]syncer.SubnetSyncher)
-	eniSyncerProviders    = make(map[string]syncer.ENISyncher)
+	allocatorProviders = make(map[string]allocator.AllocatorProvider)
 )

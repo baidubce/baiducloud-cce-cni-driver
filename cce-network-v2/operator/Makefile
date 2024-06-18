@@ -3,17 +3,13 @@
 
 include ../Makefile.defs
 
-#TARGETS := cce-operator cce-operator-generic cce-operator-aws cce-operator-azure cce-operator-alibabacloud
-TARGETS := cce-network-operator cce-network-operator-generic cce-network-operator-pcb cce-operator-vpc-eni cce-operator-rdma
+TARGETS := cce-network-operator-pcb cce-operator-vpc-eni
 
 .PHONY: all $(TARGETS) clean install
 
 all: $(TARGETS)
 
-cce-network-operator: GO_TAGS_FLAGS+=ipam_provider_operator,ipam_provider_vpc_eni,ipam_provider_vpc_route,ipam_provider_rdma
-cce-network-operator-generic: GO_TAGS_FLAGS+=ipam_provider_operator
-cce-operator-vpc-eni: GO_TAGS_FLAGS+=ipam_provider_vpc_eni,ipam_provider_vpc_route,ipam_provider_rdma
-cce-operator-rdma: GO_TAGS_FLAGS+=ipam_provider_rdma
+cce-operator-vpc-eni: GO_TAGS_FLAGS+=ipam_provider_vpc_eni,ipam_provider_vpc_route
 cce-network-operator-pcb: GO_TAGS_FLAGS+=ipam_provider_private_cloud_base
 
 $(TARGETS):

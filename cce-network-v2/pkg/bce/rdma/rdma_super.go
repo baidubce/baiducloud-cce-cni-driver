@@ -26,7 +26,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -82,11 +81,6 @@ type realNetResourceSetInf interface {
 	releaseIPs(ctx context.Context, iaasClient client.IaaSClient, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error
 	getMaximumAllocatable(eniQuota RdmaEniQuotaManager) int
 	getMinimumAllocatable() int
-
-	// direct ip allocation
-	allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error)
-	// ReuseIPs is called to reuse the IPs that are not used by any pods
-	reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error)
 }
 
 // bceRDMANetResourceSet represents a Kubernetes node running CCE with an associated
@@ -97,10 +91,6 @@ type bceRDMANetResourceSet struct {
 
 	// mutex protects members below this field
 	mutex lock.RWMutex
-
-	// enis is the list of ENIs attached to the node indexed by ENI ID.
-	// Protected by Node.mutex.
-	enis map[string]ccev2.ENI
 
 	// k8sObj is the NetResourceSet custom resource representing the node
 	k8sObj *ccev2.NetResourceSet
@@ -122,9 +112,6 @@ type bceRDMANetResourceSet struct {
 	eniQuota               RdmaEniQuotaManager
 	lastResyncEniQuotaTime time.Time
 	limiterLock            lock.RWMutex
-
-	// nextCreateENITime not allow create eni before this time
-	nextCreateENITime *time.Time
 
 	real realNetResourceSetInf
 
@@ -163,7 +150,11 @@ func NewNetResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, man
 
 func (n *bceRDMANetResourceSet) getRdmaEniQuota() RdmaEniQuotaManager {
 	n.limiterLock.Lock()
-	defer n.limiterLock.Unlock()
+	if n.eniQuota != nil && n.lastResyncEniQuotaTime.Add(DayDuration).After(time.Now()) {
+		n.limiterLock.Unlock()
+		return n.eniQuota
+	}
+	n.limiterLock.Unlock()
 
 	// slow path to claculate limiter
 	ctx := logfields.NewContext()
@@ -173,9 +164,7 @@ func (n *bceRDMANetResourceSet) getRdmaEniQuota() RdmaEniQuotaManager {
 		"instanceType": n.k8sObj.Spec.ENI.InstanceType,
 	}).WithContext(ctx)
 
-	if n.eniQuota != nil && n.lastResyncEniQuotaTime.Add(DayDuration).After(time.Now()) {
-		return n.eniQuota
-	} // fast path to claculate eni quota when operaor has been restarted
+	// fast path to claculate eni quota when operaor has been restarted
 	// isSetLimiter returns true if the node has set limiter
 	// if the node has set limiter, it will return a limiter from the ENI spec
 	if n.k8sObj.Annotations != nil && n.k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] != "" {
@@ -191,7 +180,10 @@ func (n *bceRDMANetResourceSet) getRdmaEniQuota() RdmaEniQuotaManager {
 		if operatorOption.Config.BCECustomerMaxIP != 0 && operatorOption.Config.BCECustomerMaxIP == eniQuota.GetMaxIP() {
 			goto slowPath
 		}
+
+		n.limiterLock.Lock()
 		n.eniQuota = eniQuota
+		n.limiterLock.Unlock()
 		return n.eniQuota
 	}
 
@@ -244,8 +236,10 @@ func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.E
 		return nil
 	}
 
+	n.limiterLock.Lock()
 	n.eniQuota = rdmaEniQuota
 	n.lastResyncEniQuotaTime = time.Now()
+	n.limiterLock.Unlock()
 
 	scopedLog.WithFields(logrus.Fields{
 		"maxRdmaEni":          n.eniQuota.GetMaxENI(),
@@ -298,6 +292,7 @@ func (n *bceRDMANetResourceSet) overrideENICapacityToNode(rdmaEniQuota RdmaEniQu
 func (n *bceRDMANetResourceSet) UpdatedNode(obj *ccev2.NetResourceSet) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
+
 	n.k8sObj = obj
 	n.instanceID = obj.Spec.InstanceID
 }
@@ -313,9 +308,6 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 	)
 	n.waitForENISynced(ctx)
 
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
-
 	availabelENIsNumber := 0
 	usedENIsNumber := 0
 
@@ -330,14 +322,10 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 			}
 			allENIId = append(allENIId, e.Name)
 
-			// eni is not ready to use
-			eniSubnet := e.Spec.ENI.SubnetID
-			/* underlay-RDMA and e-RDMA(ERI) is not need to check
+			// underlay-RDMA and e-RDMA(ERI) is need to check ENI VPCStatus
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
 				return nil
 			}
-			n.creatingEni.addCreatingENI(e.Name, e.CreationTimestamp.Time)
-			*/
 
 			availabelENIsNumber++
 			if e.Status.CCEStatus == ccev2.ENIStatusUsingInPod {
@@ -356,10 +344,6 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 					if addr.Primary {
 						continue
 					}
-					// filter cross subnet private ip
-					if addr.SubnetID != eniSubnet {
-						continue
-					}
 					a[addr.PrivateIPAddress] = ipamTypes.AllocationIP{
 						Resource: vifFeatures,
 						SubnetID: addr.SubnetID,
@@ -372,27 +356,8 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 			return nil
 		})
-	/* underlay-RDMA and e-RDMA(ERI) is not need to check
-	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
-	*/
 
 	return a, nil
-}
-
-func (n *bceRDMANetResourceSet) alignDualStackIPs(ctx context.Context, scopedLog *logrus.Entry, e *eniResource) {
-	if operatorOption.Config.EnableIPv6 && operatorOption.Config.EnableIPv4 {
-		if len(e.Spec.ENI.PrivateIPSet) != len(e.Spec.ENI.IPV6PrivateIPSet) {
-			scopedLog.Warnf("eni %s ipv4 and ipv6 private ip number not equal", e.Name)
-			a, err := n.PrepareIPAllocation(scopedLog)
-			if err != nil {
-				scopedLog.WithError(err).Errorf("prepare ip allocation failed")
-			}
-			err = n.AllocateIPs(ctx, a)
-			if err != nil {
-				scopedLog.WithError(err).Errorf("allocate ip failed")
-			}
-		}
-	}
 }
 
 // CreateInterface create a new ENI
@@ -404,9 +369,8 @@ func (n *bceRDMANetResourceSet) CreateInterface(ctx context.Context, allocation 
 // those errors will be added to the status of nrs by 2 minutes
 func (n *bceRDMANetResourceSet) appendAllocatedIPError(eniID string, openAPIStatus *ccev2.StatusChange) {
 	n.mutex.Lock()
-	defer n.mutex.Unlock()
-
 	n.eniAllocatedIPsErrorMap[eniID] = openAPIStatus
+	n.mutex.Unlock()
 
 	// append status change to nrs event
 	if openAPIStatus.Code != ccev2.ErrorCodeSuccess {
@@ -445,46 +409,44 @@ func (n *bceRDMANetResourceSet) refreshENIAllocatedIPErrors(resource *ccev2.NetR
 func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	eniStatusMap := make(map[string]ccev2.SimpleENIStatus)
 	crossSubnetUsed := make(ipamTypes.AllocationMap, 0)
-	// Select only the ENI of the local node
-	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID: n.instanceID,
-		k8s.LabelNodeName:   n.k8sObj.Name,
-	}))
-	enis, err := n.manager.eniLister.List(selector)
-	if err != nil {
-		return
-	}
 
-	for i := 0; i < len(enis); i++ {
-		simple := ccev2.SimpleENIStatus{
-			ID:        enis[i].Spec.ENI.ID,
-			VPCStatus: string(enis[i].Status.VPCStatus),
-			CCEStatus: string(enis[i].Status.CCEStatus),
-		}
-		eniStatusMap[enis[i].Name] = simple
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+			eni, ok := iface.Resource.(*eniResource)
+			if !ok {
+				return nil
+			}
+			simple := ccev2.SimpleENIStatus{
+				ID:        eni.Spec.ENI.ID,
+				VPCStatus: string(eni.Status.VPCStatus),
+				CCEStatus: string(eni.Status.CCEStatus),
+			}
+			eniStatusMap[eni.Name] = simple
 
-		var addCrossSubnetAddr = func(addr *models.PrivateIP) {
-			allocationIP := ipamTypes.AllocationIP{
-				Resource:  enis[i].Name,
-				IsPrimary: addr.Primary,
-				SubnetID:  addr.SubnetID,
+			var addCrossSubnetAddr = func(addr *models.PrivateIP) {
+				allocationIP := ipamTypes.AllocationIP{
+					Resource:  eni.Name,
+					IsPrimary: addr.Primary,
+					SubnetID:  addr.SubnetID,
+				}
+				ceps, _ := n.manager.cepClient.GetByIP(addr.PrivateIPAddress)
+				if len(ceps) > 0 {
+					allocationIP.Owner = ceps[0].Namespace + "/" + ceps[0].Name
+				}
+				if addr.SubnetID != eni.Spec.ENI.SubnetID {
+					crossSubnetUsed[addr.PrivateIPAddress] = allocationIP
+				}
 			}
-			ceps, _ := n.manager.cepClient.GetByIP(addr.PrivateIPAddress)
-			if len(ceps) > 0 {
-				allocationIP.Owner = ceps[0].Namespace + "/" + ceps[0].Name
-			}
-			if addr.SubnetID != enis[i].Spec.ENI.SubnetID {
-				crossSubnetUsed[addr.PrivateIPAddress] = allocationIP
-			}
-		}
 
-		for _, addr := range enis[i].Spec.PrivateIPSet {
-			addCrossSubnetAddr(addr)
-		}
-		for _, addr := range enis[i].Spec.IPV6PrivateIPSet {
-			addCrossSubnetAddr(addr)
-		}
-	}
+			for _, addr := range eni.Spec.PrivateIPSet {
+				addCrossSubnetAddr(addr)
+			}
+			for _, addr := range eni.Spec.IPV6PrivateIPSet {
+				addCrossSubnetAddr(addr)
+			}
+			return nil
+		})
+
 	resource.Status.ENIs = eniStatusMap
 	resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
 	n.refreshENIAllocatedIPErrors(resource)
@@ -573,8 +535,8 @@ func (n *bceRDMANetResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 			partialIPv4Result, partialIPv6Result, err := n.real.allocateIPs(ctx, scopedLog, iaasClient, allocation, ipv4PaticalToAllocate, ipv6PaticalToAllocate)
 			if err != nil {
 				allocateLog.WithError(err).Error("failed to allocate ips from eni")
-				n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "AllocateIPsFailed",
-					"Allocate RDMA IPs %d on NRS %s failed", ipv4PaticalToAllocate, n.k8sObj.Name) // IPv6 is not supported
+				err = fmt.Errorf("allocate RDMA %d IP(s) on NRS %s failed, error: %v", ipv4PaticalToAllocate, n.k8sObj.Name, err) // IPv6 is not supported
+				n.appendAllocatedIPError(allocation.InterfaceID, ccev2.NewErrorStatusChange(err.Error()))
 				if !isPartialSuccess {
 					return err
 				} else {
@@ -602,7 +564,7 @@ func (n *bceRDMANetResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 			"ipv6AllocatedSet": ipv6AllocatedSet,
 		}).Infof("allocated ips from eni success")
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "AllocateIPsSuccess",
-			"Allocate RDMA IPs %d on NRS %s success", ipv4PaticalToAllocate, n.k8sObj.Name) // IPv6 is not supported
+			"allocate RDMA IPs %d on NRS %s success", ipv4PaticalToAllocate, n.k8sObj.Name) // IPv6 is not supported
 
 		return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 			eni.Spec.ENI.PrivateIPSet = appenUniqueElement(eni.Spec.PrivateIPSet, ipv4AllocatedSet)
@@ -638,8 +600,6 @@ func appenUniqueElement(arr, toadd []*models.PrivateIP) []*models.PrivateIP {
 // indicates a need to release IPs.
 func (n *bceRDMANetResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.ReleaseAction {
 	r := &ipam.ReleaseAction{}
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
 
 	// Needed for selecting the same ENI to release IPs from
 	// when more than one ENI qualifies for release
@@ -679,7 +639,10 @@ func (n *bceRDMANetResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logru
 					return false
 				}
 				ip := addr.PrivateIPAddress
+
+				n.mutex.Lock()
 				_, ipUsed := n.k8sObj.Status.IPAM.Used[ip]
+				n.mutex.Unlock()
 				// exclude primary IPs and cross subnet IPs
 				return !ipUsed
 			}

@@ -16,7 +16,6 @@ package rdma
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -29,7 +28,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -180,26 +178,9 @@ func (m *rdmaInstancesManager) HandlerVPCError(scopedLog *logrus.Entry, vpcError
 // chance to resync its own state with external APIs or systems. It is
 // also called when the IPAM layer detects that state got out of sync.
 func (m *rdmaInstancesManager) Resync(ctx context.Context) time.Time {
-	return time.Now().Add(operatorOption.Config.ResourceResyncInterval)
-}
-
-// NodeEndpoint implements endpoint.DirectIPAllocator
-func (m *rdmaInstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.DirectEndpointOperation, error) {
-	m.mutex.Lock()
-	node, ok := m.nodeMap[cep.Spec.Network.IPAllocation.NodeIP]
-	m.mutex.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("node %s not found", cep.Spec.Network.IPAllocation.NodeIP)
-	}
-	return node, nil
-}
-
-// ResyncPool implements endpoint.DirectIPAllocator
-func (*rdmaInstancesManager) ResyncPool(ctx context.Context, scopedLog *logrus.Entry) (map[string]ipamTypes.AllocationMap, error) {
-	panic("unimplemented")
+	return time.Now()
 }
 
 var (
 	_ ipam.AllocationImplementation = &rdmaInstancesManager{}
-	_ endpoint.DirectIPAllocator    = &rdmaInstancesManager{}
 )

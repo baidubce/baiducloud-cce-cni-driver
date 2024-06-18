@@ -16,17 +16,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 )
 
-// remoteEniSyncher
-type remoteEniSyncher interface {
-	syncENI(ctx context.Context) (result []eni.Eni, err error)
-	statENI(ctx context.Context, eniID string) (*eni.Eni, error)
-
-	// use eni machine to manager status of eni
-	useENIMachine() bool
-
-	setENIUpdater(updater syncer.ENIUpdater)
-}
-
 type remoteBCCPrimarySyncher struct {
 	updater     syncer.ENIUpdater
 	bceclient   cloud.Interface

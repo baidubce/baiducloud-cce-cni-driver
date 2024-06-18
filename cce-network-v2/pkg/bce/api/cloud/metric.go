@@ -25,5 +25,5 @@ func exportMetric(funcName string, startTime time.Time, err error) {
 
 func exportMetricAndLog(ctx context.Context, funcName string, startTime time.Time, err error) {
 	exportMetric(funcName, startTime, err)
-	log.WithContext(ctx).WithField("funcName", funcName).WithField("elapsed", time.Since(startTime)).Info("export metric success")
+	log.WithContext(ctx).WithField("funcName", funcName).WithField("elapsed", time.Since(startTime)).Debug("export metric success")
 }

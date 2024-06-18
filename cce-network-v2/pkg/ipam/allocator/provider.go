@@ -36,4 +36,5 @@ type NetResourceSetEventHandler interface {
 	Update(resource *v2.NetResourceSet) error
 	Delete(netResourceSetName string) error
 	Resync(context.Context, time.Time)
+	ResourceType() string
 }

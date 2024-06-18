@@ -18,12 +18,14 @@ package watchers
 import (
 	"context"
 	"reflect"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	listerv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
@@ -32,6 +34,7 @@ import (
 
 var (
 	NetResourceSetClient = &NetResourceSetUpdateImplementation{}
+	nrsResourceType      = &nrsResourceTypeMap{}
 )
 
 // NodeEventHandler should implement the behavior to handle NetResourceSet
@@ -40,6 +43,7 @@ type NodeEventHandler interface {
 	Update(resource *ccev2.NetResourceSet) error
 	Delete(nodeName string) error
 	Resync(context.Context, time.Time)
+	ResourceType() string
 }
 
 func StartSynchronizingNetResourceSets(ctx context.Context, nodeManager NodeEventHandler) error {
@@ -50,14 +54,24 @@ func StartSynchronizingNetResourceSets(ctx context.Context, nodeManager NodeEven
 	}
 	nodeManagerSyncHandler := syncHandlerConstructor(
 		func(name string) error {
-			return nodeManager.Delete(name)
+			if nrsResourceType.RemoveIfMatch(name, nodeManager.ResourceType()) {
+				return nodeManager.Delete(name)
+			}
+			return nil
 		},
 		func(node *ccev2.NetResourceSet) error {
 			// node is deep copied before it is stored in pkg/aws/eni
-			return nodeManager.Update(node)
+			if nrsResourceType.UpdateIfMatch(node, nodeManager.ResourceType()) {
+				return nodeManager.Update(node)
+			}
+			return nil
 		})
 
-	controller := cm.NewWorkqueueController("network-resource-set-controller", 10, nodeManagerSyncHandler)
+	worker := operatorOption.Config.NrsResourceResyncWorkers
+	if nodeManager.ResourceType() == ccev2.NetResourceSetEventHandlerTypeRDMA {
+		worker = operatorOption.Config.RdmaResourceResyncWorkers
+	}
+	controller := cm.NewWorkqueueController(nodeManager.ResourceType()+"-nrs-controller", int(worker), nodeManagerSyncHandler)
 	controller.Run()
 	k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer().AddEventHandler(controller)
 
@@ -111,4 +125,55 @@ func (c *NetResourceSetUpdateImplementation) Update(origNode, node *ccev2.NetRes
 
 func (c *NetResourceSetUpdateImplementation) Lister() listerv2.NetResourceSetLister {
 	return k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister()
+}
+
+// GetByIP get CCEEndpoint by ip
+func (c *NetResourceSetUpdateImplementation) GetByInstanceID(instanceID string) ([]*ccev2.NetResourceSet, error) {
+	var data []*ccev2.NetResourceSet
+	indexer := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer().GetIndexer()
+
+	objs, err := indexer.ByIndex(IndexInstanceIDToNRS, instanceID)
+	if err == nil {
+		for _, obj := range objs {
+			if nrs, ok := obj.(*ccev2.NetResourceSet); ok {
+				data = append(data, nrs)
+			}
+		}
+	}
+	return data, err
+}
+
+type nrsResourceTypeMap struct {
+	data map[string]string
+	lock sync.RWMutex
+}
+
+func (m *nrsResourceTypeMap) UpdateIfMatch(nrs *ccev2.NetResourceSet, types string) bool {
+	objType := ccev2.NetResourceSetEventHandlerTypeEth
+	if len(nrs.Annotations) > 0 {
+		if _, ok := nrs.Annotations[k8s.AnnotationRDMAInfoVifFeatures]; ok {
+			objType = ccev2.NetResourceSetEventHandlerTypeRDMA
+		}
+	}
+
+	m.lock.Lock()
+	if m.data == nil {
+		m.data = make(map[string]string)
+	}
+	m.data[nrs.Name] = objType
+	m.lock.Unlock()
+
+	return objType == types
+}
+
+func (m *nrsResourceTypeMap) RemoveIfMatch(name, types string) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	v, ok := m.data[name]
+	if !ok || v != types {
+		return false
+	}
+	delete(m.data, name)
+	return true
 }

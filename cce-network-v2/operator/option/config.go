@@ -139,8 +139,8 @@ const (
 	// Defaults to 180 secs
 	ExcessIPReleaseDelay = "excess-ip-release-delay"
 
-	// ParallelAllocWorkers specifies the number of parallel workers to be used for IPAM allocation
-	ParallelAllocWorkers = "parallel-alloc-workers"
+	// EnableExcessIPRelease enables the feature that will release excess IPs after a configurable delay
+	EnableExcessIPRelease = "enable-excess-ip-release"
 
 	// LeaderElectionLeaseDuration is the duration that non-leader candidates will wait to
 	// force acquire leadership
@@ -165,8 +165,13 @@ const (
 	BCECloudAccessKey = "bce-cloud-access-key"
 	BCECloudSecureKey = "bce-cloud-secure-key"
 
-	ResourceENIResyncInterval = "resource-eni-resync-interval"
-	ResourceResyncWorkers     = "resource-resync-workers"
+	ResourceENIResyncInterval   = "resource-eni-resync-interval"
+	ResourceHPCResyncInterval   = "resource-hpc-resync-interval"
+	ResourceResyncWorkers       = "resource-resync-workers"
+	NrsResourceResyncWorkers    = "nrs-resource-resync-workers"
+	RdmaResourceResyncWorkers   = "rdma-resource-resync-workers"
+	SubnetResourceResyncWorkers = "subnet-resource-resync-workers"
+	EniResourceResyncWorkers    = "eni-resource-resync-workers"
 
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP = "bce-customer-max-ip"
@@ -312,12 +317,12 @@ type OperatorConfig struct {
 	// per node.
 	NodeCIDRMaskSizeIPv6 int
 
-	// ParallelAllocWorkers specifies the number of parallel workers to be used in ENI mode.
-	ParallelAllocWorkers int64
-
 	// ExcessIPReleaseDelay controls how long operator would wait before an IP previously marked as excess is released.
 	// Defaults to 180 secs
 	ExcessIPReleaseDelay int
+
+	// EnableExcessIPRelease controls whether operator should release excess IPs.
+	EnableExcessIPRelease bool
 
 	// BCE options
 
@@ -330,9 +335,15 @@ type OperatorConfig struct {
 	// like ENIs,Subnets
 	ResourceResyncInterval    time.Duration
 	ResourceENIResyncInterval time.Duration
+	ResourceHPCResyncInterval time.Duration
+	ResourceBBCResyncInterval time.Duration
 
 	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
-	ResourceResyncWorkers int64
+	ResourceResyncWorkers       int64
+	NrsResourceResyncWorkers    int64
+	RdmaResourceResyncWorkers   int64
+	SubnetResourceResyncWorkers int64
+	EniResourceResyncWorkers    int64
 
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP int
@@ -421,8 +432,6 @@ func (c *OperatorConfig) Populate() {
 	} else {
 		c.SkipManagerNodeLabels = m
 	}
-
-	c.ParallelAllocWorkers = viper.GetInt64(ParallelAllocWorkers)
 	c.ExcessIPReleaseDelay = viper.GetInt(ExcessIPReleaseDelay)
 	c.PSTSSubnetReversedIPNum = viper.GetInt(PSTSSubnetReversedIPNum)
 	c.EnableIPv4 = viper.GetBool(option.EnableIPv4Name)
@@ -456,13 +465,19 @@ func (c *OperatorConfig) Populate() {
 	c.BCECloudSecureKey = viper.GetString(BCECloudSecureKey)
 	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
+	c.ResourceHPCResyncInterval = viper.GetDuration(ResourceHPCResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
+	c.NrsResourceResyncWorkers = viper.GetInt64(NrsResourceResyncWorkers)
+	c.RdmaResourceResyncWorkers = viper.GetInt64(RdmaResourceResyncWorkers)
+	c.EniResourceResyncWorkers = viper.GetInt64(EniResourceResyncWorkers)
+	c.SubnetResourceResyncWorkers = viper.GetInt64(SubnetResourceResyncWorkers)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
 	c.BCECustomerMaxRdmaIP = viper.GetInt(BCECustomerMaxRdmaIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
 	c.FixedIPTimeout = viper.GetDuration(option.FixedIPTimeout)
 	c.EnableRemoteFixedIPGC = viper.GetBool(EnableRemoteFixedIPGC)
+	c.EnableExcessIPRelease = viper.GetBool(EnableExcessIPRelease)
 
 	c.CCEClusterID = viper.GetString(CCEClusterID)
 	c.EnableNodeAnnotationSync = viper.GetBool(EnableNodeAnnotationSync)

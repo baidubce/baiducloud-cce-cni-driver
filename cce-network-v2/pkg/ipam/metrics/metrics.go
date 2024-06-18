@@ -174,38 +174,38 @@ func (p *prometheusMetrics) IncResyncCount() {
 }
 
 type triggerMetrics struct {
-	total        prometheus.Counter
-	folds        prometheus.Gauge
-	callDuration prometheus.Histogram
-	latency      prometheus.Histogram
+	total        *prometheus.CounterVec
+	folds        *prometheus.GaugeVec
+	callDuration *prometheus.HistogramVec
+	latency      *prometheus.HistogramVec
 }
 
 func NewTriggerMetrics(namespace, name string) *triggerMetrics {
 	return &triggerMetrics{
-		total: prometheus.NewCounter(prometheus.CounterOpts{
+		total: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: ipamSubsystem,
 			Name:      name + "_queued_total",
 			Help:      "Number of queued triggers",
-		}),
-		folds: prometheus.NewGauge(prometheus.GaugeOpts{
+		}, []string{"owner"}),
+		folds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: ipamSubsystem,
 			Name:      name + "_folds",
 			Help:      "Current level of folding",
-		}),
-		callDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+		}, []string{"owner"}),
+		callDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: namespace,
 			Subsystem: ipamSubsystem,
 			Name:      name + "_duration_seconds",
 			Help:      "Duration of trigger runs",
-		}),
-		latency: prometheus.NewHistogram(prometheus.HistogramOpts{
+		}, []string{"owner"}),
+		latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: namespace,
 			Subsystem: ipamSubsystem,
 			Name:      name + "_latency_seconds",
 			Help:      "Latency between queue and trigger run",
-		}),
+		}, []string{"owner"}),
 	}
 }
 
@@ -216,22 +216,22 @@ func (t *triggerMetrics) Register(registry *prometheus.Registry) {
 	registry.MustRegister(t.latency)
 }
 
-func (t *triggerMetrics) QueueEvent(reason string) {
-	t.total.Inc()
+func (t *triggerMetrics) QueueEvent(owner, reason string) {
+	t.total.WithLabelValues(owner).Inc()
 }
 
-func (t *triggerMetrics) PostRun(duration, latency time.Duration, folds int) {
-	t.callDuration.Observe(duration.Seconds())
-	t.latency.Observe(latency.Seconds())
-	t.folds.Set(float64(folds))
+func (t *triggerMetrics) PostRun(owner string, duration, latency time.Duration, folds int) {
+	t.callDuration.WithLabelValues(owner).Observe(duration.Seconds())
+	t.latency.WithLabelValues(owner).Observe(latency.Seconds())
+	t.folds.WithLabelValues(owner).Set(float64(folds))
 }
 
 // NoOpMetricsObserver is a no-operation implementation of the metrics observer
 type NoOpMetricsObserver struct{}
 
 // MetricsObserver implementation
-func (m *NoOpMetricsObserver) PostRun(callDuration, latency time.Duration, folds int) {}
-func (m *NoOpMetricsObserver) QueueEvent(reason string)                               {}
+func (m *NoOpMetricsObserver) PostRun(owner string, callDuration, latency time.Duration, folds int) {}
+func (m *NoOpMetricsObserver) QueueEvent(owner string, reason string)                               {}
 
 // NoOpMetrics is a no-operation implementation of the metrics
 type NoOpMetrics struct{}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/inctimer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
+	"github.com/sirupsen/logrus"
 )
 
 // MetricsObserver is the interface a metrics collector has to implement in
@@ -29,11 +30,11 @@ type MetricsObserver interface {
 	// PostRun is called after a trigger run with the call duration, the
 	// latency between 1st queue request and the call run and the number of
 	// queued events folded into the last run
-	PostRun(callDuration, latency time.Duration, folds int)
+	PostRun(owner string, callDuration, latency time.Duration, folds int)
 
 	// QueueEvent is called when Trigger() is called to schedule a trigger
 	// run
-	QueueEvent(reason string)
+	QueueEvent(owner, reason string)
 }
 
 // Parameters are the user specified parameters
@@ -45,6 +46,11 @@ type Parameters struct {
 	// TriggerFunc is the function to be called when Trigger() is called
 	// while respecting MinInterval and serialization
 	TriggerFunc func(reasons []string)
+
+	// MaxDelayDuration is the maximum delay between a trigger and its
+	MaxDelayDuration time.Duration
+
+	Log *logrus.Entry
 
 	MetricsObserver MetricsObserver
 
@@ -159,7 +165,7 @@ func (t *Trigger) TriggerWithReason(reason string) {
 	t.mutex.Unlock()
 
 	if t.params.MetricsObserver != nil {
-		t.params.MetricsObserver.QueueEvent(reason)
+		t.params.MetricsObserver.QueueEvent(t.params.Name, reason)
 	}
 
 	select {
@@ -207,11 +213,31 @@ func (t *Trigger) waiter() {
 			t.mutex.Unlock()
 
 			beforeTrigger := time.Now()
-			t.params.TriggerFunc(reasons)
+
+			var (
+				timerChan  <-chan time.Time = make(<-chan time.Time)
+				resultChan                  = make(chan struct{})
+			)
+			if t.params.MaxDelayDuration > 0 {
+				timer := time.NewTimer(t.params.MaxDelayDuration)
+				timerChan = timer.C
+			}
+			go func() {
+				t.params.TriggerFunc(reasons)
+				resultChan <- struct{}{}
+			}()
+
+			select {
+			case <-timerChan:
+				if t.params.Log != nil {
+					t.params.Log.Warnf("TriggerFunc took too long to complete, cancelling")
+				}
+			case <-resultChan:
+			}
 
 			if t.params.MetricsObserver != nil {
 				callDuration := time.Since(beforeTrigger)
-				t.params.MetricsObserver.PostRun(callDuration, callLatency, numFolds)
+				t.params.MetricsObserver.PostRun(t.params.Name, callDuration, callLatency, numFolds)
 			}
 		}
 

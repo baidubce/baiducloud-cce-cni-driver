@@ -252,9 +252,9 @@ func (d *Daemon) DumpRDMAIPAM() (statusMap map[string]*models.IPAMStatus) {
 
 func (d *Daemon) configureRDMAIPAM() {
 	if !option.Config.EnableRDMA {
-		rdmaIpamLog.Info("RDMA is not enabled, skipping rdma node discovery")
 		return
 	}
+	rdmaIpamLog.Info("RDMA is enabled, will be starting configure rdma ipam")
 
 	// If the device has been specified, the IPv4AllocPrefix and the
 	// IPv6AllocPrefix were already allocated before the k8s.Init().
@@ -292,9 +292,9 @@ func (d *Daemon) configureRDMAIPAM() {
 
 func (d *Daemon) startRDMAIPAM() {
 	if !option.Config.EnableRDMA {
-		rdmaIpamLog.Info("RDMA is not enabled, skipping rdma node discovery")
 		return
 	}
+	rdmaIpamLog.Info("RDMA is enabled, will be starting rdma ipam")
 
 	if d.hasRoCE() {
 		bootstrapStats.rdmaIpam.Start()

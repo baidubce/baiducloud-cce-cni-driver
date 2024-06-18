@@ -31,7 +31,6 @@ import (
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
-	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
@@ -127,21 +126,11 @@ func (operator *VPCRouteOperator) doSyncVPCRouteRules(ctx context.Context) error
 
 // Create implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Create(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	return operator.realHandler.Create(resource)
 }
 
 // Update implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	if len(resource.Status.IPAM.VPCRouteCIDRs) == 0 {
 		resource.Status.IPAM.VPCRouteCIDRs = make(ipamTypes.VPCRouteStatuMap)
 	}
@@ -201,11 +190,6 @@ func (operator *VPCRouteOperator) Update(resource *ccev2.NetResourceSet) error {
 
 // Delete implements allocator.NetResourceSetEventHandler
 func (operator *VPCRouteOperator) Delete(netResourceSetName string) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(netResourceSetName) {
-		return nil
-	}
-
 	oldNetResourceSet, err := operator.updater.Get(netResourceSetName)
 	if err == nil && oldNetResourceSet != nil {
 		return operator.Update(oldNetResourceSet)
@@ -388,6 +372,10 @@ func (operator *VPCRouteOperator) determineNodeActions(netResourceSet *ccev2.Net
 		}
 	}
 	return
+}
+
+func (operator *VPCRouteOperator) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeEth
 }
 
 var _ allocator.NetResourceSetEventHandler = &VPCRouteOperator{}

@@ -28,13 +28,13 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
 
 const (
@@ -47,7 +47,7 @@ type rdmaNetResourceSetWrapper struct {
 	*bceRDMANetResourceSet
 
 	// rdmaeni is the eni of the node
-	rdmaeni *ccev2.ENI
+	rdmaeniName string
 }
 
 func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResourceSetWrapper {
@@ -55,28 +55,11 @@ func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResource
 		bceRDMANetResourceSet: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExEHC)
-	err := node.createRdmaENI(super.log)
+	_, err := node.ensureRdmaENI()
 	if err != nil {
-		super.log.Errorf("failed to create eri or hpc eni: %v", err)
+		node.log.Errorf("failed to create eri or hpc eni: %v", err)
 	}
 	return node
-}
-
-func (n *rdmaNetResourceSetWrapper) tryRefreshRDMAENI() *ccev2.ENI {
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
-		e, ok := iface.Resource.(*eniResource)
-		if !ok {
-			return nil
-		}
-		n.rdmaeni = &ccev2.ENI{
-			TypeMeta:   e.TypeMeta,
-			ObjectMeta: e.ObjectMeta,
-			Spec:       e.Spec,
-			Status:     e.Status,
-		}
-		return nil
-	})
-	return n.rdmaeni
 }
 
 // find eni by mac address, return matched eni.
@@ -100,13 +83,15 @@ func (n *rdmaNetResourceSetWrapper) findMatchedEniByMac(ctx context.Context, iaa
 	return nil, fmt.Errorf("macAddress %s mismatch, eniList: %v", macAddress, eniList)
 }
 
-// createRdmaENI means create a eni object for rdma interface
+// ensureRdmaENI means create a eni object for rdma interface
 // rdma interface has only one eni, so we use rdma interface id as eni name
-func (n *rdmaNetResourceSetWrapper) createRdmaENI(scopedLog *logrus.Entry) error {
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
-	if n.rdmaeni != nil {
-		return nil
+func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
+	if n.rdmaeniName != "" {
+		eni, err := n.manager.eniLister.Get(n.rdmaeniName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get rdma eni %s from lister", n.rdmaeniName)
+		}
+		return eni, nil
 	}
 
 	// the hpc or eri api do not use vpcID, subnetID and zoneName
@@ -118,31 +103,30 @@ func (n *rdmaNetResourceSetWrapper) createRdmaENI(scopedLog *logrus.Entry) error
 	iaasClient := n.manager.getIaaSClient(vifFeatures)
 	rdmaEni, err := n.findMatchedEniByMac(context.Background(), iaasClient, vpcID, n.instanceID, vifFeatures, macAddress)
 	if err != nil {
-		scopedLog.WithError(err).Errorf("failed to get instance %s eni", vifFeatures)
-		return err
+		n.log.WithError(err).Errorf("failed to get instance %s eni", vifFeatures)
+		return nil, err
 	}
-	scopedLog.WithField("rdmaeni", logfields.Repr(rdmaEni)).Debugf("get instance %s eni success", vifFeatures)
-
-	// the hpc or eri do not use ensure subnet object
-
-	var (
-		ipv4IPSet, ipv6IPSet []*models.PrivateIP
-		ctx                  = context.Background()
-	)
-
-	for _, v := range rdmaEni.PrivateIpSet {
-		ipv4IPSet = append(ipv4IPSet, &models.PrivateIP{
-			PrivateIPAddress: v.PrivateIpAddress,
-			PublicIPAddress:  "",
-			SubnetID:         rdmaEni.SubnetID,
-			Primary:          v.Primary,
-		})
-
-		// rdma eni is not support ipv6
-	}
+	n.log.WithField("rdmaeni", logfields.Repr(rdmaEni)).Debugf("get instance %s eni success", vifFeatures)
 
 	eni, err := n.manager.eniLister.Get(rdmaEni.Id)
 	if errors.IsNotFound(err) {
+		// the hpc or eri do not use ensure subnet object
+
+		var (
+			ipv4IPSet, ipv6IPSet []*models.PrivateIP
+			ctx                  = context.Background()
+		)
+
+		for _, v := range rdmaEni.PrivateIpSet {
+			ipv4IPSet = append(ipv4IPSet, &models.PrivateIP{
+				PrivateIPAddress: v.PrivateIpAddress,
+				PublicIPAddress:  "",
+				SubnetID:         rdmaEni.SubnetID,
+				Primary:          v.Primary,
+			})
+
+			// rdma eni is not support ipv6
+		}
 		eni = &ccev2.ENI{
 			ObjectMeta: metav1.ObjectMeta{
 				// use rdma interface id as eni name
@@ -151,6 +135,7 @@ func (n *rdmaNetResourceSetWrapper) createRdmaENI(scopedLog *logrus.Entry) error
 					k8s.LabelInstanceID: n.instanceID,
 					k8s.LabelNodeName:   n.k8sObj.Name,
 					k8s.LabelENIType:    iaasClient.GetRDMAIntType(),
+					k8s.VPCIDLabel:      vpcID,
 				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: ccev2.SchemeGroupVersion.String(),
@@ -179,31 +164,38 @@ func (n *rdmaNetResourceSetWrapper) createRdmaENI(scopedLog *logrus.Entry) error
 		}
 		eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to create %s ENI: %w", vifFeatures, err)
+			return nil, fmt.Errorf("failed to create %s ENI: %w", vifFeatures, err)
 		}
-		scopedLog.Infof("create %s ENI resource successed", vifFeatures)
+		n.log.Infof("create %s ENI resource successed", vifFeatures)
 	} else if err != nil {
-		scopedLog.Errorf("failed to get %s ENI resource: %v", vifFeatures, err)
-		return err
+		n.log.Errorf("failed to get %s ENI resource: %v", vifFeatures, err)
+		return nil, err
 	}
-	scopedLog.Debugf("got %s ENI resource successed", vifFeatures)
-	n.rdmaeni = eni
-	return err
+	n.log.Debugf("got %s ENI resource successed", vifFeatures)
+	n.rdmaeniName = eni.Name
+	return eni, err
 }
 
-func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() error {
+func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() (*bccapi.InstanceModel, error) {
+	n.limiterLock.Lock()
 	if n.bccInfo != nil {
-		return nil
+		n.limiterLock.Unlock()
+		return n.bccInfo, nil
 	}
+	n.limiterLock.Unlock()
+
 	bccInfo, err := n.manager.bceClient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
 	if err != nil {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
-		return err
+		return nil, err
 	}
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
+
+	n.limiterLock.Lock()
+	defer n.limiterLock.Unlock()
 	n.bccInfo = bccInfo
 
-	return nil
+	return n.bccInfo, nil
 }
 
 func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (RdmaEniQuotaManager, error) {
@@ -218,22 +210,21 @@ func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (Rdm
 		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)
 	}
 
-	err = n.refreshBCCInfo()
+	bccInfo, err := n.refreshBCCInfo()
 	if err != nil {
 		return nil, err
 	}
-	// if bcc instance is not created by cce-network-v2, there is no need to check IP resouce
-	if n.bccInfo == nil {
-		return nil, fmt.Errorf("bcc info instance is nil")
-	}
+
+	n.limiterLock.Lock()
+	defer n.limiterLock.Unlock()
 
 	// default rdma ip quota
 	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClient)
 
 	// Expect all BCC models to support ERI
-	if n.bccInfo.EriQuota != 0 {
-		eniQuota.SetMaxENI(n.bccInfo.EriQuota)
-		if n.bccInfo.EriQuota == 0 {
+	if bccInfo.EriQuota != 0 {
+		eniQuota.SetMaxENI(bccInfo.EriQuota)
+		if bccInfo.EriQuota == 0 {
 			eniQuota.SetMaxENI(defaltRdmaEniNums)
 		}
 	}
@@ -246,8 +237,12 @@ func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (Rdm
 func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, iaasClient client.IaaSClient, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	if ipv4ToAllocate > 0 {
+		eni, err := n.ensureRdmaENI()
+		if err != nil {
+			return nil, nil, err
+		}
 		// allocate ips
-		ips, err := iaasClient.BatchAddPrivateIP(ctx, n.rdmaeni.Spec.ID, []string{}, ipv4ToAllocate)
+		ips, err := iaasClient.BatchAddPrivateIP(ctx, eni.Spec.ID, []string{}, ipv4ToAllocate)
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			if len(ips) == 0 {
@@ -272,7 +267,7 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 
 // createInterface implements realNodeInf
 func (n *rdmaNetResourceSetWrapper) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
-	err = n.createRdmaENI(scopedLog)
+	_, err = n.ensureRdmaENI()
 	if err != nil {
 		return 0, "", err
 	}
@@ -282,8 +277,12 @@ func (n *rdmaNetResourceSetWrapper) createInterface(ctx context.Context, allocat
 // releaseIPs implements realNodeInf
 func (n *rdmaNetResourceSetWrapper) releaseIPs(ctx context.Context, iaasClient client.IaaSClient, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if len(ipv4ToRelease) > 0 {
+		eni, err := n.ensureRdmaENI()
+		if err != nil {
+			return err
+		}
 		// release ips
-		err := iaasClient.BatchDeletePrivateIP(ctx, n.rdmaeni.Spec.ID, ipv4ToRelease)
+		err = iaasClient.BatchDeletePrivateIP(ctx, eni.Spec.ID, ipv4ToRelease)
 		if err != nil {
 			return fmt.Errorf("release the ips(%s) from hpc eni %s failed: %v", ipv4ToRelease, n.instanceID, err)
 		}
@@ -298,44 +297,31 @@ func (n *rdmaNetResourceSetWrapper) prepareIPAllocation(scopedLog *logrus.Entry)
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
 
-	if n.tryRefreshRDMAENI() == nil {
+	eni, err := n.ensureRdmaENI()
+	if err != nil {
+		return allocation, err
+	}
+	if eni == nil {
 		allocation.AvailableInterfaces = 1
 		return allocation, nil
 	}
 
-	findEni := false
 	rdmaEniQuota := n.getRdmaEniQuota()
-	if rdmaEniQuota != nil {
-		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
-			e, ok := iface.Resource.(*eniResource)
-			if !ok {
-				return nil
-			}
+	allocation.AvailableForAllocationIPv4 = rdmaEniQuota.GetMaxIP() - len(eni.Spec.PrivateIPSet)
+	allocation.InterfaceID = eni.Name
+	allocation.PoolID = ipamTypes.PoolID(eni.Spec.SubnetID)
 
-			findEni = true
-			allocation.AvailableForAllocationIPv4 = rdmaEniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
-			allocation.InterfaceID = e.Name
-			allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
+	if n.k8sObj.Spec.ENI.InstanceType == bceutils.OverlayRDMA {
+		sbn, err := n.manager.sbnLister.Get(string(allocation.PoolID))
+		if err != nil {
+			err = fmt.Errorf("get subnet %s failed: %v", eni.Spec.SubnetID, err)
+			n.appendAllocatedIPError(eni.Name, ccev2.NewErrorStatusChange(err.Error()))
+			return allocation, err
+		}
 
-			if n.k8sObj.Spec.ENI.InstanceType == bceutils.OverlayRDMA {
-				sbn, err := n.manager.sbnLister.Get(string(allocation.PoolID))
-				if err != nil {
-					err = fmt.Errorf("get subnet %s failed: %v", e.Spec.SubnetID, err)
-					n.appendAllocatedIPError(e.Name, ccev2.NewErrorStatusChange(err.Error()))
-					return err
-				}
-
-				allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, sbn.Status.AvailableIPNum)
-			} else {
-				allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, n.getMaximumAllocatable(rdmaEniQuota))
-			}
-			return nil
-		})
-
-	}
-
-	if !findEni {
-		return nil, fmt.Errorf("can not find eri for hpc instance %s", n.instanceID)
+		allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, sbn.Status.AvailableIPNum)
+	} else {
+		allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, n.getMaximumAllocatable(rdmaEniQuota))
 	}
 
 	return allocation, nil
@@ -353,26 +339,4 @@ func (n *rdmaNetResourceSetWrapper) getMinimumAllocatable() int {
 		min = defaults.IPAMPreAllocation
 	}
 	return min
-}
-
-// AllocateIPCrossSubnet implements realNodeInf
-func (*rdmaNetResourceSetWrapper) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error) {
-	return nil, "", fmt.Errorf("rdma not support cross subnet")
-}
-
-// ReuseIPs implements realNodeInf
-func (*rdmaNetResourceSetWrapper) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
-	return "", fmt.Errorf("rdma not support cross subnet")
-}
-
-var _ realNetResourceSetInf = &rdmaNetResourceSetWrapper{}
-
-// AllocateIP implements endpoint.DirectEndpointOperation
-func (*rdmaNetResourceSetWrapper) AllocateIP(ctx context.Context, action *endpoint.DirectIPAction) error {
-	return fmt.Errorf("rdma not support direct allocate ip")
-}
-
-// DeleteIP implements endpoint.DirectEndpointOperation
-func (*rdmaNetResourceSetWrapper) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAction) error {
-	return fmt.Errorf("rdma not support direct delete ip")
 }

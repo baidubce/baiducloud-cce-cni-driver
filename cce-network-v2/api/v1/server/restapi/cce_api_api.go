@@ -38,8 +38,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/ipam"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/rdmaipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/rdmaipam"
 )
 
 // NewCceAPIAPI creates a new CceAPI instance

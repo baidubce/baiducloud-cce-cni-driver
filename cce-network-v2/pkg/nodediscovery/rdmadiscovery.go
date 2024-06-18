@@ -159,16 +159,15 @@ func (rd *RdmaDiscovery) StartDiscovery() {
 		nodeTypes.GetName(),
 	)
 	if err != nil && !k8serrors.IsNotFound(err) {
-		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "FatalError01", "Kubernetes Node resource not found: %v", err)
+		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "FatalError01", "kubernetes Node resource not found: %v", err)
 		rdLog.Fatalf("failed to fetch Kubernetes Node resource: %v", err)
 		return
 	}
 
 	if !option.Config.EnableRDMA {
-		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "RDMAInfo01", "RDMA is not enabled")
-		rdLog.Info("RDMA is not enabled, skipping rdma node discovery")
 		return
 	}
+	rdLog.Info("RDMA is enabled, will be starting rdma node discovery")
 
 	isCan, err := canUseIPVlanOnRdmaNode()
 	if err != nil {
@@ -318,10 +317,10 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 		return
 	}
 	rdmaIfNum := len(rdmaIFs)
-	rdLog.WithField(logfields.Node, nodeTypes.GetName()).WithField("rdmaIFs", rdmaIFs).Infof("Discovery %d RDMA interface for this node", rdmaIfNum)
 	if rdmaIfNum == 0 {
 		return
 	}
+	rdLog.WithField(logfields.Node, nodeTypes.GetName()).WithField("rdmaIFs", rdmaIFs).Infof("Discovery %d RDMA interface for this node", rdmaIfNum)
 
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).Info("Creating or updating RDMA NetResourceSet resource")
 
@@ -587,4 +586,8 @@ func (rd *RdmaDiscovery) LocalAllocCIDRsUpdated(ipv4AllocCIDRs, ipv6AllocCIDRs [
 	}
 
 	rd.Manager.NodeUpdated(rd.localNode)
+}
+
+func (rd *RdmaDiscovery) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeRDMA
 }

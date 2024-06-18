@@ -22,11 +22,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/debug"
-
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/debug"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
 )
 

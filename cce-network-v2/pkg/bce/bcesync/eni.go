@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
@@ -40,18 +39,31 @@ const (
 
 var eniLog = logging.NewSubysLogger(eniControllerName)
 
-// VPCENISyncer only work with single vpc cluster
-type VPCENISyncer struct {
-	eni         *eniSyncher
-	physicalEni *physicalENISyncer
-	primaryENI  *eniSyncher
+// remoteEniSyncher
+type remoteEniSyncher interface {
+	syncENI(ctx context.Context) (result []eni.Eni, err error)
+	statENI(ctx context.Context, eniID string) (*eni.Eni, error)
+
+	// use eni machine to manager status of eni
+	useENIMachine() bool
+
+	setENIUpdater(updater syncer.ENIUpdater)
+}
+
+// VPCENISyncerRouter only work with single vpc cluster
+type VPCENISyncerRouter struct {
+	eni        *eniSyncher
+	primaryENI *eniSyncher
+	hpcENI     *eniSyncher
+	bbcENI     *eniSyncher
+	eriENI     *eniSyncher
 }
 
 // NewVPCENISyncer create a new VPCENISyncer
-func (es *VPCENISyncer) Init(ctx context.Context) error {
+func (es *VPCENISyncerRouter) Init(ctx context.Context) error {
 	eventRecorder := k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: eniControllerName})
 	bceclient := option.BCEClient()
-	resyncPeriod := operatorOption.Config.ResourceResyncInterval
+	resyncPeriod := operatorOption.Config.ResourceENIResyncInterval
 
 	// 1. init vpc remote syncer
 	vpcRemote := &remoteVpcEniSyncher{
@@ -71,7 +83,7 @@ func (es *VPCENISyncer) Init(ctx context.Context) error {
 		return fmt.Errorf("init eni syncer failed: %v", err)
 	}
 	vpcRemote.syncManager = es.eni.syncManager
-	vpcRemote.VPCIDs = append(vpcRemote.VPCIDs, operatorOption.Config.BCECloudVPCID)
+	vpcRemote.VPCIDs = operatorOption.Config.BCECloudVPCID
 
 	// 2. init bcc remote syncer
 	bccRemote := &remoteBCCPrimarySyncher{
@@ -84,62 +96,134 @@ func (es *VPCENISyncer) Init(ctx context.Context) error {
 		remoteSyncer:  bccRemote,
 		eventRecorder: eventRecorder,
 	}
-	es.primaryENI.Init(ctx)
+	err = es.primaryENI.Init(ctx)
 	if err != nil {
 		return fmt.Errorf("init primary eni syncer failed: %v", err)
 	}
 	bccRemote.syncManager = es.primaryENI.syncManager
 
-	// 3. init physical eni syncer
-	es.physicalEni = &physicalENISyncer{eventRecorder: eventRecorder}
-	return es.physicalEni.Init(ctx)
+	// 3. init hpc remote syncer
+	hpcRemote := &remoteHPCSyncher{
+		bceclient: bceclient,
+	}
+	es.hpcENI = &eniSyncher{
+		bceclient:    bceclient,
+		resyncPeriod: operatorOption.Config.ResourceHPCResyncInterval,
+
+		remoteSyncer:  hpcRemote,
+		eventRecorder: eventRecorder,
+	}
+	err = es.hpcENI.Init(ctx)
+	if err != nil {
+		return fmt.Errorf("init hpc eni syncer failed: %v", err)
+	}
+	hpcRemote.syncManager = es.hpcENI.syncManager
+
+	// 4. init bbc remote syncer
+	bbcRemote := &remoteBBCPrimarySyncher{
+		bceclient: bceclient,
+	}
+	es.bbcENI = &eniSyncher{
+		bceclient:    bceclient,
+		resyncPeriod: resyncPeriod,
+
+		remoteSyncer:  bbcRemote,
+		eventRecorder: eventRecorder,
+	}
+	err = es.bbcENI.Init(ctx)
+	if err != nil {
+		return fmt.Errorf("init bbc primary eni syncer failed: %v", err)
+	}
+	bbcRemote.syncManager = es.bbcENI.syncManager
+
+	//  5. init eri remote syncer
+	eriRemote := &remoteERISyncher{
+		remoteVpcEniSyncher: &remoteVpcEniSyncher{
+			bceclient:     bceclient,
+			eventRecorder: eventRecorder,
+			ClusterID:     operatorOption.Config.CCEClusterID,
+		},
+	}
+	es.eriENI = &eniSyncher{
+		bceclient:    bceclient,
+		resyncPeriod: resyncPeriod,
+
+		remoteSyncer:  eriRemote,
+		eventRecorder: eventRecorder,
+	}
+	err = es.eriENI.Init(ctx)
+	if err != nil {
+		return fmt.Errorf("init eri syncer failed: %v", err)
+	}
+	eriRemote.syncManager = es.eni.syncManager
+	eriRemote.VPCIDs = operatorOption.Config.BCECloudVPCID
+
+	return nil
 }
 
 // StartENISyncer implements syncer.ENISyncher
-func (es *VPCENISyncer) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
-	es.physicalEni.StartENISyncer(ctx, updater)
+func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
 	es.eni.StartENISyncer(ctx, updater)
 	es.primaryENI.StartENISyncer(ctx, updater)
+	es.hpcENI.StartENISyncer(ctx, updater)
+	es.bbcENI.StartENISyncer(ctx, updater)
+	es.eriENI.StartENISyncer(ctx, updater)
 	return es
 }
 
 // Create implements syncer.ENIEventHandler
-func (es *VPCENISyncer) Create(resource *ccev2.ENI) error {
-	if resource.Spec.Type == ccev2.ENIForBBC || resource.Spec.Type == ccev2.ENIForHPC || resource.Spec.Type == ccev2.ENIForERI {
-		return es.physicalEni.Create(resource)
-	}
-	if resource.Spec.Type == ccev2.ENIForEBC && resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
-		return es.primaryENI.Update(resource)
+func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
+	types := resource.Spec.Type
+	if types == ccev2.ENIForBBC {
+		return es.bbcENI.Create(resource)
+	} else if types == ccev2.ENIForERI {
+		return es.eriENI.Create(resource)
+	} else if types == ccev2.ENIForHPC {
+		return es.hpcENI.Create(resource)
+	} else if resource.Spec.Type == ccev2.ENIForEBC &&
+		resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
+		return es.primaryENI.Create(resource)
 	}
 	return es.eni.Create(resource)
 }
 
 // Delete implements syncer.ENIEventHandler
-func (es *VPCENISyncer) Delete(name string) error {
-	es.physicalEni.Delete(name)
+func (es *VPCENISyncerRouter) Delete(name string) error {
+	es.bbcENI.Delete(name)
+	es.eriENI.Delete(name)
+	es.hpcENI.Delete(name)
+	es.primaryENI.Delete(name)
 	return es.eni.Delete(name)
 }
 
 // ResyncENI implements syncer.ENIEventHandler
-func (es *VPCENISyncer) ResyncENI(ctx context.Context) time.Duration {
-	es.physicalEni.ResyncENI(ctx)
+func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
+	es.bbcENI.ResyncENI(ctx)
+	es.eriENI.ResyncENI(ctx)
+	es.hpcENI.ResyncENI(ctx)
+	es.primaryENI.ResyncENI(ctx)
 	return es.eni.ResyncENI(ctx)
 }
 
 // Update implements syncer.ENIEventHandler
-func (es *VPCENISyncer) Update(resource *ccev2.ENI) error {
-	if resource.Spec.Type == ccev2.ENIForBBC || resource.Spec.Type == ccev2.ENIForHPC || resource.Spec.Type == ccev2.ENIForERI {
-		return es.physicalEni.Update(resource)
-	}
-	if resource.Spec.Type == ccev2.ENIForEBC && resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
+func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
+	types := resource.Spec.Type
+	if types == ccev2.ENIForBBC {
+		return es.bbcENI.Update(resource)
+	} else if types == ccev2.ENIForERI {
+		return es.eriENI.Update(resource)
+	} else if types == ccev2.ENIForHPC {
+		return es.hpcENI.Update(resource)
+	} else if resource.Spec.Type == ccev2.ENIForEBC &&
+		resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
 		return es.primaryENI.Update(resource)
 	}
 	return es.eni.Update(resource)
 }
 
 var (
-	_ syncer.ENISyncher      = &VPCENISyncer{}
-	_ syncer.ENIEventHandler = &VPCENISyncer{}
+	_ syncer.ENISyncher      = &VPCENISyncerRouter{}
+	_ syncer.ENIEventHandler = &VPCENISyncerRouter{}
 )
 
 // eniSyncher create SyncerManager for ENI
@@ -179,9 +263,6 @@ func (es *eniSyncher) Create(resource *ccev2.ENI) error {
 
 func (es *eniSyncher) Update(resource *ccev2.ENI) error {
 	var err error
-	if resource.Spec.Type != ccev2.ENIForBCC && resource.Spec.Type != ccev2.ENIForEBC {
-		return nil
-	}
 
 	scopeLog := eniLog.WithFields(logrus.Fields{
 		"eniID":      resource.Name,
@@ -263,7 +344,7 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 	}
 
 	// update spec and status
-	if !reflect.DeepEqual(&newObj.Spec, &resource.Spec) ||
+	if logfields.Json(&newObj.Spec) != logfields.Json(&resource.Spec) ||
 		!reflect.DeepEqual(newObj.Labels, resource.Labels) ||
 		!reflect.DeepEqual(newObj.Finalizers, resource.Finalizers) {
 		newObj, updateError = es.updater.Update(newObj)
@@ -274,7 +355,8 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		scopeLog.Info("update eni spec success")
 	}
 
-	if !reflect.DeepEqual(eniStatus, &resource.Status) && eniStatus != nil {
+	if logfields.Json(eniStatus) != logfields.Json(&resource.Status) &&
+		eniStatus != nil {
 		newObj.Status = *eniStatus
 		scopeLog = scopeLog.WithFields(logrus.Fields{
 			"vpcStatus": newObj.Status.VPCStatus,
@@ -422,149 +504,6 @@ func (es *eniSyncher) getENIWithCache(ctx context.Context, resource *ccev2.ENI) 
 		return nil, errors.New(string(cloud.ErrorReasonNoSuchObject))
 	}
 	return eniCache, err
-}
-
-type remoteVpcEniSyncher struct {
-	updater     syncer.ENIUpdater
-	bceclient   cloud.Interface
-	syncManager *SyncManager[eni.Eni]
-
-	VPCIDs    []string
-	ClusterID string
-
-	eventRecorder record.EventRecorder
-}
-
-func (es *remoteVpcEniSyncher) setENIUpdater(updater syncer.ENIUpdater) {
-	es.updater = updater
-}
-
-// statENI returns one ENI with the given name from bce cloud
-func (es *remoteVpcEniSyncher) statENI(ctx context.Context, ENIID string) (*eni.Eni, error) {
-	eniCache, err := es.bceclient.StatENI(ctx, ENIID)
-	if err != nil {
-		log.WithField(taskLogField, eniControllerName).
-			WithField("ENIID", ENIID).
-			WithContext(ctx).
-			WithError(err).Errorf("stat eni failed")
-		return nil, err
-	}
-	result := eni.Eni{Eni: *eniCache}
-	es.syncManager.AddItems([]eni.Eni{result})
-	return &result, nil
-}
-
-// syncENI Sync eni from BCE Cloud, and all eni data are subject to BCE Cloud
-func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, err error) {
-	for _, vpcID := range es.VPCIDs {
-		listArgs := enisdk.ListEniArgs{
-			VpcId: vpcID,
-			Name:  fmt.Sprintf("%s/", es.ClusterID),
-		}
-		enis, err := es.bceclient.ListENIs(context.TODO(), listArgs)
-		if err != nil {
-			log.WithField(taskLogField, eniControllerName).
-				WithField("request", logfields.Json(listArgs)).
-				WithError(err).Errorf("sync eni failed")
-			return result, err
-		}
-
-		for i := 0; i < len(enis); i++ {
-			result = append(result, eni.Eni{Eni: enis[i]})
-			es.createExternalENI(&enis[i])
-		}
-	}
-	return
-}
-
-func (es *remoteVpcEniSyncher) useENIMachine() bool {
-	return true
-}
-
-// eni is not created on cce, we should create it?
-// If this ENI is missing, CCE will continue to try to create new ENIs.
-// This will result in the inability to properly identify the capacity
-// of the ENI
-func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) {
-	old, err := es.updater.Lister().Get(eni.EniId)
-	if err != nil && !kerrors.IsNotFound(err) {
-		return
-	}
-	if old != nil {
-		return
-	}
-
-	if eni.Status == string(ccev2.VPCENIStatusDetaching) || eni.Status == string(ccev2.VPCENIStatusDeleted) {
-		return
-	}
-	scopeLog := eniLog.WithFields(logrus.Fields{
-		"eniID":      eni.EniId,
-		"vpcID":      eni.VpcId,
-		"eniName":    eni.Name,
-		"instanceID": eni.InstanceId,
-		"status":     eni.Status,
-	})
-	scopeLog.Infof("start to create external eni")
-
-	// find node by instanceID
-	nrsList, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().List(labels.Everything())
-	if err != nil {
-		return
-	}
-	var resource *ccev2.NetResourceSet
-	for _, nrs := range nrsList {
-		if nrs.Spec.InstanceID == eni.InstanceId {
-			resource = nrs
-			break
-		}
-	}
-	if resource == nil {
-		return
-	}
-	scopeLog = scopeLog.WithField("nodeName", resource.Name)
-	scopeLog.Debugf("find node by instanceID success")
-
-	newENI := &ccev2.ENI{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: eni.EniId,
-			Labels: map[string]string{
-				k8s.LabelInstanceID: eni.InstanceId,
-				k8s.LabelNodeName:   resource.Name,
-			},
-			Annotations: map[string]string{
-				k8s.AnnotationExternalENI: eni.CreatedTime,
-			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: ccev2.SchemeGroupVersion.String(),
-				Kind:       ccev2.NRSKindDefinition,
-				Name:       resource.Name,
-				UID:        resource.UID,
-			}},
-		},
-		Spec: ccev2.ENISpec{
-			NodeName: resource.Name,
-			UseMode:  ccev2.ENIUseMode(resource.Spec.ENI.UseMode),
-			ENI: models.ENI{
-				ID:                         eni.EniId,
-				Name:                       eni.Name,
-				ZoneName:                   eni.ZoneName,
-				InstanceID:                 eni.InstanceId,
-				VpcID:                      eni.VpcId,
-				SubnetID:                   eni.SubnetId,
-				SecurityGroupIds:           eni.SecurityGroupIds,
-				EnterpriseSecurityGroupIds: eni.EnterpriseSecurityGroupIds,
-			},
-			Type:                      ccev2.ENIForBCC,
-			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
-			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-		},
-	}
-	_, err = es.updater.Create(newENI)
-	if err != nil {
-		es.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateExternalENI", "Failed to create external ENI on nrs %s: %s", resource.Name, err)
-		return
-	}
-	es.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateExternalENISuccess", "create external ENI %s on nrs %s success", eni.EniId, resource.Name)
 }
 
 // eniStateMachine ENI state machine, used to control the state flow of ENI

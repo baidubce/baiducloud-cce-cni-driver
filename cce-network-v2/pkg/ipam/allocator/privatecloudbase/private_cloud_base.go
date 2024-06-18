@@ -55,7 +55,7 @@ func (a *AllocatorPrivateCloudBase) Start(ctx context.Context, getterUpdater ipa
 	}
 	a.instances = openapi.NewInstancesManager(a.client, getterUpdater)
 	nodeManager, err := ipam.NewNetResourceSetManager(a.instances, getterUpdater, iMetrics,
-		operatorOption.Config.ParallelAllocWorkers, true, false)
+		operatorOption.Config.NrsResourceResyncWorkers, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize PrivateCloudBase node manager: %w", err)
 	}

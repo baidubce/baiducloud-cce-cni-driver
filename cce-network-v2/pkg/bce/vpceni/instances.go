@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
@@ -130,11 +129,17 @@ func (m *InstancesManager) HandlerVPCError(scopedLog *logrus.Entry, vpcError err
 // chance to resync its own state with external APIs or systems. It is
 // also called when the IPAM layer detects that state got out of sync.
 func (m *InstancesManager) Resync(ctx context.Context) time.Time {
-	return time.Now().Add(operatorOption.Config.ResourceResyncInterval)
+	return time.Now()
 }
 
 // NodeEndpoint implements endpoint.DirectIPAllocator
 func (m *InstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.DirectEndpointOperation, error) {
+	nodeIP := cep.Spec.Network.IPAllocation.NodeIP
+	obj, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeIP)
+	if err != nil || obj == nil {
+		return nil, fmt.Errorf("endpoint nrs %s not found, recommend using IP as the node name", nodeIP)
+	}
+
 	m.mutex.Lock()
 	node, ok := m.nodeMap[cep.Spec.Network.IPAllocation.NodeIP]
 	m.mutex.Unlock()

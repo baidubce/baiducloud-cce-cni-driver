@@ -58,7 +58,7 @@ func StartSynchronizingSubnet(ctx context.Context, subnetManager syncer.SubnetEv
 	}
 
 	resyncPeriod := subnetManager.ResyncSubnet(ctx)
-	controller := cm.NewResyncController("cce-subnet-controller", int(operatorOption.Config.ResourceResyncWorkers),
+	controller := cm.NewResyncController("cce-subnet-controller", int(operatorOption.Config.SubnetResourceResyncWorkers),
 		k8s.CCEClient().Informers.Cce().V1().Subnets().Informer(),
 		endpointManagerSyncHandler)
 	controller.RunWithResync(resyncPeriod)

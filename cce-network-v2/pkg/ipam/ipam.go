@@ -96,6 +96,9 @@ type Owner interface {
 	// LocalAllocCIDRsUpdated informs the agent that the local allocation CIDRs have
 	// changed.
 	LocalAllocCIDRsUpdated(ipv4AllocCIDRs, ipv6AllocCIDRs []*cidr.CIDR)
+
+	// GetResourceType
+	ResourceType() string
 }
 
 // K8sEventRegister is used to register and handle events as they are processed

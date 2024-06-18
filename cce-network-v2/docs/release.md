@@ -5,6 +5,26 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
 
+#### 2.11.2 [20240616]
+1. [Bug] 修复 nrs 删除后，仍会不断错误重试的问题，持续新建 eni 的问题
+2. [Bug] 修复 agent 重启后，restore 失败的问题
+3. [Feature] VPC-ENI 增加 ehc 机型支持
+4. [Optimize] cce-network-operator 增加 alloc-worker ，可配置并发处理 nrs 对象协程数
+5. [Optimize] 优化 rdma 默认预申请 13 个 IP，最大空闲 IP 数为 104 个，避免频繁申请与释放 IP。
+5. [Bug] 修复 rdma 释放 IP 时可能遇见的空指针问题
+6. [Optimize] 优化 ebc 主机新建子网逻辑，非主网卡辅助 IP 模式时，不再校验主网卡子网
+7. [Optimize] 去除多余 operator 日志，减少 operator 占用资源
+8. [Optimize] 重启 agent 时，更新最新的子网信息，避免重启后子网信息不一致
+9. [Optimize] 缩小 operator 中非必要的锁范围，提升 operator 处理性能
+10. [Optimize] 增加触发器强制结束时间，避免单个节点卡主影响整体同步
+11. [Optimize] 增加 HPC eni OpenAPI接口限流
+12. [Optimize] 合并 rdma 和以太网资源同步器，减少重复同步带来的资源开销
+13. [Feature] 增加 IP 释放回收控制开关，默认不会回收 ENI IP
+14. [Bug] 修复节点偶发 maintainIPPool 方法得不到调用，节点无法同步问题
+15. [Bug] 修复bcesync map 并发访问问题
+16. [Optimize] 子网IP不足时，Event增加对应Request ID
+17. [Feature] 增加 trigger 触发器指标粒度，细化到节点
+
 #### 2.11.1 [20240611]
 1. [Optimize] 更新RDMA IPPool MinAllocateIPs/PreAllocate/MaxAboveWatermark参数配置方式，与VPC-ENI保持一致方式
 2. [Optimize] 保持RDMA网卡原始名称，不再rename RDMA网卡，避免Node上RDMA相关策略路由丢失

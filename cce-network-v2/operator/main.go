@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 
@@ -368,27 +370,26 @@ func startEthernetOperator(ctx context.Context) {
 			}
 			cceEndpointManager = em
 		}
+	}
+
+	enableRdma := startRdmaOperator(ctx)
+	if enableRdma || option.Config.IPAM == ipamOption.IPAMVpcEni {
+		subnetSyncer := &bcesync.VPCSubnetSyncher{}
+		eniSyncer := &bcesync.VPCENISyncerRouter{}
 
 		// task to sync subnet between ipam and cloud
-		subnetSyncer, providerBuiltin := subnetSyncerProviders[ipamMode]
-		if providerBuiltin {
-			err = subnetSyncer.Init(ctx)
-			if err != nil {
-				log.WithError(err).Fatalf("Unable to init %s cce subnet syncer", ipamMode)
-			}
-			sbnHandler = subnetSyncer.StartSubnetSyncher(ctx, operatorWatchers.CCESubnetClient)
+		err := subnetSyncer.Init(ctx)
+		if err != nil {
+			log.WithError(err).Fatalf("Unable to init %s cce subnet syncer", option.Config.IPAM)
 		}
+		sbnHandler = subnetSyncer.StartSubnetSyncher(ctx, operatorWatchers.CCESubnetClient)
 
 		// task to sync ENI between ipam and cloud
-		eniSyncer, providerBuiltin := eniSyncerProviders[ipamMode]
-		if providerBuiltin {
-			err = eniSyncer.Init(ctx)
-			if err != nil {
-				log.WithError(err).Fatalf("Unable to init %s cce eni syncer", ipamMode)
-			}
-			eniHandler = eniSyncer.StartENISyncer(ctx, operatorWatchers.ENIClient)
+		err = eniSyncer.Init(ctx)
+		if err != nil {
+			log.WithError(err).Fatalf("Unable to init %s cce eni syncer", option.Config.IPAM)
 		}
-
+		eniHandler = eniSyncer.StartENISyncer(ctx, operatorWatchers.ENIClient)
 	}
 
 	if k8s.IsEnabled() &&
@@ -454,21 +455,19 @@ func startEthernetOperator(ctx context.Context) {
 	log.Info("Initialization Ethernet IPAM complete")
 }
 
-func startRdmaOperator(ctx context.Context) {
+func startRdmaOperator(ctx context.Context) bool {
+	if !option.Config.EnableRDMA {
+		return false
+	}
 	var (
 		netResourceSetManager operatorWatchers.NodeEventHandler
-		cceEndpointManager    operatorWatchers.EndpointEventHandler
-		eniHandler            syncer.ENIEventHandler
 	)
 
 	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing RDMA IPAM")
 
 	ipamMode := ipamOption.IPAMRdma
-	alloc, providerBuiltin := allocatorProviders[ipamMode]
-	if !providerBuiltin {
-		log.Fatalf("%s allocator is not supported by this version of %s", ipamMode, binaryName)
-	}
 
+	alloc := &rdma.BCERDMAAllocatorProvider{}
 	if err := alloc.Init(ctx); err != nil {
 		log.WithError(err).Fatalf("Unable to init %s allocator", ipamMode)
 	}
@@ -479,53 +478,12 @@ func startRdmaOperator(ctx context.Context) {
 	}
 
 	netResourceSetManager = nrsm
-
-	// Specify fixed IP assignment
-	if ceh, ok := alloc.(endpoint.DirectAllocatorStarter); ok {
-		em, err := ceh.StartEndpointManager(ctx, operatorWatchers.CCEEndpointClient)
-		if err != nil {
-			log.WithError(err).Fatalf("Unable to start %s cce endpoint allocator", ipamMode)
-		}
-		cceEndpointManager = em
-	}
-
-	// task to sync ENI between ipam and cloud
-	eniSyncer, providerBuiltin := eniSyncerProviders[ipamMode]
-	if providerBuiltin {
-		err = eniSyncer.Init(ctx)
-		if err != nil {
-			log.WithError(err).Fatalf("Unable to init %s cce eni syncer", ipamMode)
-		}
-		eniHandler = eniSyncer.StartENISyncer(ctx, operatorWatchers.ENIClient)
-	}
-
-	if k8s.IsEnabled() &&
-		(operatorOption.Config.RemoveNetResourceSetTaints || operatorOption.Config.SetCCEIsUpCondition) {
-		stopCh := make(chan struct{})
-
-		log.WithFields(logrus.Fields{
-			logfields.K8sNamespace:               operatorOption.Config.CCEK8sNamespace,
-			"label-selector":                     operatorOption.Config.CCEPodLabels,
-			"remove-network-resource-set-taints": operatorOption.Config.RemoveNetResourceSetTaints,
-			"set-cce-is-up-condition":            operatorOption.Config.SetCCEIsUpCondition,
-		}).Info("Removing CCE Node Taints or Setting CCE Is Up Condition for Kubernetes Nodes")
-
-		operatorWatchers.HandleNodeTolerationAndTaints(stopCh)
-	}
-
 	if err := operatorWatchers.StartSynchronizingNetResourceSets(ctx, netResourceSetManager); err != nil {
 		log.WithError(err).Fatal("Unable to setup node watcher")
 	}
 
-	if err := operatorWatchers.StartSynchronizingCCEEndpoint(ctx, cceEndpointManager); err != nil {
-		log.WithError(err).Fatal("Unable to setup endpoint watcher")
-	}
-
-	if err := operatorWatchers.StartSynchronizingENI(ctx, eniHandler); err != nil {
-		log.WithError(err).Fatal("Unable to setup eni watcher")
-	}
-
 	log.Info("Initialization RDMA IPAM complete")
+	return true
 }
 
 // onOperatorStartLeading is the function called once the operator starts leading
@@ -548,10 +506,6 @@ func onOperatorStartLeading(ctx context.Context) {
 
 	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing IPAM")
 	startEthernetOperator(ctx)
-	// if enabled rdma, start rdma-ipam-operator
-	if option.Config.EnableRDMA {
-		startRdmaOperator(ctx)
-	}
 
 	if operatorOption.Config.NodeGCInterval != 0 {
 		operatorWatchers.RunNetResourceSetGC(ctx, operatorOption.Config.NodeGCInterval)

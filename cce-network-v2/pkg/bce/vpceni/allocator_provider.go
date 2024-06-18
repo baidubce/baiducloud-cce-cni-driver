@@ -24,7 +24,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	bceoption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
-	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/allocator"
@@ -80,7 +79,7 @@ func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater i
 	provider.manager.nrsGetterUpdater = getterUpdater
 
 	netResourceSetManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, ipamMetrics.IMetrics,
-		operatorOption.Config.ParallelAllocWorkers, true, false)
+		operatorOption.Config.NrsResourceResyncWorkers, operatorOption.Config.EnableExcessIPRelease, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bce instance manager: %w", err)
 	}
@@ -105,37 +104,26 @@ func (provider *BCEAllocatorProvider) StartEndpointManager(ctx context.Context, 
 
 // Create implements allocator.NetResourceSetEventHandler
 func (handler *VpcEniNetResourceSetEventHandler) Create(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	return handler.realHandler.Create(resource)
 }
 
 // Delete implements allocator.NetResourceSetEventHandler
 func (handler *VpcEniNetResourceSetEventHandler) Delete(netResourceSetName string) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(netResourceSetName) {
-		return nil
-	}
-
 	return handler.realHandler.Delete(netResourceSetName)
 }
 
 // Update implements allocator.NetResourceSetEventHandler
 func (handler *VpcEniNetResourceSetEventHandler) Update(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	return handler.realHandler.Update(resource)
 }
 
 // Resync implements allocator.NetResourceSetEventHandler
 func (handler *VpcEniNetResourceSetEventHandler) Resync(context.Context, time.Time) {
 	handler.realHandler.Resync(context.Background(), time.Now())
+}
+
+func (handler *VpcEniNetResourceSetEventHandler) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeEth
 }
 
 var _ allocator.AllocatorProvider = &BCEAllocatorProvider{}

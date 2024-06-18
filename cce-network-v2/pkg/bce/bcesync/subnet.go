@@ -178,10 +178,14 @@ func newCCESubnetStatus(vsbn *vpc.Subnet) *ccev1.SubnetStatus {
 
 // Search the subnet ID of the IP address
 func SearchSubnetID(vpcID, defaultSbnID, privateIPStr string) string {
-	sbn, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().Get(defaultSbnID)
+	if defaultSbnID == "" {
+		return ""
+	}
+	sbn, err := EnsureSubnet(vpcID, defaultSbnID)
 	if err != nil {
 		log.WithField(taskLogField, eniControllerName).
 			WithError(err).Errorf("failed to get subnet %s", defaultSbnID)
+		return defaultSbnID
 	}
 	if ccev1.IsInSubnet(sbn, privateIPStr) {
 		return defaultSbnID

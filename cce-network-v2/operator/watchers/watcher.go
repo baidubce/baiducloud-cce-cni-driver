@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	IndexIPToEndpoint = "ipToEndpoint"
-	IndexIPToENI      = "ipToENI"
+	IndexIPToEndpoint    = "ipToEndpoint"
+	IndexIPToENI         = "ipToENI"
+	IndexInstanceIDToNRS = "instanceIDToNRS"
 )
 
 func StartWatchers(stopCh <-chan struct{}) {
@@ -23,7 +24,7 @@ func StartWatchers(stopCh <-chan struct{}) {
 	k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer()
 	k8s.CCEClient().Informers.Cce().V2().ENIs().Informer()
 
-	addIPIndexer()
+	addIndexer()
 
 	k8s.CCEClient().Informers.Cce().V1().Subnets().Informer()
 	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
@@ -39,7 +40,7 @@ func WaitForCacheSync(stopCh <-chan struct{}) {
 }
 
 // addIndexer add ip to endpoint indexer to cceendpoint informer
-func addIPIndexer() {
+func addIndexer() {
 	informer := k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer()
 	informer.AddIndexers(cache.Indexers{
 		IndexIPToEndpoint: func(obj interface{}) ([]string, error) {
@@ -75,6 +76,17 @@ func addIPIndexer() {
 				ips = append(ips, addr.PrivateIPAddress)
 			}
 			return ips, nil
+		},
+	})
+
+	informer = k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer()
+	informer.AddIndexers(cache.Indexers{
+		IndexInstanceIDToNRS: func(obj interface{}) ([]string, error) {
+			nrs, ok := obj.(*ccev2.NetResourceSet)
+			if !ok {
+				return nil, fmt.Errorf("object is not NRS object")
+			}
+			return []string{nrs.Spec.InstanceID}, nil
 		},
 	})
 }

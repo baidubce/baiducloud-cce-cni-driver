@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
@@ -433,32 +434,40 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 					nodeResource.Spec.ENI.InstallSourceBasedRouting = option.Config.ENI.InstallSourceBasedRouting
 				}
 			}
+		}
 
-			// reset eni spec when it is restart
-			if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
-				if option.Config.IPPoolMinAllocateIPs != 0 {
-					nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
-				}
-				if option.Config.IPPoolPreAllocate != 0 {
-					nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
-				}
-				if option.Config.IPPoolMaxAboveWatermark != 0 {
-					nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
-				}
-				if option.Config.ENI.RouteTableOffset > 0 {
-					nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
-				}
+		// reset eni spec when it is restart
+		if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+			if option.Config.IPPoolMinAllocateIPs != 0 {
+				nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
 			}
+			if option.Config.IPPoolPreAllocate != 0 {
+				nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
+			}
+			if option.Config.IPPoolMaxAboveWatermark != 0 {
+				nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
+			}
+			if option.Config.ENI.RouteTableOffset > 0 {
+				nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
+			}
+		}
 
-			// update subnet and security group ids
-			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
-			if len(nodeResource.Spec.ENI.SubnetIDs) == 0 {
-				nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
-			}
+		// update subnet and security group ids
+		nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
+		nodeResource.Spec.ENI.EnterpriseSecurityGroupList = option.Config.ENI.EnterpriseSecurityGroupList
 
-			if option.Config.ENI.UsePrimaryAddress != nil {
-				nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
+		if option.Config.ENI.UsePrimaryAddress != nil {
+			nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
+		}
+
+		// do not leak subnet ids which used by eni
+		nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
+		if len(nodeResource.Status.ENIs) > 0 {
+			sbnSet := sets.NewString(nodeResource.Spec.ENI.SubnetIDs...)
+			for _, eni := range nodeResource.Status.ENIs {
+				sbnSet.Insert(eni.SubnetID)
 			}
+			nodeResource.Spec.ENI.SubnetIDs = sbnSet.List()
 		}
 	case ipamOption.IPAMPrivateCloudBase:
 		if c := n.NetConf; c != nil {
@@ -526,6 +535,10 @@ func (n *NodeDiscovery) LocalAllocCIDRsUpdated(ipv4AllocCIDRs, ipv6AllocCIDRs []
 	}
 
 	n.Manager.NodeUpdated(n.localNode)
+}
+
+func (n *NodeDiscovery) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeEth
 }
 
 func splitAllocCIDRs(allocCIDRs []*cidr.CIDR) (primaryCIDR *cidr.CIDR, secondaryCIDRS []*cidr.CIDR) {

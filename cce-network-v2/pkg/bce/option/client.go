@@ -16,6 +16,7 @@ package option
 
 import (
 	"os"
+	"sync"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
@@ -26,15 +27,19 @@ import (
 )
 
 var (
+	mutex         sync.Mutex
 	defaultClient cloud.Interface
 	log           = logging.NewSubysLogger("bce-client")
 )
 
 // BCEClient create a client to BCE Cloud
 func BCEClient() cloud.Interface {
+	mutex.Lock()
 	if defaultClient != nil {
+		mutex.Unlock()
 		return defaultClient
 	}
+	mutex.Unlock()
 
 	if endpoint := operatorOption.Config.BCECloudBaseHost; endpoint != "" {
 		os.Setenv(ccegateway.EndpointOverrideEnv, endpoint)
@@ -60,6 +65,9 @@ func BCEClient() cloud.Interface {
 	if err != nil {
 		log.Fatalf("[InitBCEClient] failed to init bce client with flow control %v", err)
 	}
+
+	mutex.Lock()
 	defaultClient = c
+	mutex.Unlock()
 	return defaultClient
 }

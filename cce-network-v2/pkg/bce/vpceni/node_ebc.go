@@ -68,12 +68,15 @@ func (n *ebcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 }
 
 func (n *ebcNode) refreshPrimarySubnet() error {
+	if !n.usePrimaryENIWithSecondaryMode {
+		return nil
+	}
 	// get customer quota from cloud
-	err := n.refreshBCCInfo()
+	bccInfo, err := n.refreshBCCInfo()
 	if err != nil {
 		return err
 	}
-	n.primaryENISubnetID = n.bccInfo.NicInfo.SubnetId
+	n.primaryENISubnetID = bccInfo.NicInfo.SubnetId
 	subnets := n.FilterAvailableSubnetIds([]string{n.primaryENISubnetID})
 	n.availableSubnets = subnets
 	return nil
@@ -95,11 +98,10 @@ func (n *ebcNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet) error {
 	// get customer quota from cloud
 	// TODO: we will use vpc data to set ip quota
-	err := n.refreshBCCInfo()
+	bccInfo, err := n.refreshBCCInfo()
 	if err != nil {
 		return err
 	}
-	bccInfo := n.bccInfo
 	err = n.refreshPrimarySubnet()
 	if err != nil {
 		return err
@@ -122,7 +124,7 @@ func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logr
 				Name:       resource.Name,
 				UID:        resource.UID,
 			}},
-			Name: n.bccInfo.NicInfo.EniId,
+			Name: bccInfo.NicInfo.EniId,
 		},
 		Spec: ccev2.ENISpec{
 			NodeName: resource.Name,

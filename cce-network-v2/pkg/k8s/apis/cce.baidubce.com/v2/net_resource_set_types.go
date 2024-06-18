@@ -29,8 +29,10 @@ import (
 type IPFamily string
 
 const (
-	IPv4Family IPFamily = "4"
-	IPv6Family IPFamily = "6"
+	IPv4Family                         IPFamily = "4"
+	IPv6Family                         IPFamily = "6"
+	NetResourceSetEventHandlerTypeEth           = "ethernet"
+	NetResourceSetEventHandlerTypeRDMA          = "rdma"
 )
 
 // AddressPair is is a par of IPv4 and/or IPv6 address.

@@ -26,6 +26,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/addressing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/mtu"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
@@ -40,6 +41,9 @@ func (o *ownerMock) RegisterNetResourceSetSubscriber(s subscriber.NetResourceSet
 
 func (o *ownerMock) UpdateNetResourceSetResource()                                      {}
 func (o *ownerMock) LocalAllocCIDRsUpdated(ipv4AllocCIDRs, ipv6AllocCIDRs []*cidr.CIDR) {}
+func (o *ownerMock) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeEth
+}
 
 var mtuMock = mtu.NewConfiguration(0, false, false, false, 1500, nil)
 

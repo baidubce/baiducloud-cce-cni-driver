@@ -58,7 +58,7 @@ func StartSynchronizingCCEEndpoint(ctx context.Context, endpointManager Endpoint
 	cceEndpointLister := k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Lister()
 
 	endpointManagerSyncHandler := func(key string) error {
-		log.Infof("Watching CCEEndpoint %v", key)
+		log.Debugf("Watching CCEEndpoint %v", key)
 		namespace, name, err := cache.SplitMetaNamespaceKey(key)
 		if err != nil {
 			log.WithError(err).Error("Unable to process CCEEndpoint event")

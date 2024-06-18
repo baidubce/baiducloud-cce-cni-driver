@@ -25,8 +25,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	bceoption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
-	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/allocator"
 	ipamMetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/metrics"
@@ -88,7 +86,7 @@ func (provider *BCERDMAAllocatorProvider) Start(ctx context.Context, getterUpdat
 	provider.manager.nrsGetterUpdater = getterUpdater
 
 	netResourceSetManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, ipamMetrics.IMetrics,
-		operatorOption.Config.ParallelAllocWorkers, true, false)
+		operatorOption.Config.RdmaResourceResyncWorkers, operatorOption.Config.EnableExcessIPRelease, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bce rdma instance manager: %w", err)
 	}
@@ -103,41 +101,18 @@ func (provider *BCERDMAAllocatorProvider) Start(ctx context.Context, getterUpdat
 	return rdmaNetResourceSetEventHandler, nil
 }
 
-// StartEndpointManager implements endpoint.DirectAllocatorStarter
-func (provider *BCERDMAAllocatorProvider) StartEndpointManager(ctx context.Context, getterUpdater endpoint.CCEEndpointGetterUpdater) (endpoint.EndpointEventHandler, error) {
-
-	endpointNanager := endpoint.NewEndpointManager(getterUpdater, provider.manager)
-	endpointNanager.Start(ctx)
-	return endpointNanager, nil
-}
-
 // Create implements allocator.NodeEventHandler
 func (handler *RdmaNetResourceSetEventHandler) Create(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if !bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	return handler.realHandler.Create(resource)
 }
 
 // Delete implements allocator.NodeEventHandler
 func (handler *RdmaNetResourceSetEventHandler) Delete(netResourceSetName string) error {
-	// Only processing the resource when it is not RDMA
-	if !bceutils.IsRdmaNetResourceSet(netResourceSetName) {
-		return nil
-	}
-
 	return handler.realHandler.Delete(netResourceSetName)
 }
 
 // Update implements allocator.NodeEventHandler
 func (handler *RdmaNetResourceSetEventHandler) Update(resource *ccev2.NetResourceSet) error {
-	// Only processing the resource when it is not RDMA
-	if !bceutils.IsRdmaNetResourceSet(resource.Name) {
-		return nil
-	}
-
 	return handler.realHandler.Update(resource)
 }
 
@@ -146,6 +121,8 @@ func (handler *RdmaNetResourceSetEventHandler) Resync(context.Context, time.Time
 	handler.realHandler.Resync(context.Background(), time.Now())
 }
 
-var _ allocator.AllocatorProvider = &BCERDMAAllocatorProvider{}
+func (handler *RdmaNetResourceSetEventHandler) ResourceType() string {
+	return ccev2.NetResourceSetEventHandlerTypeRDMA
+}
 
-var _ endpoint.DirectAllocatorStarter = &BCERDMAAllocatorProvider{}
+var _ allocator.AllocatorProvider = &BCERDMAAllocatorProvider{}

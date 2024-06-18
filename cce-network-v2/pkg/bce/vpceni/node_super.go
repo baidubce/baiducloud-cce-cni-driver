@@ -107,10 +107,6 @@ type bceNode struct {
 	// mutex protects members below this field
 	mutex lock.RWMutex
 
-	// enis is the list of ENIs attached to the node indexed by ENI ID.
-	// Protected by Node.mutex.
-	enis map[string]ccev2.ENI
-
 	// k8sObj is the NetResourceSet custom resource representing the node
 	k8sObj *ccev2.NetResourceSet
 
@@ -143,7 +139,9 @@ type bceNode struct {
 	log *logrus.Entry
 
 	// availableSubnets subnets that can be used to allocate IPs and create ENIs
-	availableSubnets        []*ccev1.Subnet
+	availableSubnets []*ccev1.Subnet
+
+	errorLock               lock.Mutex
 	eniAllocatedIPsErrorMap map[string]*ccev2.StatusChange
 }
 
@@ -180,7 +178,11 @@ func NewNode(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *Inst
 
 func (n *bceNode) getENIQuota() ENIQuotaManager {
 	n.limiterLock.Lock()
-	defer n.limiterLock.Unlock()
+	if n.eniQuota != nil && n.lastResyncEniQuotaTime.Add(DayDuration).After(time.Now()) {
+		n.limiterLock.Unlock()
+		return n.eniQuota
+	}
+	n.limiterLock.Unlock()
 
 	ctx := logfields.NewContext()
 	scopedLog := n.log.WithFields(logrus.Fields{
@@ -188,10 +190,6 @@ func (n *bceNode) getENIQuota() ENIQuotaManager {
 		"method":       "getENIQuota",
 		"instanceType": n.k8sObj.Spec.ENI.InstanceType,
 	}).WithContext(ctx)
-
-	if n.eniQuota != nil && n.lastResyncEniQuotaTime.Add(DayDuration).After(time.Now()) {
-		return n.eniQuota
-	}
 
 	// fast path to claculate eni quota when operaor has been restarted
 	// isSetLimiter returns true if the node has set limiter
@@ -209,7 +207,10 @@ func (n *bceNode) getENIQuota() ENIQuotaManager {
 		if operatorOption.Config.BCECustomerMaxIP != 0 && operatorOption.Config.BCECustomerMaxIP == eniQuota.GetMaxIP() {
 			goto slowPath
 		}
+
+		n.limiterLock.Lock()
 		n.eniQuota = eniQuota
+		n.limiterLock.Unlock()
 		return n.eniQuota
 	}
 
@@ -262,8 +263,10 @@ func (n *bceNode) slowCalculateRealENICapacity(scopedLog *logrus.Entry) ENIQuota
 		return nil
 	}
 
+	n.limiterLock.Lock()
 	n.eniQuota = eniQuota
 	n.lastResyncEniQuotaTime = time.Now()
+	n.limiterLock.Unlock()
 
 	scopedLog.WithFields(logrus.Fields{
 		"maxENI":      n.eniQuota.GetMaxENI(),
@@ -330,9 +333,6 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 		allENIId []string
 	)
 	n.waitForENISynced(ctx)
-
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
 
 	availabelENIsNumber := 0
 	usedENIsNumber := 0
@@ -437,7 +437,7 @@ func (n *bceNode) CreateInterface(ctx context.Context, allocation *ipam.Allocati
 	n.creatingEni.add(-1)
 
 	preAllocateNum := math.IntMin(eniQuota.GetMaxENI()-1, n.k8sObj.Spec.ENI.PreAllocateENI)
-	preAllocateNum = preAllocateNum - availableENICount
+	preAllocateNum = preAllocateNum - availableENICount - 1
 	for i := 0; i < preAllocateNum; i++ {
 		inums++
 		go func() {
@@ -766,8 +766,6 @@ func appenUniqueElement(arr, toadd []*models.PrivateIP) []*models.PrivateIP {
 // indicates a need to release IPs.
 func (n *bceNode) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.ReleaseAction {
 	r := &ipam.ReleaseAction{}
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
 
 	// Needed for selecting the same ENI to release IPs from
 	// when more than one ENI qualifies for release
@@ -807,7 +805,9 @@ func (n *bceNode) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam
 					return false
 				}
 				ip := addr.PrivateIPAddress
+				n.mutex.Lock()
 				_, ipUsed := n.k8sObj.Status.IPAM.Used[ip]
+				n.mutex.Unlock()
 				// exclude primary IPs and cross subnet IPs
 				return !ipUsed
 			}
@@ -1218,8 +1218,8 @@ func (n *bceNode) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAct
 // appendAllocatedIPError append eni allocated ip error to bcenode
 // those errors will be added to the status of nrs by 2 minutes
 func (n *bceNode) appendAllocatedIPError(eniID string, openAPIStatus *ccev2.StatusChange) {
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
+	n.errorLock.Lock()
+	defer n.errorLock.Unlock()
 
 	n.eniAllocatedIPsErrorMap[eniID] = openAPIStatus
 
@@ -1233,8 +1233,8 @@ func (n *bceNode) appendAllocatedIPError(eniID string, openAPIStatus *ccev2.Stat
 // refreshENIAllocatedIPErrors fill nrs status with eni allocated ip errors
 // error are only valid if they occured within the last 10 minutes
 func (n *bceNode) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
+	n.errorLock.Lock()
+	defer n.errorLock.Unlock()
 
 	now := time.Now()
 	for eniID := range resource.Status.ENIs {

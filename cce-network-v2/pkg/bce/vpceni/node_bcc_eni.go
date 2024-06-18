@@ -120,7 +120,6 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 					return nil
 				}
 				n.mutex.Lock()
-				defer n.mutex.Unlock()
 				if version, ok := n.expiredVPCVersion[interfaceID]; ok {
 					if e.Spec.VPCVersion == version {
 						haveSynced = false
@@ -128,6 +127,7 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 						delete(n.expiredVPCVersion, interfaceID)
 					}
 				}
+				n.mutex.Unlock()
 
 				return nil
 			})
@@ -261,10 +261,10 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	scopedLog = scopedLog.WithField("eniName", eniName).WithField("securityGroupIDs", resource.Spec.ENI.SecurityGroups)
 	eniID, err := n.createENI(ctx, newENI, scopedLog)
 	if err != nil {
-		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "Failed to create ENI on nrs %s: %s", resource.Name, err)
+		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "failed to create ENI on nrs %s: %s", resource.Name, err)
 		return err
 	}
-	n.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateENISuccess", "Create new ENI %s on nrs %s success", eniID, resource.Name)
+	n.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateENISuccess", "create new ENI %s on nrs %s success", eniID, resource.Name)
 	scopedLog = scopedLog.WithField("eniID", eniID)
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID

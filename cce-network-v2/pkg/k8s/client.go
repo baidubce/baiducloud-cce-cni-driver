@@ -26,30 +26,30 @@ import (
 	"strings"
 	"time"
 
-	cceInformer "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions"
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextclientsetFake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
+	apiextclientsetscheme "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	typev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	k8sclient "k8s.io/client-go/kubernetes"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/connrotation"
 
-	clientset "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned"
+	cceclient "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned"
+	ccefake "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/fake"
+	cceInformer "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/informers/externalversions"
 	k8smetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/metrics"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/version"
-	watcher_apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
-	slim_apiextclientsetscheme "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
-	slim_metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	slim_metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
-	watcher_client "k8s.io/client-go/kubernetes"
 )
 
 var (
@@ -101,7 +101,7 @@ func CreateConfig() (*rest.Config, error) {
 }
 
 // createClient creates a new client to access the Kubernetes API
-func createClient(config *rest.Config, cs kubernetes.Interface) error {
+func createClient(config *rest.Config, cs k8sclient.Interface) error {
 	stop := make(chan struct{})
 	timeout := time.NewTimer(time.Minute)
 	defer timeout.Stop()
@@ -131,7 +131,7 @@ func createDefaultClient(c *rest.Config, httpClient *http.Client) (rest.Interfac
 	restConfig := *c
 	restConfig.ContentConfig.ContentType = `application/vnd.kubernetes.protobuf`
 
-	createdK8sClient, err := kubernetes.NewForConfigAndClient(&restConfig, httpClient)
+	createdK8sClient, err := k8sclient.NewForConfigAndClient(&restConfig, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func createDefaultClient(c *rest.Config, httpClient *http.Client) (rest.Interfac
 
 	k8sCLI.Interface = createdK8sClient
 
-	createK8sWatcherCli, err := watcher_client.NewForConfigAndClient(&restConfig, httpClient)
+	createK8sWatcherCli, err := k8sclient.NewForConfigAndClient(&restConfig, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func createDefaultClient(c *rest.Config, httpClient *http.Client) (rest.Interfac
 }
 
 func createDefaultCCEClient(c *rest.Config, httpClient *http.Client) error {
-	createdCCEK8sClient, err := clientset.NewForConfigAndClient(c, httpClient)
+	createdCCEK8sClient, err := cceclient.NewForConfigAndClient(c, httpClient)
 	if err != nil {
 		return fmt.Errorf("unable to create k8s client: %s", err)
 	}
@@ -172,12 +172,28 @@ func createAPIExtensionsClient(restConfig *rest.Config, httpClient *http.Client)
 
 	k8sAPIExtCLI.Interface = c
 
-	createK8sWatcherAPIExtCli, err := watcher_apiextclientset.NewForConfigAndClient(restConfig, httpClient)
+	createK8sWatcherAPIExtCli, err := apiextclientset.NewForConfigAndClient(restConfig, httpClient)
 	if err != nil {
 		return err
 	}
 
 	k8sAPIExtWatcherCLI.Interface = createK8sWatcherAPIExtCli
+
+	return nil
+}
+
+func InitNewFakeK8sClient() error {
+	fakecs := k8sfake.NewSimpleClientset()
+	k8sCLI.Interface = fakecs
+
+	k8sWatcherCLI.Interface = fakecs
+	k8sWatcherCLI.Informers = informers.NewSharedInformerFactory(WatcherClient(), 0)
+
+	k8sCCECLI.Interface = ccefake.NewSimpleClientset()
+	k8sCCECLI.Informers = cceInformer.NewSharedInformerFactory(k8sCCECLI, 0)
+
+	k8sAPIExtCLI.Interface = apiextclientsetFake.NewSimpleClientset()
+	k8sAPIExtWatcherCLI.Interface = k8sAPIExtCLI.Interface
 
 	return nil
 }
@@ -291,7 +307,7 @@ func runHeartbeat(heartBeat func(context.Context) error, timeout time.Duration, 
 }
 
 // isConnReady returns the err for the kube-system namespace get
-func isConnReady(c kubernetes.Interface) error {
+func isConnReady(c k8sclient.Interface) error {
 	_, err := c.CoreV1().Namespaces().Get(context.TODO(), "default", metav1.GetOptions{})
 	return err
 }
@@ -299,8 +315,8 @@ func isConnReady(c kubernetes.Interface) error {
 func init() {
 	// Register the metav1.Table and metav1.PartialObjectMetadata for the
 	// apiextclientset.
-	utilruntime.Must(slim_metav1.AddMetaToScheme(slim_apiextclientsetscheme.Scheme))
-	utilruntime.Must(slim_metav1beta1.AddMetaToScheme(slim_apiextclientsetscheme.Scheme))
+	utilruntime.Must(metav1.AddMetaToScheme(apiextclientsetscheme.Scheme))
+	utilruntime.Must(metav1beta1.AddMetaToScheme(apiextclientsetscheme.Scheme))
 }
 
 var (
@@ -313,6 +329,6 @@ func EventBroadcaster() record.EventBroadcaster {
 	}
 	eventBroadcaster = record.NewBroadcaster()
 	eventBroadcaster.StartLogging(log.Infof)
-	eventBroadcaster.StartRecordingToSink(&typev1.EventSinkImpl{Interface: Client().CoreV1().Events("")})
+	eventBroadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: Client().CoreV1().Events("")})
 	return eventBroadcaster
 }

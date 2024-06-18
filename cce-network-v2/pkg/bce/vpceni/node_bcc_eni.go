@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -28,8 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
-	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -147,7 +146,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	var (
-		eniQuota          = n.bceNode.getENIQuota()
+		limiter           = n.bceNode.calculateLimiter()
 		availableENICount = 0
 		inuseENICount     = 0
 	)
@@ -165,7 +164,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 				}
 			} else if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
 				// if the length of private ip set is greater than the MaxIPPerENI, then the ENI is in use
-				if len(e.Spec.ENI.PrivateIPSet) >= eniQuota.GetMaxIP() {
+				if len(e.Spec.ENI.PrivateIPSet) >= limiter.MaxIPPerENI {
 					inuseENICount++
 				}
 			}
@@ -173,7 +172,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 			return nil
 		})
 
-	if availableENICount >= eniQuota.GetMaxENI() {
+	if availableENICount >= limiter.MaxENINum {
 		msg = errUnableToDetermineLimits
 		err = fmt.Errorf(msg)
 		return
@@ -182,21 +181,17 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	// The cache will be cleared in the function ResyncInterfacesAndIPs.
 	if n.k8sObj.Spec.ENI.PreAllocateENI <= availableENICount && len(n.creatingEni.creatingENI) > 0 {
 		msg = errUnableToCreateENI
-		err = fmt.Errorf(errCrurrentlyCreatingENI)
+		err = errors.New(errCrurrentlyCreatingENI)
 		return
 	}
 
 	// find the bset subnet to create eni
-	var bestSubnet *ccev1.Subnet
-	if len(resource.Spec.ENI.SubnetIDs) > 0 {
-		zone := api.TransAvailableZoneToZoneName(operatorOption.Config.BCECloudContry, operatorOption.Config.BCECloudRegion, resource.Spec.ENI.AvailabilityZone)
-		bestSubnet = n.manager.FindSubnetByIDs(resource.Spec.ENI.VpcID, zone, resource.Spec.ENI.SubnetIDs)
-	}
+	bestSubnet := searchMaxAvailableSubnet(n.availableSubnets)
 
 	if bestSubnet == nil {
 		msg = errUnableToFindSubnet
 		err = fmt.Errorf(
-			"No matching subnet available for interface creation (VPC=%s AZ=%s SubnetIDs=%v)",
+			"no matching subnet available for interface creation (VPC=%s AZ=%s SubnetIDs=%v)",
 			resource.Spec.ENI.VpcID,
 			resource.Spec.ENI.AvailabilityZone,
 			resource.Spec.ENI.SubnetIDs,
@@ -258,7 +253,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 			},
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
+			Type:                      ccev2.ENIForBCC,
 		},
 	}
 
@@ -273,7 +268,7 @@ func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entr
 	newENI.Spec.ENI.ID = eniID
 	newENI.Name = eniID
 
-	n.creatingEni.addCreatingENI(newENI.Name, time.Now())
+	n.creatingEni.addCreatingENI(newENI)
 
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
@@ -320,7 +315,8 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 		EnterpriseSecurityGroupIds: resource.Spec.ENI.EnterpriseSecurityGroupIds,
 		Description:                defaults.DefaultENIDescription,
 		PrivateIpSet: []enisdk.PrivateIp{{
-			Primary: true,
+			Primary:          true,
+			PrivateIpAddress: "",
 		}},
 	}
 	if createENIArgs.EnterpriseSecurityGroupIds == nil {
@@ -328,20 +324,19 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 	}
 
 	// use the given ip to create a new ENI
-	var privateIPs []enisdk.PrivateIp
+	var privateIPs []*enisdk.PrivateIp
 	for i := 0; i < len(resource.Spec.ENI.PrivateIPSet); i++ {
-		privateIPs = append(privateIPs, enisdk.PrivateIp{
+		privateIPs = append(privateIPs, &enisdk.PrivateIp{
 			PublicIpAddress:  resource.Spec.ENI.PrivateIPSet[i].PublicIPAddress,
 			Primary:          resource.Spec.ENI.PrivateIPSet[i].Primary,
 			PrivateIpAddress: resource.Spec.ENI.PrivateIPSet[i].PrivateIPAddress,
 		})
 	}
 	if len(privateIPs) == 0 {
-		privateIPs = append(privateIPs, enisdk.PrivateIp{
+		privateIPs = append(privateIPs, &enisdk.PrivateIp{
 			Primary: true,
 		})
 	}
-	createENIArgs.PrivateIpSet = privateIPs
 
 	eniID, err := n.manager.bceclient.CreateENI(ctx, createENIArgs)
 	if err != nil {

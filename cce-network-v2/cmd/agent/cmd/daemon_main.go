@@ -27,7 +27,6 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/plugins/pluginmanager"
 	"github.com/go-openapi/loads"
 	gops "github.com/google/gops/agent"
 	"github.com/sirupsen/logrus"
@@ -244,18 +243,6 @@ func initializeFlags() {
 	flags.String(option.IPAM, ipamOption.IPAMClusterPool, "Backend to use for IPAM")
 	option.BindEnv(option.IPAM)
 
-	flags.Int(option.IPPoolMinAllocateIPs, 2,
-		"MinAllocate is the minimum number of IPs that must be allocated when the node is first bootstrapped.")
-	option.BindEnv(option.IPPoolMinAllocateIPs)
-
-	flags.Int(option.IPPoolPreAllocate, 2,
-		"PreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec. ")
-	option.BindEnv(option.IPPoolPreAllocate)
-
-	flags.Int(option.IPPoolMaxAboveWatermark, 2,
-		"MaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark.")
-	option.BindEnv(option.IPPoolMaxAboveWatermark)
-
 	flags.String(option.IPv4Range, AutoCIDR, "Per-node IPv4 endpoint prefix, e.g. 10.16.0.0/16")
 	option.BindEnv(option.IPv4Range)
 
@@ -361,6 +348,9 @@ func initializeFlags() {
 	flags.String(option.IPv4NodeAddr, "auto", "IPv4 address of node")
 	option.BindEnv(option.IPv4NodeAddr)
 
+	flags.String(option.ReadCNIConfiguration, "", "Read to the CNI configuration at specified path to extract per node configuration")
+	option.BindEnv(option.ReadCNIConfiguration)
+
 	flags.Bool(option.Restore, true, "Restores state, if possible, from previous daemon")
 	option.BindEnv(option.Restore)
 
@@ -422,8 +412,11 @@ func initializeFlags() {
 	flags.MarkHidden(option.EndpointGCInterval)
 	option.BindEnv(option.EndpointGCInterval)
 
-	flags.String(option.WriteCNIConfigurationWhenReady, "", "Write the CNI configuration as specified  path when agent is ready")
+	flags.String(option.WriteCNIConfigurationWhenReady, "", fmt.Sprintf("Write the CNI configuration as specified via --%s to path when agent is ready", option.ReadCNIConfiguration))
 	option.BindEnv(option.WriteCNIConfigurationWhenReady)
+
+	flags.Bool(option.OverwriteCNIConfigurationWhenStart, true, "Overwrite the CNI configuration when agent starts")
+	option.BindEnv(option.OverwriteCNIConfigurationWhenStart)
 
 	flags.Duration(option.K8sHeartbeatTimeout, 30*time.Second, "Configures the timeout for api-server heartbeat, set to 0 to disable")
 	option.BindEnv(option.K8sHeartbeatTimeout)
@@ -494,9 +487,6 @@ func initializeFlags() {
 
 	flags.Bool(option.EnableEgressPriorityDSCP, false, "enable engress priority by dscp")
 	option.BindEnv(option.EnableEgressPriorityDSCP)
-
-	flags.StringSlice(option.ExtCNIPluginsList, []string{}, "external cni plugins list")
-	option.BindEnv(option.ExtCNIPluginsList)
 
 	viper.BindPFlags(flags)
 }
@@ -676,19 +666,34 @@ func runDaemon() {
 	log.WithField("bootstrapTime", time.Since(bootstrapTimestamp)).
 		Info("Daemon initialization completed")
 
+	firstWriteCNIConfig := false
+	if option.Config.OverwriteCNIConfigurationWhenStart {
+		firstWriteCNIConfig = true
+	}
 	if option.Config.WriteCNIConfigurationWhenReady != "" {
 		d.controllers.UpdateController(cniUpdateControllerName, controller.ControllerParams{
 			RunInterval: option.Config.ResourceResyncInterval,
 			DoFunc: func(ctx context.Context) error {
 				// Overwrite the CNI configuration when agent starts, so we should skip read config file which has been existed.
+				if !firstWriteCNIConfig {
+					_, err = os.Open(option.Config.WriteCNIConfigurationWhenReady)
+					if err == nil {
+						return nil
+					}
+				}
+				firstWriteCNIConfig = false
 
-				override, err := pluginmanager.OverwriteCNIConfigList(option.Config.WriteCNIConfigurationWhenReady)
+				input, err := os.ReadFile(option.Config.ReadCNIConfiguration)
 				if err != nil {
-					log.WithError(err).Error("Unable to overwrite CNI configuration")
+					log.WithError(err).Fatal("Unable to read CNI configuration file")
 				}
-				if override {
-					log.Infof("Overwrite CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
+
+				if err = os.WriteFile(option.Config.WriteCNIConfigurationWhenReady, input, 0644); err != nil {
+					log.WithError(err).Fatalf("Unable to write CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
+				} else {
+					log.Infof("Wrote CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
 				}
+
 				return nil
 			},
 		})

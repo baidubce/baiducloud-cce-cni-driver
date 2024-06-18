@@ -17,8 +17,8 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
@@ -68,7 +68,7 @@ func CPTPConfigureIface(ifName string, res *current.Result) error {
 				// Read current sysctl value
 				value, err := sysctl.Sysctl(ipv6SysctlValueName)
 				if err != nil {
-					logger.WithError(err).Errorf("ipam_linux: failed to read sysctl %s", ipv6SysctlValueName)
+					fmt.Fprintf(os.Stderr, "ipam_linux: failed to read sysctl %q: %v\n", ipv6SysctlValueName, err)
 					continue
 				}
 				if value == "0" {
@@ -96,7 +96,6 @@ func CPTPConfigureIface(ifName string, res *current.Result) error {
 			Label: "",
 		}
 		if err = netlink.AddrAdd(link, addr); err != nil {
-			logger.WithError(err).WithField("add", logfields.Repr(addr)).Errorf("failed to add IP addr %v to %q: %v", ipc, ifName, err)
 			return fmt.Errorf("failed to add IP addr %v to %q: %v", ipc, ifName, err)
 		}
 
@@ -136,7 +135,6 @@ func CPTPConfigureIface(ifName string, res *current.Result) error {
 			},
 		} {
 			if err := netlink.RouteAdd(&r); err != nil {
-				logger.WithError(err).WithField("route", logfields.Repr(r)).Errorf("failed to add route")
 				return fmt.Errorf("failed to add route %v: %v", r, err)
 			}
 		}
@@ -160,7 +158,6 @@ func CPTPConfigureIface(ifName string, res *current.Result) error {
 		}
 
 		if err = netlink.RouteAddEcmp(&route); err != nil {
-			logger.WithError(err).WithField("route", logfields.Repr(r)).Errorf("failed to add route")
 			return fmt.Errorf("failed to add route '%v via %v dev %v': %v", r.Dst, gw, ifName, err)
 		}
 	}

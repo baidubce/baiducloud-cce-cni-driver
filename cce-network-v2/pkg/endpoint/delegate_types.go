@@ -76,7 +76,7 @@ type DirectIPAllocator interface {
 
 type DirectEndpointOperation interface {
 	// FilterAvailableSubnet returns the best subnet for the endpoint
-	FilterAvailableSubnet([]*ccev1.Subnet) []*ccev1.Subnet
+	FilterAvailableSubnetIds([]string) []*ccev1.Subnet
 
 	// AllocateIP allocates an IP for the endpoint
 	// The meaning of reusing the IP address is to migrate the IP

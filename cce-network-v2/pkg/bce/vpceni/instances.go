@@ -17,18 +17,15 @@ package vpceni
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	listv1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v1"
 	listv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
@@ -102,37 +99,6 @@ func (m *InstancesManager) GetPoolQuota() ipamTypes.PoolQuotaMap {
 		}
 	}
 	return pool
-}
-
-// FindSubnetByIDs returns the subnet with the most addresses matching VPC ID,
-// availability zone within a provided list of subnet ids
-//
-// The returned subnet is immutable so it can be safely accessed
-func (m *InstancesManager) FindSubnetByIDs(vpcID, availabilityZone string, subnetIDs []string) (bestSubnet *ccev1.Subnet) {
-	for _, subnetID := range subnetIDs {
-		sbn, err := bcesync.EnsureSubnet(vpcID, subnetID)
-		if err != nil {
-			continue
-		}
-		if !strings.Contains(sbn.Spec.AvailabilityZone, availabilityZone) {
-			continue
-		}
-		// filter out ipv6 subnet if ipv6 is not enabled
-		if operatorOption.Config.EnableIPv6 {
-			if sbn.Spec.IPv6CIDR == "" {
-				continue
-			}
-		}
-
-		if sbn.Spec.Exclusive {
-			continue
-		}
-		if bestSubnet == nil || bestSubnet.Status.AvailableIPNum < sbn.Status.AvailableIPNum {
-			bestSubnet = sbn
-		}
-
-	}
-	return
 }
 
 // HandlerVPCError handles the error returned by the VPC API

@@ -19,7 +19,7 @@ $(TARGET):
 
 clean:
 	@$(ECHO_CLEAN)
-	$(forea target, $(QUIET)rm -f $(PWD)/output/bin/cmd/$(target))
+	$(QUIET)rm -f $(TARGETS)
 	$(GO) clean $(GOCLEAN)
 
 install:

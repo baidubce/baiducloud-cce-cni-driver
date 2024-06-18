@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: EnsureExists
+  name: cni-config-template
+  namespace: {{ .Release.Namespace }}
+data:
+    primary-eni.temlplate: |
+        {
+            "name":"podlink",
+            "cniVersion":"0.4.0",
+            "plugins":[
+                {
+                    "type":"exclusive-device",
+                    "ipam":{
+                        "type":"enim"
+                    }
+                }
+                {{- range .Values.extplugins }}
+                ,{
+                    "type": "{{ .type }}"
+                }
+                {{- end }}
+            ]
+        }        
+    cce-ptp.template: |
+        {
+            "name":"cce",
+            "cniVersion":"0.4.0",
+            "plugins":[
+                {
+                    "type":"cptp",
+                    "ipam":{
+                        "type":"cipam",
+                        {{- if .Values.ccedConfig.ippool.enabled }}
+                        "min-allocate": {{ .Values.ccedConfig.ippool.minAllocate }},
+                        "pre-allocate": {{ .Values.ccedConfig.ippool.preAllocate }},
+                        "max-above-watermark": {{ .Values.ccedConfig.ippool.maxAboveWatermark }},
+                        {{- end }}
+                        "eni": {
+                            "routeTableOffset": 127
+                        },
+                        "pod-cidr-allocation-threshold": 1,
+                        "pod-cidr-release-threshold": 1
+                    },
+                    "mtu": 1500
+                }
+                {{- range .Values.extplugins }}
+                ,{
+                    "type": "{{ .type }}"
+                }
+                {{- end }}
+                ,{
+                    "type": "endpoint-probe"
+                }
+            ]
+        }

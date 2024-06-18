@@ -151,6 +151,12 @@ func (ec *eniLink) ensureLinkConfig() (err error) {
 		return err
 	}
 
+	// 2. disable dad
+	err = ec.disableDad()
+	if err != nil {
+		return err
+	}
+
 	// 3. add primary IP
 	err = ec.ensureENIAddr()
 	if err != nil {
@@ -291,22 +297,6 @@ func (ec *eniLink) ensureFromPrimaryRoute() (err error) {
 		ec.ipv6Gateway = gateway
 	}
 	return nil
-}
-
-func (ec *eniLink) ensureENINeigh() error {
-	// set proxy neigh
-	err := ensureENIArpProxy(ec.log, ec.macAddr)
-	if err != nil {
-		ec.log.WithError(err).Error("set arp proxy falied")
-		return err
-	}
-	err = ensureENINDPProxy(ec.log, ec.eni)
-	if err != nil {
-		ec.log.WithError(err).Error("set ndp proxy falied")
-		return err
-	}
-	// 2. disable dad
-	return ec.disableDad()
 }
 
 func EnsureRoute(log *logrus.Entry, eniLink netlink.Link, family int, rtTable int, routeDst *net.IPNet) (string, error) {

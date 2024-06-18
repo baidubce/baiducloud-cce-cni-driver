@@ -143,17 +143,12 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 
 // filterAvailableSubnet filters available subnets from psts and remote delegate
 func filterAvailableSubnet(psts *ccev2.PodSubnetTopologySpread, provider *pstsAllocatorProvider, log *logrus.Entry, operation DirectEndpointOperation) ([]*ccev1.Subnet, error) {
-	var subnets []*ccev1.Subnet
+	var subnetIDs []string
 	for sbnID := range psts.Status.AvailableSubnets {
-		subnet, err := provider.sbnLister.Get(sbnID)
-		if err != nil {
-			log.Warnf("failed to get subnet %s: %v", sbnID, err)
-			continue
-		}
-		subnets = append(subnets, subnet)
+		subnetIDs = append(subnetIDs, sbnID)
 	}
 
-	subnets = operation.FilterAvailableSubnet(subnets)
+	subnets := operation.FilterAvailableSubnetIds(subnetIDs)
 	if len(subnets) == 0 {
 		log.WithField("step", "FilterAvailableSubnet").Error("no available subnet")
 		return nil, fmt.Errorf("no available subnet")

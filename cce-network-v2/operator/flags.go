@@ -93,6 +93,9 @@ func init() {
 	flags.MarkHidden(option.LogOpt)
 	option.BindEnv(option.LogOpt)
 
+	flags.Bool(operatorOption.EnableNodeAnnotationSync, false, "operator will wait for node annotation sync to chose the subnet")
+	option.BindEnv(operatorOption.EnableNodeAnnotationSync)
+
 	var defaultIPAM string
 	switch binaryName {
 	case "operator":

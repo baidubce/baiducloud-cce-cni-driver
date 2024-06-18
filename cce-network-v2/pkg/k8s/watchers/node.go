@@ -17,11 +17,7 @@ package watchers
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"reflect"
 	"sync"
-	"time"
 
 	v1 "k8s.io/api/core/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,9 +28,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/comparator"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/informer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/resources"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
@@ -56,11 +50,8 @@ func (k *K8sWatcher) RegisterNodeSubscriber(s subscriber.Node) {
 }
 
 func nodeEventsAreEqual(oldNode, newNode *v1.Node) bool {
-	if !comparator.MapStringEquals(oldNode.GetLabels(), newNode.GetLabels()) {
-		return false
-	}
-
-	return true
+	return comparator.MapStringEquals(oldNode.GetLabels(), newNode.GetLabels()) &&
+		comparator.MapStringEquals(oldNode.GetAnnotations(), newNode.GetAnnotations())
 }
 
 func (k *K8sWatcher) NodesInit(k8sClient *k8s.K8sClient) {
@@ -130,78 +121,4 @@ func (k *K8sWatcher) GetK8sNode(_ context.Context, nodeName string) (*v1.Node, e
 		}, nodeName)
 	}
 	return nodeInterface.(*v1.Node).DeepCopy(), nil
-}
-
-// netResourceSetUpdater implements the subscriber.Node interface and is used
-// to keep NetResourceSet objects in sync with the node ones.
-type netResourceSetUpdater struct {
-	k8sWatcher *K8sWatcher
-}
-
-func NewNetResourceSetUpdater(k8sWatcher *K8sWatcher) *netResourceSetUpdater {
-	return &netResourceSetUpdater{
-		k8sWatcher: k8sWatcher,
-	}
-}
-
-func (u *netResourceSetUpdater) OnAddNode(newNode *v1.Node, swg *lock.StoppableWaitGroup) error {
-	u.updateNetResourceSet(newNode)
-
-	return nil
-}
-
-func (u *netResourceSetUpdater) OnUpdateNode(oldNode, newNode *v1.Node, swg *lock.StoppableWaitGroup) error {
-	u.updateNetResourceSet(newNode)
-
-	return nil
-}
-
-func (u *netResourceSetUpdater) OnDeleteNode(*v1.Node, *lock.StoppableWaitGroup) error {
-	return nil
-}
-
-func (u *netResourceSetUpdater) updateNetResourceSet(node *v1.Node) {
-	var (
-		controllerName = fmt.Sprintf("sync-node-with-netresourceset (%v)", node.Name)
-	)
-
-	doFunc := func(ctx context.Context) (err error) {
-		{
-			u.k8sWatcher.netResourceSetStoreMU.RLock()
-			defer u.k8sWatcher.netResourceSetStoreMU.RUnlock()
-
-			if u.k8sWatcher.netResourceSetStore == nil {
-				return errors.New("NetResourceSet cache store not yet initialized")
-			}
-
-			netResourceSetInterface, exists, err := u.k8sWatcher.netResourceSetStore.GetByKey(node.Name)
-			if err != nil {
-				return fmt.Errorf("failed to get NetResourceSet resource from cache store: %w", err)
-			}
-			if !exists {
-				return nil
-			}
-
-			netResourceSet := netResourceSetInterface.(*ccev2.NetResourceSet).DeepCopy()
-
-			netResourceSet.Labels = node.GetLabels()
-
-			// If the labels are the same, there is no need to update the NetResourceSet.
-			if reflect.DeepEqual(netResourceSet.Labels, netResourceSetInterface.(*ccev2.NetResourceSet).Labels) {
-				return nil
-			}
-
-			if _, err = k8s.CCEClient().CceV2().NetResourceSets().Update(ctx, netResourceSet, metav1.UpdateOptions{}); err != nil {
-				return fmt.Errorf("failed to update NetResourceSet labels: %w", err)
-			}
-		}
-
-		return nil
-	}
-
-	k8sCM.UpdateController(controllerName,
-		controller.ControllerParams{
-			ErrorRetryBaseDuration: time.Second * 30,
-			DoFunc:                 doFunc,
-		})
 }

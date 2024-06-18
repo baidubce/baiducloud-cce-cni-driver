@@ -37,7 +37,6 @@ func containerSet(hostVeth, contVeth *net.Interface, pr *current.Result) error {
 			}(),
 		})
 		if err != nil {
-			logger.WithError(err).Errorf("failed to add permanent ARP entry for the gateway %q", ipc.Gateway)
 			return fmt.Errorf("failed to add permanent ARP entry for the gateway %q: %v", ipc.Gateway, err)
 		}
 	}

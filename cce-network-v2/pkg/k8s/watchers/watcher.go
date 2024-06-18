@@ -29,7 +29,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	k8s_metrics "k8s.io/client-go/tools/metrics"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -85,8 +84,6 @@ func init() {
 
 var (
 	log = logging.NewSubysLogger("k8s-watcher")
-
-	k8sCM = controller.NewManager()
 )
 
 type nodeDiscoverManager interface {

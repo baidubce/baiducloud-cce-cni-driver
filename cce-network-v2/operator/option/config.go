@@ -168,6 +168,8 @@ const (
 	ResourceENIResyncInterval = "resource-eni-resync-interval"
 	ResourceResyncWorkers     = "resource-resync-workers"
 
+	// BCECustomerMaxENI is the max eni number of customer
+	BCECustomerMaxENI = "bce-customer-max-eni"
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP = "bce-customer-max-ip"
 
@@ -199,6 +201,10 @@ const (
 
 	// SubnetReversedIPNum is the number of reversed IP in subnet, this flag is useful for psts mode
 	PSTSSubnetReversedIPNum = "psts-subnet-reversed-ip-num"
+
+	// EnableNodeAnnotationSync wait for node annotation sync
+	// this flag is useful for vpc-eni mode, operator will wait for node annotation sync to chose the subnet
+	EnableNodeAnnotationSync = "enable-node-annotation-sync"
 )
 
 // OperatorConfig is the configuration used by the operator.
@@ -283,6 +289,10 @@ type OperatorConfig struct {
 	// IPAMUInstanceTags are optional tags used to filter AWS EC2 instances, and interfaces (ENI) attached to them
 	IPAMInstanceTags map[string]string
 
+	// EnableNodeAnnotationSync wait for node annotation sync
+	// this flag is useful for vpc-eni mode, operator will wait for node annotation sync to chose the right subnet
+	EnableNodeAnnotationSync bool
+
 	// IPAM Operator options
 
 	// ClusterPoolIPv4CIDR is the cluster IPv4 podCIDR that should be used to
@@ -323,6 +333,8 @@ type OperatorConfig struct {
 	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
 	ResourceResyncWorkers int64
 
+	// BCECustomerMaxENI is the max eni number of customer
+	BCECustomerMaxENI int
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP int
 
@@ -428,8 +440,8 @@ func (c *OperatorConfig) Populate() {
 	} else {
 		c.APIRateLimit = m
 	}
-	// BCECloud options
 
+	// BCECloud options
 	c.BCECloudVPCID = viper.GetString(BCECloudVPCID)
 	c.BCECloudBaseHost = viper.GetString(BCECloudHost)
 	c.BCECloudRegion = viper.GetString(BCECloudRegion)
@@ -439,6 +451,7 @@ func (c *OperatorConfig) Populate() {
 	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
+	c.BCECustomerMaxENI = viper.GetInt(BCECustomerMaxENI)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
@@ -446,6 +459,7 @@ func (c *OperatorConfig) Populate() {
 	c.EnableRemoteFixedIPGC = viper.GetBool(EnableRemoteFixedIPGC)
 
 	c.CCEClusterID = viper.GetString(CCEClusterID)
+	c.EnableNodeAnnotationSync = viper.GetBool(EnableNodeAnnotationSync)
 
 	// Option maps and slices
 

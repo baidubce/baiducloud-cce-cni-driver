@@ -2,9 +2,7 @@
 vpc-eni 是CCE容器网络提供的标准容器网络模式之一，其特色能力如下：
 1. 完全打通百度智能云VPC，Pod的IP地址是ENI的辅助IP，地址分配自VPC子网。
 2. 支持固定IP和跨子网分配IP策略
-3. 兼容BCC/BBC/EBC机型，同时兼容主网卡辅助 IP 和 ENI 辅助IP模式
-4. 支持IPv6
-5.  BCC 支持跨子网分配 IP
+3. 兼容BCC/BBC机型
 # 1. 关键数据结构
 ## 1.1 NetResourceSet
 每个core/v1.Node都有一个对应的NetResourceSet对象，描述节点上已经绑定的ENI和ENI辅助IP与Pod之间的分配情况，并从core/v1.Node同步便签.
@@ -114,9 +112,7 @@ status:
 
 ## 1.3 ENI
 ENI对象用于描述VPC内的ENI弹性网卡，通常ENI会绑定到一个BCC虚机，由CCE管理并将ENI辅助IP分配给Pod。ENI是有配额的，一台BCC最多可绑定8个ENI。CCE上的ENI不允许删除和解绑，只有在NetResourceSet删除后，`eni-syncer`才会自动清理ENI对象。所以在设计上，ENI对象一定属于某个NetResourceSet对象。
-每个 ENI 都最少绑定了一个安全组，用于设置容器网络的基本安全策略。修改安全组前，请确认安全组不会与容器网络流冲突，否则可能会导致容器的网络数据包被安全组规则拦截。
-
-> 在BBC/EBC中，主网卡默认也是ENI
+> 在BBC中，主网卡默认也是ENI
 
 ```
 # kubectl get eni eni-m90jdaxu30f1 -oyaml
@@ -185,13 +181,11 @@ status:
   * `privateIPSet`: ENI关联的IP列表，每个ENI都有一个主IP，并有多个辅助IP，总体遵守[VPC中对ENI的配额规则](https://cloud.baidu.com/doc/VPC/s/9jwvytur6)。与ENI的某个内部IP有绑定关系的EIP也会在这里同步。
   * `IPv6PrivateIPSet`:ENI关联的IPv6地址列表。
   * `subnetID`: ENI 主IP所在的子网。
-  * `type`: ENI的类型，包含`bcc`/`bbc`/`ebc`三个可选项。
+  * `type`: ENI的类型，包含`bcc`/`bbc`两个可选项。
   * `zoneName`: ENI的可用区。
-  * `useMode`: ENI的使用模式，支持`Primary`独占ENI；`Secondry`ENI辅助IP两种模式；`PrimaryInterfaceWithSecondaryIP`主网卡和辅助IP模式。
+  * `useMode`: ENI的使用模式，支持`Primary`独占ENI；`Secondry`ENI辅助IP两种模式。
   * `routeTableOffset`: 辅助IP模式下ENI使用的独立路由表偏移量。具体路由表ID的计算方法是 routeTableOffset + eniIndex。
   * `installSourceBasedRouting`: 是否为辅助IP安装策略路由规则。该属性用于控制在辅助IP模式下使用cptp插件时的策略路由的设置。
-    * ENI 辅助 IP 模式支持安装策略路由规则
-    * 主网卡辅助 IP 模式由于只有一个网卡，不支持策略路由。
 * `status`
   * `CCEStatus`: ENI在单机上的状态。`Pending`: 单机还未发现ENI;`ReadyOnNode`: ENI已经在节点就绪; `UseInPod`: 独占ENI已经分配给Pod。
   * `CCEStatusChangeLog`: 状态变更历史，最多保存10条。
@@ -200,44 +194,7 @@ status:
   * `gatewayIPv4`: ENI 的路由网关地址。
   * `interfaceIndex`: ENI 的接口索引，指的是接口在操作系统上的序号。
   * `index`: ENI 在单机上的排序序号，从0-253.
-  * `interfaceName`: ENI 在单机上的接口名，命名规则是 `cce-eni-{interfaceIndex}`。主网卡辅助 IP 模式中，接口使用操作系统的默认命名规则。
+  * `interfaceName`: ENI 在单机上的接口名，命名规则是 `cce-eni-{interfaceIndex}`
 
 ### 1.3.1 vpcVersion 同步机制
-ENI 资源默认20s与VPC做一次同步，虽然同步周期较长，但`vpcVersion`机制为了保证ENI数据的时效。`vpcVersion`是基于事件的同步，每当集群中有辅助IP申请或释放事件，会立刻触发ENI与VPC的同步。
-
-# 2. 使用限制
-VPC-ENI 模式使用限制如下：
-* 容器网络的 ENI 不支持用户手动管理，仅支持自动创建和随云主机销毁而自动释放。
-* 已有 ENI 的云主机无法加入 VPC-ENI 容器网络。因为已有 eni 的云主机所绑定的子网可能不在容器网络管理的子网范围内，影响正常的 IP 地址分配。
-
-## 2.1 可用区限制
-* VPC-ENI 模式所有的节点都必须在同一个 VPC 内
-* VPC-ENI 模式仅允许添加有可用容器子网的可用区的云主机
-  * 每个子网都有可用区属性，例如 zoneA。
-  * 每个云主机也都有可用区属性，例如BCC 云主机属于 zoneA。
-* ENI 和云主机实例必须属于同一个可用区，不可跨可用区使用容器子网。例如在 zoneB 的云主机使用 zoneA 的子网。
-
-## 2.2 VPC子网 配额限制
-* 每个VPC最多可创建10个子网。
-* VPC 一旦创建，地址空间则不能修改，能容纳的IP地址数量亦不能修改。
-* **子网一旦创建，可用区和地址空间则不能修改，能容纳的IP地址数量亦不能修改。**
-
-## 2.2 弹性网卡配额限制
-* **ENI 弹性网卡一旦创建，只能选择加入某个VPC下的一个子网，不能指定IP，也不支持修改子网移出。**
-* 每个VPC弹性网卡最大数量500个。
-* 单网卡上IP数量最少1个，最多40个。
-* 云主机可挂载弹性网卡数量=min（主机核数，8）。
-* 云主机绑定的网卡上可配置IP数量。
-* 注意 BBC 和部分 EBC 机型不支持挂载 ENI。 详情查看[主网卡辅助 IP 模式](primary-interface-with-secondary-ip.md)
-
-| 内存 | 	IP数量|
-| -- | -- |
-| 1G	| 2 |
-|（1-8]G |	8 |
-| (8-32]G |	16 |
-| (32-64]G |	30 |
-| 大于64G	| 40 |
-
-## 2.3 操作系统限制
-* 节点加入 CCE 集群前，请确保是纯净的节点，即节点上没有运行过任何容器。推荐将节点执行操作系统重装。
-* 使用 VPC-ENI 模式，推荐内核版本为 5.7 以上。
+ENI 资源默认180s与VPC做一次同步，虽然同步周期较长，但`vpcVersion`机制为了保证ENI数据的时效。`vpcVersion`是基于事件的同步，每当集群中有辅助IP申请或释放事件，会立刻触发ENI与VPC的同步。

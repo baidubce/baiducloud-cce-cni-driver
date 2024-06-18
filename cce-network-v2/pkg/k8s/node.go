@@ -168,6 +168,7 @@ func ParseNode(k8sNode *corev1.Node) *nodeTypes.Node {
 	}
 
 	newNode.Labels = k8sNode.GetLabels()
+	newNode.Annotations = k8sNode.GetAnnotations()
 
 	return newNode
 }

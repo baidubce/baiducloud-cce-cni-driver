@@ -46,10 +46,11 @@ func (nn Identity) String() string {
 // instance. Invalid IP and CIDRs are silently ignored
 func ParseNetResourceSet(n *ccev2.NetResourceSet) (node Node) {
 	node = Node{
-		Name:      n.Name,
-		Cluster:   option.Config.ClusterID,
-		ClusterID: option.Config.ClusterID,
-		Labels:    n.ObjectMeta.Labels,
+		Name:        n.Name,
+		Cluster:     option.Config.ClusterID,
+		ClusterID:   option.Config.ClusterID,
+		Labels:      n.ObjectMeta.Labels,
+		Annotations: n.Annotations,
 	}
 
 	for _, cidrString := range n.Spec.IPAM.PodCIDRs {
@@ -167,7 +168,8 @@ type Node struct {
 	ClusterID string
 
 	// Node labels
-	Labels map[string]string
+	Labels      map[string]string
+	Annotations map[string]string
 }
 
 // Fullname returns the node's full name including the cluster name if a

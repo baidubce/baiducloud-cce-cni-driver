@@ -41,8 +41,8 @@ type fixedIPOperation struct {
 }
 
 // FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (*fixedIPOperation) FilterAvailableSubnet(param []*ccev1.Subnet) []*ccev1.Subnet {
-	return param
+func (*fixedIPOperation) FilterAvailableSubnetIds(param []string) []*ccev1.Subnet {
+	return nil
 }
 
 // AllocateIP When the fixed IP pod is scheduled for the first time,

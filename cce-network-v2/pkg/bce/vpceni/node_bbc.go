@@ -21,6 +21,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/limit"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -32,10 +33,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
-
-const (
-	defaultBBCMaxIPsPerENI = 40
 )
 
 // bccNode is a wrapper of Node, which is used to distinguish bcc node
@@ -123,7 +120,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 			Spec: ccev2.ENISpec{
 				NodeName: n.k8sObj.Name,
 				Type:     ccev2.ENIForBBC,
-				UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
+				UseMode:  ccev2.ENIUseModeSecondaryIP,
 				ENI: models.ENI{
 					ID:               bbceni.Id,
 					Name:             bbceni.Name,
@@ -135,8 +132,6 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 					IPV6PrivateIPSet: ipv6IPSet,
 					MacAddress:       bbceni.MacAddress,
 				},
-				RouteTableOffset:          n.k8sObj.Spec.ENI.RouteTableOffset,
-				InstallSourceBasedRouting: false,
 			},
 			Status: ccev2.ENIStatus{},
 		}
@@ -154,7 +149,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 	return err
 }
 
-func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
+func (n *bbcNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
 	client := k8s.WatcherClient()
 	if client == nil {
@@ -162,15 +157,13 @@ func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, erro
 	}
 	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(n.k8sObj.Name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)
+		scopeLog.Errorf("Get node failed: %v", err)
+		return nil, err
 	}
 
-	// default bbc ip quota
-	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
-	eniQuota.SetMaxENI(1)
-	eniQuota.SetMaxIP(defaultBBCMaxIPsPerENI)
-
-	return eniQuota, nil
+	resourceManger := limit.NewBBCIPResourceManager(client, k8sNode)
+	n.capacity = resourceManger.CalaculateCapacity()
+	return resourceManger, nil
 }
 
 // allocateIPs implements realNodeInf
@@ -232,8 +225,7 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
 	findEni := false
-	eniQuota := n.getENIQuota()
-	if eniQuota != nil {
+	if n.capacity != nil {
 		n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -241,23 +233,22 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 			}
 
 			findEni = true
-			allocation.AvailableForAllocationIPv4 = eniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
+			allocation.AvailableForAllocationIPv4 = n.capacity.MaxIPPerENI - len(e.Spec.PrivateIPSet)
 			allocation.InterfaceID = e.Name
 			allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
 			return nil
 		})
 	}
 	if !findEni {
-		// trigger create bbc eni
-		allocation.AvailableInterfaces = 1
+		return nil, fmt.Errorf("can not find eni for bbc instance %s", n.instanceID)
 	}
 
 	return allocation, nil
 }
 
 // GetMaximumAllocatable implements realNodeInf
-func (*bbcNode) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
-	return eniQuota.GetMaxIP() - 1
+func (*bbcNode) getMaximumAllocatable(capacity *limit.NodeCapacity) int {
+	return capacity.MaxIPPerENI - 1
 }
 
 // GetMinimumAllocatable implements realNodeInf

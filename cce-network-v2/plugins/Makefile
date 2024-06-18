@@ -19,7 +19,7 @@ $(TARGET):
 
 clean:
 	@$(ECHO_CLEAN)
-	$(foreach target,$(TARGETS), $(QUIET)rm -f $(PWD)/output/bin/plugins/$(target))
+	$(QUIET)rm -f $(TARGETS)
 	$(GO) clean $(GOCLEAN)
 
 install:

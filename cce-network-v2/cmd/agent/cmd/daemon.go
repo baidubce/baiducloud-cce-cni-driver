@@ -165,6 +165,19 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		return nil, fmt.Errorf("invalid daemon configuration: %s", err)
 	}
 
+	if option.Config.ReadCNIConfiguration != "" {
+		netConf, err = cnitypes.ReadNetConf(option.Config.ReadCNIConfiguration)
+		if err != nil {
+			log.WithError(err).Error("Unable to read CNI configuration")
+			return nil, fmt.Errorf("unable to read CNI configuration: %w", err)
+		}
+
+		if netConf.MTU != 0 {
+			configuredMTU = netConf.MTU
+			log.WithField("mtu", configuredMTU).Info("Overwriting MTU based on CNI configuration")
+		}
+	}
+
 	set, err := rate.NewAPILimiterSet(option.Config.APIRateLimit, apiRateLimitDefaults, rate.SimpleMetricsObserver)
 	if err != nil {
 		log.WithError(err).Error("unable to configure API rate limiting")
@@ -219,8 +232,9 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 
 	d.k8sWatcher = watchers.NewK8sWatcher()
 
-	d.k8sWatcher.NodeChain.Register(watchers.NewNetResourceSetUpdater(d.k8sWatcher))
+	// register the node discovery with the k8s watcher
 	d.nodeDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
+	d.k8sWatcher.NodeChain.Register(d.nodeDiscovery)
 
 	bootstrapStats.daemonInit.End(true)
 

@@ -212,13 +212,8 @@ type ENIUseMode string
 const (
 	// ENIUseModeSecondaryIP Pod IP is the secondary IP of ENI
 	ENIUseModeSecondaryIP ENIUseMode = "Secondary"
-
 	// ENIUseModePrimaryIP Pod IP is the primamry IP of ENI
 	ENIUseModePrimaryIP ENIUseMode = "Primary"
-
-	// ENIUseModePrimaryWithSecondaryIP Pod IP is the primary interface with secondary IP
-	// this mode is only used for ebc
-	ENIUseModePrimaryWithSecondaryIP ENIUseMode = "PrimaryWithSecondaryIP"
 )
 
 type ObjectReference struct {
@@ -233,5 +228,4 @@ const (
 	ENIDefaultBCC ENIType = ""
 	ENIForBCC     ENIType = "bcc"
 	ENIForBBC     ENIType = "bbc"
-	ENIForEBC     ENIType = "ebc"
 )

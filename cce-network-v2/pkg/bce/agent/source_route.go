@@ -187,8 +187,8 @@ func ensureENINDPProxy(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
 	return nil
 }
 
-func ensureENIArpProxy(scopedLog *logrus.Entry, macAddr string) error {
-	elink, err := link.FindENILinkByMac(macAddr)
+func ensureENIArpProxy(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
+	elink, err := link.FindENILinkByMac(eni.Spec.ENI.MacAddress)
 	if err != nil {
 		return err
 	}

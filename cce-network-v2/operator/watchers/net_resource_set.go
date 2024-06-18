@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -88,25 +88,25 @@ func syncHandlerConstructor(notFoundHandler func(name string) error, foundHandle
 type NetResourceSetUpdateImplementation struct{}
 
 func (c *NetResourceSetUpdateImplementation) Create(node *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
-	return k8s.CCEClient().CceV2().NetResourceSets().Create(context.TODO(), node, meta_v1.CreateOptions{})
+	return k8s.CCEClient().CceV2().NetResourceSets().Create(context.TODO(), node, metav1.CreateOptions{})
 }
 
 func (c *NetResourceSetUpdateImplementation) Get(node string) (*ccev2.NetResourceSet, error) {
-	return k8s.CCEClient().CceV2().NetResourceSets().Get(context.TODO(), node, meta_v1.GetOptions{})
+	return k8s.CCEClient().CceV2().NetResourceSets().Get(context.TODO(), node, metav1.GetOptions{})
 }
 
 func (c *NetResourceSetUpdateImplementation) UpdateStatus(origNode, node *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
 	if origNode == nil || !reflect.DeepEqual(origNode.Status, node.Status) {
-		return k8s.CCEClient().CceV2().NetResourceSets().UpdateStatus(context.TODO(), node, meta_v1.UpdateOptions{})
+		return k8s.CCEClient().CceV2().NetResourceSets().UpdateStatus(context.TODO(), node, metav1.UpdateOptions{})
 	}
-	return nil, nil
+	return origNode, nil
 }
 
 func (c *NetResourceSetUpdateImplementation) Update(origNode, node *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
 	if origNode == nil || !reflect.DeepEqual(origNode.Spec, node.Spec) || !reflect.DeepEqual(origNode.ObjectMeta, node.ObjectMeta) {
-		return k8s.CCEClient().CceV2().NetResourceSets().Update(context.TODO(), node, meta_v1.UpdateOptions{})
+		return k8s.CCEClient().CceV2().NetResourceSets().Update(context.TODO(), node, metav1.UpdateOptions{})
 	}
-	return nil, nil
+	return origNode, nil
 }
 
 func (c *NetResourceSetUpdateImplementation) Lister() listerv2.NetResourceSetLister {

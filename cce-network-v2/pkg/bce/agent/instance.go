@@ -83,6 +83,14 @@ func GenerateENISpec() (eni *api.ENISpec, err error) {
 		} else {
 			eni.PreAllocateENI = 0
 			eni.MaxAllocateENI = 0
+
+			// set bbc primary eni subnet id
+			var sbnID string
+			sbnID, err = defaultMetaClient.GetSubnetID()
+			if err != nil {
+				return
+			}
+			eni.SubnetIDs = append(eni.SubnetIDs, sbnID)
 		}
 	}
 	return

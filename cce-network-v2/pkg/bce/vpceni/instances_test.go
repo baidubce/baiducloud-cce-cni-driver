@@ -14,11 +14,13 @@ func newMockInstancesManager(t *testing.T) *InstancesManager {
 	mockCtl := gomock.NewController(t)
 	mockCloudInterface := cloudtesting.NewMockInterface(mockCtl)
 
-	return newInstancesManager(mockCloudInterface,
+	im := newInstancesManager(mockCloudInterface,
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Lister(),
 		k8s.CCEClient().Informers.Cce().V1().Subnets().Lister(),
 		watchers.CCEEndpointClient,
 	)
+	im.nrsGetterUpdater = watchers.NetResourceSetClient
+	return im
 }
 
 func (im *InstancesManager) GetMockCloudInterface() *cloudtesting.MockInterface {

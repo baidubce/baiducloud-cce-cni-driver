@@ -18,27 +18,28 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/limit"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
-	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // bccNode is a wrapper of Node, which is used to distinguish bcc node
 type bbcNode struct {
 	*bceNode
 
+	primaryENISubnetID string
 	// bbceni is the eni of the node
 	bbceni *ccev2.ENI
 }
@@ -47,12 +48,33 @@ func newBBCNode(super *bceNode) *bbcNode {
 	node := &bbcNode{
 		bceNode: super,
 	}
-	node.instanceType = string(metadata.InstanceTypeExBCC)
-	err := node.createBBCENI(super.log)
-	if err != nil {
-		super.log.Errorf("failed to create bbc eni: %v", err)
+	node.instanceType = string(metadata.InstanceTypeExBBC)
+	if node.tryRefreshBBCENI() == nil {
+		err := node.createBBCENI(super.log)
+		if err != nil {
+			super.log.Errorf("failed to create bbc eni: %v", err)
+		}
 	}
+
 	return node
+}
+
+func (n *bbcNode) tryRefreshBBCENI() *ccev2.ENI {
+	n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		e, ok := iface.Resource.(*eniResource)
+		if !ok {
+			return nil
+		}
+		n.bbceni = &ccev2.ENI{
+			TypeMeta:   e.TypeMeta,
+			ObjectMeta: e.ObjectMeta,
+			Spec:       e.Spec,
+			Status:     e.Status,
+		}
+		n.primaryENISubnetID = e.Spec.SubnetID
+		return nil
+	})
+	return n.bbceni
 }
 
 // createBBCENI means create a eni object for bbc node
@@ -68,12 +90,11 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 		scopedLog.WithError(err).Errorf("failed to get instance bbc eni")
 		return err
 	}
-	scopedLog.WithField("bbceni", logfields.Repr(bbceni)).Debugf("get instance bbc eni success")
+	scopedLog.WithField("bbceni", logfields.Repr(bbceni)).Infof("get instance bbc eni success")
 
-	_, err = bcesync.EnsureSubnet(bbceni.VpcId, bbceni.SubnetId)
+	err = n.refreshAvailableSubnets()
 	if err != nil {
-		scopedLog.Errorf("failed to ensure subnet: %v", err)
-		return err
+		n.appendAllocatedIPError(bbceni.Id, ccev2.NewCustomerErrorStatusChange(ccev2.ErrorCodeNoAvailableSubnet, "failed to refresh available subnets"))
 	}
 
 	var (
@@ -135,6 +156,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 			},
 			Status: ccev2.ENIStatus{},
 		}
+
 		eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create bbc ENI: %w", err)
@@ -146,7 +168,8 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 	}
 	scopedLog.Debugf("got bbc ENI resource successed")
 	n.bbceni = eni
-	return err
+	n.primaryENISubnetID = bbceni.SubnetId
+	return n.updateNrsSubnetIfNeed([]string{bbceni.SubnetId})
 }
 
 func (n *bbcNode) calculateLimiter(scopeLog *logrus.Entry) (limit.IPResourceManager, error) {
@@ -171,14 +194,29 @@ func (n *bbcNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allo
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	var ips *bbc.BatchAddIpResponse
 	if ipv4ToAllocate > 0 {
-		// allocate ip
-		ips, err = n.manager.bceclient.BBCBatchAddIP(ctx, &bbc.BatchAddIpArgs{
-			InstanceId:                     n.instanceID,
-			SecondaryPrivateIpAddressCount: ipv4ToAllocate,
-		})
+		// allocate ip to bbc eni
+		if allocation.PoolID == ipamTypes.PoolID(n.primaryENISubnetID) {
+			ips, err = n.manager.bceclient.BBCBatchAddIP(ctx, &bbc.BatchAddIpArgs{
+				InstanceId:                     n.instanceID,
+				SecondaryPrivateIpAddressCount: ipv4ToAllocate,
+			})
+		} else {
+			ips, err = n.manager.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
+				InstanceId: n.instanceID,
+				SingleEniAndSubentIps: []bbc.SingleEniAndSubentIp{
+					{
+						EniId:                          allocation.InterfaceID,
+						SubnetId:                       string(allocation.PoolID),
+						SecondaryPrivateIpAddressCount: ipv4ToAllocate,
+					},
+				},
+			})
+		}
+
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
-			return nil, nil, fmt.Errorf("allocate ip to bbc eni %s failed: %v", allocation.InterfaceID, err)
+			return nil, nil, fmt.Errorf("allocate %s ip to bbc eni %s failed: %v",
+				string(allocation.PoolID), allocation.InterfaceID, err)
 		}
 		scopedLog.WithField("ips", ips).Debug("allocate ip to bbc eni success")
 
@@ -224,25 +262,48 @@ func (n *bbcNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
-	findEni := false
+
+	if n.tryRefreshBBCENI() == nil {
+		allocation.AvailableInterfaces = 1
+		return allocation, nil
+	}
+
 	if n.capacity != nil {
-		n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		err := n.manager.ForeachInstance(n.instanceID, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil
 			}
 
-			findEni = true
 			allocation.AvailableForAllocationIPv4 = n.capacity.MaxIPPerENI - len(e.Spec.PrivateIPSet)
 			allocation.InterfaceID = e.Name
-			allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
+
+			if n.enableNodeAnnotationSubnet() {
+				sbn := searchMaxAvailableSubnet(n.availableSubnets)
+				if sbn == nil {
+					err = fmt.Errorf("can not find available subnet for bbc instance %s", n.instanceID)
+					n.appendAllocatedIPError(e.Name, ccev2.NewErrorStatusChange(err.Error()))
+					return fmt.Errorf("can not find available subnet for bbc instance %s", n.instanceID)
+				}
+				allocation.PoolID = ipamTypes.PoolID(sbn.Name)
+			} else {
+				allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
+			}
+
+			sbn, err := n.manager.sbnlister.Get(string(allocation.PoolID))
+			if err != nil {
+				err = fmt.Errorf("get subnet %s failed: %v", e.Spec.SubnetID, err)
+				n.appendAllocatedIPError(e.Name, ccev2.NewErrorStatusChange(err.Error()))
+				return err
+			}
+			allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, sbn.Status.AvailableIPNum)
+
 			return nil
 		})
+		if err != nil {
+			return nil, err
+		}
 	}
-	if !findEni {
-		return nil, fmt.Errorf("can not find eni for bbc instance %s", n.instanceID)
-	}
-
 	return allocation, nil
 }
 
@@ -261,23 +322,56 @@ func (n *bbcNode) getMinimumAllocatable() int {
 }
 
 // AllocateIPCrossSubnet implements realNodeInf
-func (*bbcNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error) {
-	return nil, "", fmt.Errorf("bbc not support cross subnet")
+// use for scene 1: bbc node use cross subnet to allocate ip
+// use for scene 2: psts
+// Note that scene 1 and scene 2 cannot be mixed
+func (n *bbcNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error) {
+	if n.tryRefreshBBCENI() == nil {
+		return nil, "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
+	}
+
+	ipv4, _, err := n.allocateIPs(ctx, n.log, &ipam.AllocationAction{
+		PoolID:      ipamTypes.PoolID(sbnID),
+		InterfaceID: n.bbceni.Name,
+	}, 1, 0)
+	return ipv4, "", err
 }
 
 // ReuseIPs implements realNodeInf
-func (*bbcNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
-	return "", fmt.Errorf("bbc not support cross subnet")
+func (n *bbcNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
+	if n.tryRefreshBBCENI() == nil {
+		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
+	}
+	scopeLog := n.log.WithField("func", "reuseIPs")
+
+	// TODO: release ip from bbc/ebc/vpc eni before reuse ip
+	var ipAndSubnets []bbc.IpAndSubnet
+	for _, pip := range ips {
+		ipAndSubnets = append(ipAndSubnets, bbc.IpAndSubnet{
+			PrivateIp: pip.PrivateIPAddress,
+			SubnetId:  pip.SubnetID,
+		})
+	}
+	resp, err := n.manager.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
+		InstanceId: n.instanceID,
+		SingleEniAndSubentIps: []bbc.SingleEniAndSubentIp{
+			{
+				EniId:        n.bbceni.Name,
+				IpAndSubnets: ipAndSubnets,
+			},
+		},
+	})
+
+	if err != nil {
+		scopeLog.WithError(err).Error("failed to reuse ip cross subnet")
+		return "", err
+	} else if len(resp.PrivateIps) == 0 {
+		scopeLog.Error("failed to reuse ip cross subnet without any error")
+		return "", fmt.Errorf("failed to reuse ip cross subnet without any error")
+	}
+	scopeLog.WithField("ips", logfields.Repr(ips)).Info("failed to reuse ip cross subnet")
+
+	return n.bbceni.Name, nil
 }
 
 var _ realNodeInf = &bbcNode{}
-
-// AllocateIP implements endpoint.DirectEndpointOperation
-func (*bccNode) AllocateIP(ctx context.Context, action *endpoint.DirectIPAction) error {
-	return fmt.Errorf("bbc not support direct allocate ip")
-}
-
-// DeleteIP implements endpoint.DirectEndpointOperation
-func (*bccNode) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAction) error {
-	return fmt.Errorf("bbc not support direct delete ip")
-}

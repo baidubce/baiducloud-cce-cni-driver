@@ -8,6 +8,9 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. 新特性: 支持ubuntu 22.04 操作系统，在容器网络环境下，定义 systemd-networkd 的 MacAddressPolicy 为 none。
 4. 新特性：支持 pod 级 Qos
 
+### 2.9.4 [20240305]
+1. [Feature] 支持 BBC 实例通过 Node 上增加 `network.cce.baidubce.com/node-eni-subnet` Anotation 配置指定节点上 ENI 的子网。 
+
 ### 2.9.3 [20240228]
 1. [Feature] cce-network-agent 自动同步节Node的Annoation信息到CRD中。
 2. [Feature] 支持 EBC/BCC 实例通过 Node 上增加 `network.cce.baidubce.com/node-eni-subnet` Anotation 配置指定节点上 ENI 的子网。

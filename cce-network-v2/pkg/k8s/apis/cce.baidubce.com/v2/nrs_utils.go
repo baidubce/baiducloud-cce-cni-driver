@@ -93,8 +93,12 @@ func (n *NetResourceSet) SpeculationNoMoreIPReson(crossSubnet bool) error {
 }
 
 func NewErrorStatusChange(msg string) *StatusChange {
+	return NewCustomerErrorStatusChange(ErrorCodeOpenAPIError, msg)
+}
+
+func NewCustomerErrorStatusChange(code, msg string) *StatusChange {
 	return &StatusChange{
-		Code:    ErrorCodeOpenAPIError,
+		Code:    code,
 		Message: msg,
 		Time:    metav1.Now(),
 	}

@@ -34,6 +34,7 @@ const (
 
 	// errors for open api
 	ErrorCodeOpenAPIError = "OpenAPIError"
+	ErrorCodeSuccess      = "Success"
 )
 
 type CodeError struct {

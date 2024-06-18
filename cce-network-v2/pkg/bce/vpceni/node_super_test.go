@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
@@ -183,7 +185,8 @@ func bccTestContext(t *testing.T) (*bceNode, error) {
 	ccemock.InitMockEnv()
 	im := newMockInstancesManager(t)
 
-	k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "BCC")
+	k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "bcc")
+	k8sObj.Annotations = map[string]string{}
 	err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 	if !assert.NoError(t, err, "ensure nrs to informer failed") {
 		return nil, err
@@ -226,8 +229,22 @@ func Test_bceNode_refreshAvailableSubnets(t *testing.T) {
 		}
 
 		operatorOption.Config.EnableNodeAnnotationSync = true
+		defer func() {
+			operatorOption.Config.EnableNodeAnnotationSync = false
+		}()
 		node.k8sObj.Annotations[k8s.AnnotationNodeAnnotationSynced] = "true"
 		node.k8sObj.Annotations[k8s.AnnotationNodeEniSubnetIDs] = "sbn-vxda1,sbn-vxda2"
+		k8s.CCEClient().CceV2().NetResourceSets().Update(context.TODO(), node.k8sObj, metav1.UpdateOptions{})
+		wait.PollImmediate(time.Microsecond, wait.ForeverTestTimeout, func() (bool, error) {
+			obj, err := node.manager.nrsGetterUpdater.Get(node.k8sObj.Name)
+			if err != nil {
+				return false, err
+			}
+			if len(obj.Annotations) > 0 && obj.Annotations[k8s.AnnotationNodeAnnotationSynced] == "true" {
+				return true, nil
+			}
+			return false, nil
+		})
 
 		exceptSubnetIDs := []string{"sbn-vxda1", "sbn-vxda2"}
 		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, exceptSubnetIDs)

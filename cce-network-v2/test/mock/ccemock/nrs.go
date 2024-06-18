@@ -55,7 +55,7 @@ func NewMockNrs(name, instanceType, useMode string, subnetIDs []string) *ccev2.N
 				SubnetIDs:                 subnetIDs,
 				AvailabilityZone:          "zoneD",
 				InstanceType:              instanceType,
-				UseMode:                   string(ccev2.ENIUseModeSecondaryIP),
+				UseMode:                   useMode,
 				VpcID:                     "vpc-test",
 				SecurityGroups:            []string{"sg-test"},
 				RouteTableOffset:          127,

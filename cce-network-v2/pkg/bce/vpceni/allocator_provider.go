@@ -69,7 +69,7 @@ func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater i
 	} else {
 		iMetrics = &ipamMetrics.NoOpMetrics{}
 	}
-	provider.manager.getterUpdater = getterUpdater
+	provider.manager.nrsGetterUpdater = getterUpdater
 
 	nodeManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, iMetrics,
 		operatorOption.Config.ParallelAllocWorkers, true, false)

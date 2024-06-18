@@ -41,7 +41,7 @@ import (
 type InstancesManager struct {
 	mutex lock.RWMutex
 
-	getterUpdater ipam.NetResourceSetGetterUpdater
+	nrsGetterUpdater ipam.NetResourceSetGetterUpdater
 
 	nodeMap map[string]*bceNode
 

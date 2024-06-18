@@ -48,8 +48,10 @@ const (
 	// AnnotationNodeLabelSynced node speicified subnets id use to create eni and allocate ip
 	AnnotationNodeEniSubnetIDs = "network.cce.baidubce.com/node-eni-subnet-ids"
 
-	AnnotationNodeMaxENINum       = "network.cce.baidubce.com/node-max-eni-num"
-	AnnotationNodeMaxPerENIIPsNum = "network.cce.baidubce.com/node-eni-max-ips-num"
+	AnnotationNodeMaxENINum           = "network.cce.baidubce.com/node-max-eni-num"
+	AnnotationNodeMaxPerENIIPsNum     = "network.cce.baidubce.com/node-eni-max-ips-num"
+	AnnotationNodeMaxRdmaEniNum       = "network.cce.baidubce.com/node-max-rdma-eni-num"
+	AnnotationNodeMaxPerRdmaEniIpsNum = "network.cce.baidubce.com/node-rdma-eni-max-ips-num"
 
 	// FinalizerOfCCEEndpointRemoteIP finalizer to remove ip from remote iaas
 	FinalizerOfCCEEndpointRemoteIP = "RemoteIPFinalizer"
@@ -87,8 +89,10 @@ var (
 	AnnotationPodSubnetTopologySpread = CCEPrefix + "PodSubnetTopologySpread"
 
 	// cce defined k8s resource name
-	ResourceIPForNode  = corev1.ResourceName(CCEPrefix + "ip")
-	ResourceENIForNode = corev1.ResourceName(CCEPrefix + "eni")
+	ResourceIPForNode      = corev1.ResourceName(CCEPrefix + "ip")
+	ResourceENIForNode     = corev1.ResourceName(CCEPrefix + "eni")
+	ResourceRdmaIpForNode  = corev1.ResourceName(CCEPrefix + "rdmaip")
+	ResourceRdmaEniForNode = corev1.ResourceName(CCEPrefix + "rdmaeni")
 
 	// CrossVPCEni resource name
 	ResourceCrossVPCEni = corev1.ResourceName("cross-vpc-eni.cce.io/eni")

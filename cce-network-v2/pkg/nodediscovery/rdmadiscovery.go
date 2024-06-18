@@ -530,32 +530,29 @@ func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourc
 		}
 	}
 
-	if c := rd.NetConf; c != nil {
-		if rdmaNetResourceSet.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
-			if c.IPAM.MinAllocate != 0 {
-				rdmaNetResourceSet.Spec.IPAM.MinAllocate = c.IPAM.MinAllocate
-			}
-			if c.IPAM.PreAllocate != 0 {
-				rdmaNetResourceSet.Spec.IPAM.PreAllocate = c.IPAM.PreAllocate
-			}
-			if c.IPAM.MaxAboveWatermark != 0 {
-				rdmaNetResourceSet.Spec.IPAM.MaxAboveWatermark = c.IPAM.MaxAboveWatermark
-			}
+	// reset eni spec when it is restart
+	if rdmaNetResourceSet.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+		if option.Config.RDMAIPPoolMinAllocateIPs != 0 {
+			rdmaNetResourceSet.Spec.IPAM.MinAllocate = option.Config.RDMAIPPoolMinAllocateIPs
 		}
-		if c.IPAM.ENI != nil {
-			if c.IPAM.ENI.RouteTableOffset > 0 {
-				rdmaNetResourceSet.Spec.ENI.RouteTableOffset = c.IPAM.ENI.RouteTableOffset
-			}
-			if len(c.IPAM.ENI.SecurityGroups) > 0 {
-				rdmaNetResourceSet.Spec.ENI.SecurityGroups = c.IPAM.ENI.SecurityGroups
-			}
-			if c.IPAM.ENI.DeleteOnTermination != nil {
-				rdmaNetResourceSet.Spec.ENI.DeleteOnTermination = c.IPAM.ENI.DeleteOnTermination
-			}
-			if c.IPAM.ENI.UsePrimaryAddress != nil {
-				rdmaNetResourceSet.Spec.ENI.UsePrimaryAddress = c.IPAM.ENI.UsePrimaryAddress
-			}
+		if option.Config.RDMAIPPoolPreAllocate != 0 {
+			rdmaNetResourceSet.Spec.IPAM.PreAllocate = option.Config.RDMAIPPoolPreAllocate
 		}
+		if option.Config.RDMAIPPoolMaxAboveWatermark != 0 {
+			rdmaNetResourceSet.Spec.IPAM.MaxAboveWatermark = option.Config.RDMAIPPoolMaxAboveWatermark
+		}
+		if option.Config.ENI.RouteTableOffset > 0 {
+			rdmaNetResourceSet.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
+		}
+	}
+
+	// update subnet and security group ids
+	rdmaNetResourceSet.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
+	if len(rdmaNetResourceSet.Spec.ENI.SubnetIDs) == 0 {
+		rdmaNetResourceSet.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
+	}
+	if option.Config.ENI.UsePrimaryAddress != nil {
+		rdmaNetResourceSet.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
 	}
 
 	return nil

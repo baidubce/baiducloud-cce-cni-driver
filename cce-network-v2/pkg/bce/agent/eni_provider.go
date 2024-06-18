@@ -92,23 +92,27 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		// primary interface with secondary IP mode
 		// do not need to rename eniLink
 	default:
-		// eni with secondary ip mode
-		if err = eniLink.rename(false); err != nil {
-			scopedLog.WithError(err).Error("rename eniLink falied")
-			return err
-		}
-		// set rule when eni secondary IP mode
-		err = eniLink.ensureLinkConfig()
-		if err != nil {
-			scopedLog.WithError(err).Error("set eniLink falied")
-			return err
-		}
-		if resource.Status.CCEStatus == ccev2.ENIStatusReadyOnNode {
-			if resource.Spec.InstallSourceBasedRouting {
-				err = ensureENIRule(scopedLog, resource)
-				if err != nil {
-					scopedLog.WithError(err).Error("install source based routing falied")
-					return err
+		// secondary interface with secondary IP mode for RDMA
+		// do not need to rename eniLink
+		if resource.Spec.Type != ccev2.ENIForHPC && resource.Spec.Type != ccev2.ENIForERI {
+			// eni with secondary IP mode need to rename eniLink
+			if err = eniLink.rename(false); err != nil {
+				scopedLog.WithError(err).Error("rename eniLink falied")
+				return err
+			}
+			// set rule when eni secondary IP mode
+			err = eniLink.ensureLinkConfig()
+			if err != nil {
+				scopedLog.WithError(err).Error("set eniLink falied")
+				return err
+			}
+			if resource.Status.CCEStatus == ccev2.ENIStatusReadyOnNode {
+				if resource.Spec.InstallSourceBasedRouting {
+					err = ensureENIRule(scopedLog, resource)
+					if err != nil {
+						scopedLog.WithError(err).Error("install source based routing falied")
+						return err
+					}
 				}
 			}
 		}

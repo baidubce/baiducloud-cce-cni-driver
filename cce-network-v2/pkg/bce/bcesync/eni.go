@@ -105,7 +105,7 @@ func (es *VPCENISyncer) StartENISyncer(ctx context.Context, updater syncer.ENIUp
 
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncer) Create(resource *ccev2.ENI) error {
-	if resource.Spec.Type == ccev2.ENIForBBC {
+	if resource.Spec.Type == ccev2.ENIForBBC || resource.Spec.Type == ccev2.ENIForHPC || resource.Spec.Type == ccev2.ENIForERI {
 		return es.physicalEni.Create(resource)
 	}
 	if resource.Spec.Type == ccev2.ENIForEBC && resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
@@ -128,7 +128,7 @@ func (es *VPCENISyncer) ResyncENI(ctx context.Context) time.Duration {
 
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncer) Update(resource *ccev2.ENI) error {
-	if resource.Spec.Type == ccev2.ENIForBBC {
+	if resource.Spec.Type == ccev2.ENIForBBC || resource.Spec.Type == ccev2.ENIForHPC || resource.Spec.Type == ccev2.ENIForERI {
 		return es.physicalEni.Update(resource)
 	}
 	if resource.Spec.Type == ccev2.ENIForEBC && resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {

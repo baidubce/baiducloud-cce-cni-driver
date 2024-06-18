@@ -427,7 +427,7 @@ func (c *OperatorConfig) Populate() {
 	c.PSTSSubnetReversedIPNum = viper.GetInt(PSTSSubnetReversedIPNum)
 	c.EnableIPv4 = viper.GetBool(option.EnableIPv4Name)
 	c.EnableIPv6 = viper.GetBool(option.EnableIPv6Name)
-	c.EnableRDMA = viper.GetBool(option.EnableRDMA)
+	c.EnableRDMA = viper.GetBool(option.EnableRDMAName)
 	c.CCEK8sNamespace = viper.GetString(CCEK8sNamespace)
 	if c.CCEK8sNamespace == "" {
 		if option.Config.K8sNamespace == "" {
@@ -458,7 +458,6 @@ func (c *OperatorConfig) Populate() {
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
-
 	c.BCECustomerMaxRdmaIP = viper.GetInt(BCECustomerMaxRdmaIP)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)

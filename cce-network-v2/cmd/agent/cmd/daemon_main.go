@@ -213,6 +213,9 @@ func initializeFlags() {
 	flags.Bool(option.EnableIPv6NDPName, defaults.EnableIPv6NDP, "Enable IPv6 NDP support")
 	option.BindEnv(option.EnableIPv6NDPName)
 
+	flags.Bool(option.EnableRDMAName, defaults.EnableRDMA, "Enable RDMA support")
+	option.BindEnv(option.EnableRDMAName)
+
 	flags.String(option.IPv6MCastDevice, "", "Device that joins a Solicited-Node multicast group for IPv6")
 	option.BindEnv(option.IPv6MCastDevice)
 
@@ -245,16 +248,31 @@ func initializeFlags() {
 	option.BindEnv(option.IPAM)
 
 	flags.Int(option.IPPoolMinAllocateIPs, 2,
-		"MinAllocate is the minimum number of IPs that must be allocated when the node is first bootstrapped.")
+		"IPPoolMinAllocateIPs is the minimum number of IPs that must be allocated when the Ethernet NetResourceSet of the node is first bootstrapped.")
 	option.BindEnv(option.IPPoolMinAllocateIPs)
 
 	flags.Int(option.IPPoolPreAllocate, 2,
-		"PreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec. ")
+		"IPPoolPreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec of the NetResourceSet. ")
 	option.BindEnv(option.IPPoolPreAllocate)
 
 	flags.Int(option.IPPoolMaxAboveWatermark, 2,
-		"MaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark.")
+		"IPPoolMaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark.")
 	option.BindEnv(option.IPPoolMaxAboveWatermark)
+
+	flags.Int(option.MaxRDMAIPsPerENI, 0, "max RDMA IPs can be allocated to a RDMA ENI , 0 means no limit")
+	option.BindEnv(option.MaxRDMAIPsPerENI)
+
+	flags.Int(option.RDMAIPPoolMinAllocateIPs, 2,
+		"RDMAIPPoolMinAllocateIPs is the minimum number of IPs that must be allocated when the RDMA NetResourceSet of the node is first bootstrapped.")
+	option.BindEnv(option.RDMAIPPoolMinAllocateIPs)
+
+	flags.Int(option.RDMAIPPoolPreAllocate, 2,
+		"RDMAIPPoolPreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec of the RDMA NetResourceSet. ")
+	option.BindEnv(option.RDMAIPPoolPreAllocate)
+
+	flags.Int(option.RDMAIPPoolMaxAboveWatermark, 2,
+		"RDMAIPPoolMaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark for the RDMA NetResourceSet.")
+	option.BindEnv(option.RDMAIPPoolMaxAboveWatermark)
 
 	flags.String(option.IPv4Range, AutoCIDR, "Per-node IPv4 endpoint prefix, e.g. 10.16.0.0/16")
 	option.BindEnv(option.IPv4Range)
@@ -485,9 +503,6 @@ func initializeFlags() {
 
 	flags.StringSlice(option.ENIEnterpriseSecurityGroupIds, []string{}, "enterprise security group ids")
 	option.BindEnv(option.ENIEnterpriseSecurityGroupIds)
-
-	flags.Int(option.MaxRDMAIPsPerENI, 0, "max RDMA IPs can be allocated to a RDMA ENI , 0 means no limit")
-	option.BindEnv(option.MaxRDMAIPsPerENI)
 
 	flags.Bool(option.EnableBandwidthManager, true, "enable bandwidth manager")
 	option.BindEnv(option.EnableBandwidthManager)

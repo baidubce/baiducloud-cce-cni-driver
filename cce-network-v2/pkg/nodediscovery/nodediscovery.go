@@ -450,8 +450,8 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 				}
 			}
 
-			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
 			// update subnet and security group ids
+			nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
 			if len(nodeResource.Spec.ENI.SubnetIDs) == 0 {
 				nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
 			}

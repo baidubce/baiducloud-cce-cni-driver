@@ -191,18 +191,6 @@ ccedConfig:
   eni-pre-allocate-num: 1
   eni-route-table-offset: 127
 
-  # IP池设置
-  ippool-min-allocate-ips: 2
-  # 每个节点缓存的IP数量
-  ippool-pre-allocate-ips: 2
-  ippool-max-above-watermark: 2
-    # RDMA IP池设置
-  rdmaippool:
-    enabled: true
-    minAllocate: 12
-    preAllocate: 12
-    maxAboveWatermark: 2
-
   # api 限流配置
   default-api-burst: 5
   default-api-qps: 5

@@ -27,9 +27,9 @@ type simpleIPQuotaManager struct {
 	instanceID string
 }
 
-// patchENICapacityInfoToNode patches eni capacity info to node if not exists.
+// patchRdmaEniCapacityInfoToNode patches eni capacity info to node if not exists.
 // so user can reset these values.
-func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Context, maxENINum, maxIPNum int) error {
+func (manager *simpleIPQuotaManager) patchRdmaEniCapacityInfoToNode(ctx context.Context, maxRdmaEniNum, maxRdmaIpNum int) error {
 	node := manager.node
 	if node.Annotations == nil {
 		node.Annotations = make(map[string]string)
@@ -37,21 +37,21 @@ func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Cont
 
 	// update node capacity
 	needUpdateIPResourceFlag := true
-	ipPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "ip", maxIPNum)
-	if ipRe, ok := node.Status.Capacity[k8s.ResourceIPForNode]; ok {
-		if ipRe.Value() == int64(maxIPNum) {
+	ipPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "rdmaip", maxRdmaIpNum)
+	if ipRe, ok := node.Status.Capacity[k8s.ResourceRdmaIpForNode]; ok {
+		if ipRe.Value() == int64(maxRdmaIpNum) {
 			needUpdateIPResourceFlag = false
 		}
-		ipPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "ip", maxIPNum)
+		ipPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "rdmaip", maxRdmaIpNum)
 	}
 
 	needUpdateENIResourceFlag := true
-	eniPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "eni", maxENINum)
-	if eniRe, ok := node.Status.Capacity[k8s.ResourceENIForNode]; ok {
-		if eniRe.Value() == int64(maxENINum) {
+	eniPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "rdmaeni", maxRdmaEniNum)
+	if eniRe, ok := node.Status.Capacity[k8s.ResourceRdmaEniForNode]; ok {
+		if eniRe.Value() == int64(maxRdmaEniNum) {
 			needUpdateENIResourceFlag = false
 		}
-		eniPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "eni", maxENINum)
+		eniPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "rdmaeni", maxRdmaEniNum)
 	}
 
 	// patch annotations
@@ -61,13 +61,13 @@ func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Cont
 		if err != nil {
 			return err
 		}
-		log.WithContext(ctx).Infof("patch ip resource of node [%s]  (maxENI: %d, maxIP: %d) to node capacity success", node.Name, maxENINum, maxIPNum)
+		log.WithContext(ctx).Infof("patch rdma ip resource of node [%s]  (maxRdmaEni: %d, maxRdmaIp: %d) to node capacity success", node.Name, maxRdmaEniNum, maxRdmaIpNum)
 	}
 	return nil
 }
 
-// ENIQuotaManager SyncCapacity syncs node capacity
-type ENIQuotaManager interface {
+// RdmaEniQuotaManager SyncCapacity syncs node capacity
+type RdmaEniQuotaManager interface {
 	GetMaxENI() int
 	SetMaxENI(max int)
 	GetMaxIP() int
@@ -89,13 +89,13 @@ type customerIPQuota struct {
 	maxIPPerENI int
 }
 
-var _ ENIQuotaManager = &customerIPQuota{}
+var _ RdmaEniQuotaManager = &customerIPQuota{}
 
 func newCustomerIPQuota(
 	log *logrus.Entry,
 	kubeClient kubernetes.Interface, node *corev1.Node, instanceID string,
 	bceclient cloud.Interface,
-) ENIQuotaManager {
+) RdmaEniQuotaManager {
 	return &customerIPQuota{
 		simpleIPQuotaManager: &simpleIPQuotaManager{
 			kubeClient: kubeClient,
@@ -136,39 +136,5 @@ func (ciq *customerIPQuota) SyncCapacityToK8s(ctx context.Context) error {
 	if maxIP <= 0 {
 		maxIP = ciq.maxIPPerENI - 1
 	}
-	return ciq.patchENICapacityInfoToNode(ctx, ciq.maxENINum, maxIP)
-}
-
-// calculateMaxIPPerENI returns the max num of IPs that can be attached to single ENI
-// Ref: https://cloud.baidu.com/doc/VPC/s/0jwvytzll
-func calculateMaxIPPerENI(memoryCapacityInGB int) int {
-	maxIPNum := 0
-
-	switch {
-	case memoryCapacityInGB > 0 && memoryCapacityInGB < 2:
-		maxIPNum = 2
-	case memoryCapacityInGB >= 2 && memoryCapacityInGB <= 8:
-		maxIPNum = 8
-	case memoryCapacityInGB > 8 && memoryCapacityInGB <= 32:
-		maxIPNum = 16
-	case memoryCapacityInGB > 32 && memoryCapacityInGB <= 64:
-		maxIPNum = 30
-	case memoryCapacityInGB > 64:
-		maxIPNum = 40
-	}
-	return maxIPNum
-}
-
-// calculateMaxENIPerNode returns the max num of ENIs that can be attached to a node
-func calculateMaxENIPerNode(CPUCount int) int {
-	maxENINum := 0
-
-	switch {
-	case CPUCount > 0 && CPUCount < 8:
-		maxENINum = CPUCount
-	case CPUCount >= 8:
-		maxENINum = 8
-	}
-
-	return maxENINum
+	return ciq.patchRdmaEniCapacityInfoToNode(ctx, ciq.maxENINum, maxIP)
 }

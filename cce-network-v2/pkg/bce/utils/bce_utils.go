@@ -55,7 +55,32 @@ func generateNetResourceSetName(nodeName, macAddress, vifFeatures string) (netRe
 	macStr2 := strings.Replace(macStr1, "-", "", -1)
 	vifFeaturesStr := strings.Replace(vifFeatures, "_", "", -1)
 	netResourceSetName = fmt.Sprintf("%s-%s-%s", nodeName, macStr2, vifFeaturesStr)
+	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
 	return netResourceSetName
+}
+
+func getNodeNameFromRdmaNetResourceSetName(netResourceSetName, rdmaTag string) (nodeName string) {
+	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	index1 := strings.Index(netResourceSetName, rdmaTag)
+	nodeNameMacStr := netResourceSetName[:index1-1]
+	index2 := strings.LastIndex(nodeNameMacStr, "-")
+	nodeName = nodeNameMacStr[:index2]
+	return nodeName
+}
+
+func GetNodeNameFromNetResourceSetName(netResourceSetName string) (nodeName string) {
+	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	underlayRDMA := strings.Replace(string(ccev2.ENIForHPC), "_", "", -1)
+	overlayRDMA := strings.Replace(string(ccev2.ENIForERI), "_", "", -1)
+	if strings.Contains(netResourceSetName, underlayRDMA) {
+		nodeName = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, underlayRDMA)
+	} else if strings.Contains(netResourceSetName, overlayRDMA) {
+		nodeName = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, overlayRDMA)
+	} else {
+		nodeName = netResourceSetName
+	}
+
+	return nodeName
 }
 
 func generateCCERdmaEndpointName(podName, macAddress string) (endpointName string) {

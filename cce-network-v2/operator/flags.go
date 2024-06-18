@@ -186,8 +186,8 @@ func init() {
 			option.EnableIPv6Name, "true"))
 	option.BindEnv(operatorOption.NodeCIDRMaskSizeIPv6)
 
-	flags.Bool(option.EnableRDMA, defaults.EnableRDMA, "Enable RDMA support")
-	option.BindEnv(option.EnableRDMA)
+	flags.Bool(option.EnableRDMAName, defaults.EnableRDMA, "Enable RDMA support")
+	option.BindEnv(option.EnableRDMAName)
 
 	flags.String(option.K8sAPIServer, "", "Kubernetes API server URL")
 	option.BindEnv(option.K8sAPIServer)

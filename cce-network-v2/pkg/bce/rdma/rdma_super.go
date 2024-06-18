@@ -46,6 +46,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
 
 const (
@@ -67,7 +68,7 @@ const (
 )
 
 type realNetResourceSetInf interface {
-	refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error)
+	refreshENIQuota(scopeLog *logrus.Entry) (RdmaEniQuotaManager, error)
 	createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error)
 	// PrepareIPAllocation is called to calculate the number of IPs that
 	// can be allocated on the node and whether a new network interface
@@ -79,7 +80,7 @@ type realNetResourceSetInf interface {
 		ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error)
 
 	releaseIPs(ctx context.Context, iaasClient client.IaaSClient, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error
-	getMaximumAllocatable(eniQuota ENIQuotaManager) int
+	getMaximumAllocatable(eniQuota RdmaEniQuotaManager) int
 	getMinimumAllocatable() int
 
 	// direct ip allocation
@@ -111,11 +112,14 @@ type bceRDMANetResourceSet struct {
 	instanceID   string
 	instanceType string
 
+	// bcc instance info
+	bccInfo *bccapi.InstanceModel
+
 	// The node currently being created by ENI should have only one.
 	creatingENI *ccev2.ENI
 
 	// limit
-	eniQuota               ENIQuotaManager
+	eniQuota               RdmaEniQuotaManager
 	lastResyncEniQuotaTime time.Time
 	limiterLock            lock.RWMutex
 
@@ -130,20 +134,22 @@ type bceRDMANetResourceSet struct {
 
 	eventRecorder record.EventRecorder
 
-	log *logrus.Entry
+	log                     *logrus.Entry
+	eniAllocatedIPsErrorMap map[string]*ccev2.StatusChange
 }
 
 // NewNetResourceSet returns a new NetResourceSet
 func NewNetResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *rdmaInstancesManager) *bceRDMANetResourceSet {
 	// 1. Create a new RDMA NetResourceSet object
 	anrs := &bceRDMANetResourceSet{
-		node:              node,
-		k8sObj:            k8sObj,
-		manager:           manager,
-		instanceID:        k8sObj.Spec.InstanceID,
-		expiredVPCVersion: make(map[string]int64),
-		eventRecorder:     k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: rdmaSubsys}),
-		log:               logging.NewSubysLogger(rdmaSubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("netResourceSetName", k8sObj.Name),
+		node:                    node,
+		k8sObj:                  k8sObj,
+		manager:                 manager,
+		instanceID:              k8sObj.Spec.InstanceID,
+		expiredVPCVersion:       make(map[string]int64),
+		eventRecorder:           k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: rdmaSubsys}),
+		log:                     logging.NewSubysLogger(rdmaSubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("netResourceSetName", k8sObj.Name),
+		eniAllocatedIPsErrorMap: make(map[string]*ccev2.StatusChange),
 	}
 
 	// 2. Create a new provider object for this node
@@ -155,7 +161,7 @@ func NewNetResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, man
 	return anrs
 }
 
-func (n *bceRDMANetResourceSet) getRdmaEniQuota() ENIQuotaManager {
+func (n *bceRDMANetResourceSet) getRdmaEniQuota() RdmaEniQuotaManager {
 	n.limiterLock.Lock()
 	defer n.limiterLock.Unlock()
 
@@ -194,8 +200,8 @@ slowPath:
 }
 
 // slow path to claculate limiter
-func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.Entry) ENIQuotaManager {
-	eniQuota, err := n.real.refreshENIQuota(scopedLog)
+func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.Entry) RdmaEniQuotaManager {
+	rdmaEniQuota, err := n.real.refreshENIQuota(scopedLog)
 	if err != nil {
 		scopedLog.Errorf("calculate eniQuota failed: %v", err)
 		return nil
@@ -203,59 +209,59 @@ func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.E
 
 	if len(n.k8sObj.Annotations) > 0 {
 		// override max eni num from annotation
-		if maxENIStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxENINum]; ok {
-			maxENI, err := strconv.Atoi(maxENIStr)
+		if maxRdmaEniStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxRdmaEniNum]; ok {
+			maxRdmaEni, err := strconv.Atoi(maxRdmaEniStr)
 			if err != nil {
-				scopedLog.Errorf("parse max eni num [%s] from annotation failed: %v", maxENIStr, err)
-			} else if maxENI < eniQuota.GetMaxENI() {
-				scopedLog.Warnf("max eni num from annotation is smaller than real: %d < %d", maxENI, eniQuota.GetMaxENI())
-			} else if maxENI >= 0 {
-				eniQuota.SetMaxENI(maxENI)
-				scopedLog.Infof("override max eni num from annotation: %d", maxENI)
+				scopedLog.Errorf("parse max rdma eni num [%s] from annotation failed: %v", maxRdmaEniStr, err)
+			} else if maxRdmaEni < rdmaEniQuota.GetMaxENI() {
+				scopedLog.Warnf("max eni num from annotation is smaller than real: %d < %d", maxRdmaEni, rdmaEniQuota.GetMaxENI())
+			} else if maxRdmaEni >= 0 {
+				rdmaEniQuota.SetMaxENI(maxRdmaEni)
+				scopedLog.Infof("override max eni num from annotation: %d", maxRdmaEni)
 			}
 		}
 
 		// override max ip num from annotation
-		if maxIPStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum]; ok {
-			maxIP, err := strconv.Atoi(maxIPStr)
+		if maxRdmaIpStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxPerRdmaEniIpsNum]; ok {
+			maxRdmaIp, err := strconv.Atoi(maxRdmaIpStr)
 			if err != nil {
-				scopedLog.Errorf("parse max ip num [%s] from annotation failed: %v", maxIPStr, err)
-			} else if maxIP >= 0 {
-				eniQuota.SetMaxIP(maxIP)
+				scopedLog.Errorf("parse max rdma ip num [%s] from annotation failed: %v", maxRdmaIpStr, err)
+			} else if maxRdmaIp >= 0 {
+				rdmaEniQuota.SetMaxIP(maxRdmaIp)
 			}
 		}
 	}
 
 	// if eniQuota is empty, it means the node has not set quota
 	// it should be retry later
-	if eniQuota.GetMaxENI() == 0 && eniQuota.GetMaxIP() == 0 {
+	if rdmaEniQuota.GetMaxENI() == 0 && rdmaEniQuota.GetMaxIP() == 0 {
 		return nil
 	}
 	// 3. Override the CCE Node capacity to the CCE Node object
-	err = n.overrideENICapacityToNode(eniQuota)
+	err = n.overrideENICapacityToNode(rdmaEniQuota)
 	if err != nil {
 		scopedLog.Errorf("override ENI capacity to NetResourceSet failed: %v", err)
 		return nil
 	}
 
-	n.eniQuota = eniQuota
+	n.eniQuota = rdmaEniQuota
 	n.lastResyncEniQuotaTime = time.Now()
 
 	scopedLog.WithFields(logrus.Fields{
-		"maxENI":      n.eniQuota.GetMaxENI(),
-		"maxIPPerENI": n.eniQuota.GetMaxIP(),
-	}).Info("override ENI capacity to NetResourceSet success")
+		"maxRdmaEni":          n.eniQuota.GetMaxENI(),
+		"maxRdmaIpPerRdmaEni": n.eniQuota.GetMaxIP(),
+	}).Info("override RDMA ENI capacity to NetResourceSet success")
 	return n.eniQuota
 }
 
 // overrideENICapacityToNode accoding to the Node.limiter field, override the
 // capacity of ENI to the Node.k8sObj.Spec
-func (n *bceRDMANetResourceSet) overrideENICapacityToNode(eniQuota ENIQuotaManager) error {
+func (n *bceRDMANetResourceSet) overrideENICapacityToNode(rdmaEniQuota RdmaEniQuotaManager) error {
 	ctx := logfields.NewContext()
 	// todo move capacity to better place in k8s rest api
-	err := eniQuota.SyncCapacityToK8s(ctx)
+	err := rdmaEniQuota.SyncCapacityToK8s(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to sync eni capacity to k8s node: %v", err)
+		return fmt.Errorf("failed to sync rdma eni capacity to k8s node: %v", err)
 	}
 	// update the node until 30s timeout
 	// if update operation return error, we will get the leatest version of node and try again
@@ -265,8 +271,8 @@ func (n *bceRDMANetResourceSet) overrideENICapacityToNode(eniQuota ENIQuotaManag
 			return false, err
 		}
 		k8sObj := old.DeepCopy()
-		k8sObj.Spec.ENI.MaxAllocateENI = eniQuota.GetMaxENI()
-		k8sObj.Spec.ENI.MaxIPsPerENI = eniQuota.GetMaxIP()
+		k8sObj.Spec.ENI.MaxAllocateENI = rdmaEniQuota.GetMaxENI()
+		k8sObj.Spec.ENI.MaxIPsPerENI = rdmaEniQuota.GetMaxIP()
 		if k8sObj.Annotations == nil {
 			k8sObj.Annotations = map[string]string{}
 		}
@@ -394,6 +400,46 @@ func (n *bceRDMANetResourceSet) CreateInterface(ctx context.Context, allocation 
 	return n.real.createInterface(ctx, allocation, scopedLog)
 }
 
+// appendAllocatedIPError append eni allocated ip error to bcenode
+// those errors will be added to the status of nrs by 2 minutes
+func (n *bceRDMANetResourceSet) appendAllocatedIPError(eniID string, openAPIStatus *ccev2.StatusChange) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	n.eniAllocatedIPsErrorMap[eniID] = openAPIStatus
+
+	// append status change to nrs event
+	if openAPIStatus.Code != ccev2.ErrorCodeSuccess {
+		n.eventRecorder.Eventf(
+			n.k8sObj, corev1.EventTypeWarning, openAPIStatus.Code, openAPIStatus.Message)
+	}
+}
+
+// refreshENIAllocatedIPErrors fill nrs status with eni allocated ip errors
+// error are only valid if they occured within the last 10 minutes
+func (n *bceRDMANetResourceSet) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+
+	now := time.Now()
+	for eniID := range resource.Status.ENIs {
+		eniStastic := resource.Status.ENIs[eniID]
+		eniStastic.LastAllocatedIPError = nil
+
+		if eniStatus, ok := n.eniAllocatedIPsErrorMap[eniID]; ok {
+			if now.Sub(n.eniAllocatedIPsErrorMap[eniID].Time.Time) < 10*time.Minute {
+				eniStastic.LastAllocatedIPError = eniStatus
+			}
+		}
+	}
+
+	for eniID := range n.eniAllocatedIPsErrorMap {
+		if _, ok := resource.Status.ENIs[eniID]; !ok {
+			delete(n.eniAllocatedIPsErrorMap, eniID)
+		}
+	}
+}
+
 // PopulateStatusFields is called to give the implementation a chance
 // to populate any implementation specific fields in NetResourceSet.Status.
 func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResourceSet) {
@@ -441,6 +487,7 @@ func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 	}
 	resource.Status.ENIs = eniStatusMap
 	resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
+	n.refreshENIAllocatedIPErrors(resource)
 }
 
 // PrepareIPAllocation is called to calculate the number of IPs that

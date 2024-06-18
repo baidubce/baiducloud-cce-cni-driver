@@ -26,6 +26,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -37,7 +38,8 @@ import (
 )
 
 const (
-	defaultRdmaMaxIPsPerENI = 40
+	defaltRdmaEniNums       = 1
+	defaultRdmaMaxIPsPerENI = 13
 )
 
 // rdmaNetResourceSetWrapper is a wrapper of NetResourceSet, which is used to distinguish no-RDMA NetResourceSet
@@ -58,6 +60,23 @@ func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResource
 		super.log.Errorf("failed to create eri or hpc eni: %v", err)
 	}
 	return node
+}
+
+func (n *rdmaNetResourceSetWrapper) tryRefreshRDMAENI() *ccev2.ENI {
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		e, ok := iface.Resource.(*eniResource)
+		if !ok {
+			return nil
+		}
+		n.rdmaeni = &ccev2.ENI{
+			TypeMeta:   e.TypeMeta,
+			ObjectMeta: e.ObjectMeta,
+			Spec:       e.Spec,
+			Status:     e.Status,
+		}
+		return nil
+	})
+	return n.rdmaeni
 }
 
 // find eni by mac address, return matched eni.
@@ -172,20 +191,52 @@ func (n *rdmaNetResourceSetWrapper) createRdmaENI(scopedLog *logrus.Entry) error
 	return err
 }
 
-func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
-	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
+func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() error {
+	if n.bccInfo != nil {
+		return nil
+	}
+	bccInfo, err := n.manager.bceClient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	if err != nil {
+		n.log.Errorf("faild to get bcc instance detail: %v", err)
+		return err
+	}
+	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
+	n.bccInfo = bccInfo
+
+	return nil
+}
+
+func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (RdmaEniQuotaManager, error) {
+	scopeLog = scopeLog.WithField("netResourceSetName", n.k8sObj.Name).WithField("method", "generateRdmaIpResourceManager")
 	client := k8s.WatcherClient()
 	if client == nil {
 		scopeLog.Fatal("K8s client is nil")
 	}
-	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(n.k8sObj.Name)
+	nodeName := bceutils.GetNodeNameFromNetResourceSetName(n.k8sObj.Name)
+	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(nodeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)
 	}
 
-	// default bbc ip quota
+	err = n.refreshBCCInfo()
+	if err != nil {
+		return nil, err
+	}
+	// if bcc instance is not created by cce-network-v2, there is no need to check IP resouce
+	if n.bccInfo == nil {
+		return nil, fmt.Errorf("bcc info instance is nil")
+	}
+
+	// default rdma ip quota
 	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClient)
-	eniQuota.SetMaxENI(1)
+
+	// Expect all BCC models to support ERI
+	if n.bccInfo.EriQuota != 0 {
+		eniQuota.SetMaxENI(n.bccInfo.EriQuota)
+		if n.bccInfo.EriQuota == 0 {
+			eniQuota.SetMaxENI(defaltRdmaEniNums)
+		}
+	}
 	eniQuota.SetMaxIP(defaultRdmaMaxIPsPerENI)
 
 	return eniQuota, nil
@@ -246,29 +297,42 @@ func (n *rdmaNetResourceSetWrapper) releaseIPs(ctx context.Context, iaasClient c
 func (n *rdmaNetResourceSetWrapper) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
-	findEni := false
-	// The limits include the primary IP, so we need to take it into account
-	// when computing the effective number of available addresses on the ENI.
-	effectiveLimits := 0
-	if n.eniQuota != nil {
-		n.eniQuota.GetMaxIP()
-		scopedLog.WithFields(logrus.Fields{
-			"addressLimit": effectiveLimits,
-		}).Debug("Considering ENI for allocation")
+
+	if n.tryRefreshRDMAENI() == nil {
+		allocation.AvailableInterfaces = 1
+		return allocation, nil
 	}
 
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
-		e, ok := iface.Resource.(*eniResource)
-		if !ok {
-			return nil
-		}
+	findEni := false
+	rdmaEniQuota := n.getRdmaEniQuota()
+	if rdmaEniQuota != nil {
+		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+			e, ok := iface.Resource.(*eniResource)
+			if !ok {
+				return nil
+			}
 
-		findEni = true
-		allocation.AvailableForAllocationIPv4 = math.IntMax(effectiveLimits-len(e.Spec.ENI.PrivateIPSet), 0)
-		allocation.InterfaceID = e.Name
-		allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
-		return nil
-	})
+			findEni = true
+			allocation.AvailableForAllocationIPv4 = rdmaEniQuota.GetMaxIP() - len(e.Spec.PrivateIPSet)
+			allocation.InterfaceID = e.Name
+			allocation.PoolID = ipamTypes.PoolID(e.Spec.SubnetID)
+
+			if n.k8sObj.Spec.ENI.InstanceType == bceutils.OverlayRDMA {
+				sbn, err := n.manager.sbnLister.Get(string(allocation.PoolID))
+				if err != nil {
+					err = fmt.Errorf("get subnet %s failed: %v", e.Spec.SubnetID, err)
+					n.appendAllocatedIPError(e.Name, ccev2.NewErrorStatusChange(err.Error()))
+					return err
+				}
+
+				allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, sbn.Status.AvailableIPNum)
+			} else {
+				allocation.AvailableForAllocationIPv4 = math.IntMin(allocation.AvailableForAllocationIPv4, n.getMaximumAllocatable(rdmaEniQuota))
+			}
+			return nil
+		})
+
+	}
 
 	if !findEni {
 		return nil, fmt.Errorf("can not find eri for hpc instance %s", n.instanceID)
@@ -278,7 +342,7 @@ func (n *rdmaNetResourceSetWrapper) prepareIPAllocation(scopedLog *logrus.Entry)
 }
 
 // GetMaximumAllocatable implements realNodeInf
-func (*rdmaNetResourceSetWrapper) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
+func (*rdmaNetResourceSetWrapper) getMaximumAllocatable(eniQuota RdmaEniQuotaManager) int {
 	return eniQuota.GetMaxIP() - 1
 }
 

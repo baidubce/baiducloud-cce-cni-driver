@@ -20,6 +20,7 @@ const (
 	pluginNameEnim            = "enim"
 	pluginNameExclusiveDevice = "exclusive-device"
 	pluginNameSbrEIP          = "sbr-eip"
+	pluginNameRoce            = "roce"
 
 	// external plugins
 	pluginNamePortMap = "portmap"
@@ -52,6 +53,9 @@ var (
 			},
 			"externalSetMarkChain": "KUBE-MARK-MASQ",
 		}),
+
+		// roce cni plugin is enabled by default. It is only manually disenabled for users
+		pluginNameRoce: NewCNIPlugin(pluginNameRoce, nil),
 	}
 
 	log = logging.NewSubysLogger("plugin-manager")
@@ -100,6 +104,9 @@ func (plugin CniPlugin) GetType() string {
 //			,{
 //				"type": "endpoint-probe"
 //			}
+//          ,{
+//				"type": "roce"
+//			}
 //		]
 //	}
 //
@@ -120,6 +127,9 @@ func (plugin CniPlugin) GetType() string {
 //				"type": "{{ .type }}"
 //			}
 //			{{- end }}
+//          ,{
+//				"type": "roce"
+//			}
 //		]
 //	}
 func defaultCNIPlugin() *CniListConfig {
@@ -136,6 +146,11 @@ func defaultCNIPlugin() *CniListConfig {
 	} else {
 		// use cptp plugin defalt
 		result.Plugins = append(result.Plugins, newPtpPlugin())
+	}
+
+	// add roce plugin for RDMA
+	if option.Config.EnableRDMA {
+		result.Plugins = append(result.Plugins, ccePlugins[pluginNameRoce])
 	}
 
 	// add list of extension CNI plugins defined by CCE

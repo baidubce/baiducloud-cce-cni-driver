@@ -47,7 +47,7 @@ func StartSynchronizingSubnet(ctx context.Context, subnetManager syncer.SubnetEv
 		obj, err := subnetsLister.Get(key)
 
 		// Delete handling
-		if (err == nil || errors.IsNotFound(err)) && obj.DeletionTimestamp != nil {
+		if (err == nil || errors.IsNotFound(err)) && obj != nil && obj.DeletionTimestamp != nil {
 			return subnetManager.Delete(key)
 		}
 		if err != nil {

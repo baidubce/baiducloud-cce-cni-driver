@@ -28,7 +28,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: operator
-          image: "{{ .Values.network.operator.image.repository }}/{{ .Values.network.operator.image.ethernetName }}:{{ .Values.network.operator.image.tag | default .Chart.AppVersion }}{{ .Values.network.imageSuffix }}"
+          image: "{{ .Values.network.operator.image.repository }}/{{ .Values.network.operator.image.name }}:{{ .Values.network.operator.image.tag | default .Chart.AppVersion }}{{ .Values.network.imageSuffix }}"
           imagePullPolicy: {{ .Values.network.operator.image.pullPolicy }}
           command:
             - /bin/cce-network-operator

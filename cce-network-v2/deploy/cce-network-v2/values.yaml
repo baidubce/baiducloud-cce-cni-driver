@@ -10,8 +10,7 @@ network:
       # 注意 repository + name 才是完整的镜像名
       repository: registry.baidubce.com/cce-plugin-pro
       # 使用vpc-eni作为operator镜像
-      ethernetName: cce-network-operator-vpc-eni
-      rdmaName: cce-network-operator-rdma
+      name: cce-network-operator-vpc-eni
       pullPolicy: Always
       # Overrides the image tag whose default is the chart appVersion.
       tag: ""

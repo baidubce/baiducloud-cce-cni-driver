@@ -51,13 +51,7 @@ func newBBCNode(super *bceNode) *bbcNode {
 		bceNode: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExBBC)
-	if node.tryRefreshBBCENI() == nil {
-		err := node.createBBCENI(super.log)
-		if err != nil {
-			super.log.Errorf("failed to create bbc eni: %v", err)
-		}
-	}
-
+	node.tryRefreshBBCENI()
 	return node
 }
 

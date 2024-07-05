@@ -304,8 +304,8 @@ func (n *bceNode) overrideENICapacityToNode(eniQuota ENIQuotaManager) error {
 
 		// update ippool capacity
 		if k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
-			k8sObj.Spec.IPAM.MinAllocate = eniQuota.GetMaxIP() - 1
-			k8sObj.Spec.IPAM.PreAllocate = eniQuota.GetMaxIP() - 1
+			k8sObj.Spec.IPAM.MinAllocate = math.IntMin(eniQuota.GetMaxIP()-1, 10)
+			k8sObj.Spec.IPAM.PreAllocate = math.IntMin(eniQuota.GetMaxIP()-1, k8sObj.Spec.IPAM.PreAllocate)
 			k8sObj.Spec.IPAM.MaxAboveWatermark = eniQuota.GetMaxIP() - 1
 		}
 		if k8sObj.Annotations == nil {
@@ -434,7 +434,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 		availabelENIsNumber = 0
 	}
 
-	err := n.eniQuota.RefreshEniCapacityToK8s(ctx, availabelENIsNumber, availableIPsNumber)
+	err := n.getENIQuota().RefreshEniCapacityToK8s(ctx, availabelENIsNumber, availableIPsNumber)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("refresh eni capacity to k8s node error")
 	}
@@ -1346,10 +1346,10 @@ func (n *bceNode) tryBorrowIPs(newENI *ccev2.ENI) error {
 				"Failed to get borrow subnet %s: %v", newENI.Spec.SubnetID, err)
 			return err
 		}
-		borrowedIPs = subnet.Borrow(newENI.Spec.SubnetID, n.eniQuota.GetMaxIP())
-		if borrowedIPs != n.eniQuota.GetMaxIP() {
+		borrowedIPs = subnet.Borrow(newENI.Spec.SubnetID, n.getENIQuota().GetMaxIP())
+		if borrowedIPs != n.getENIQuota().GetMaxIP() {
 			subnet.Cancel(newENI.Name)
-			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, n.eniQuota.GetMaxIP(), newENI.Spec.SubnetID, n.instanceType)
+			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, n.getENIQuota().GetMaxIP(), newENI.Spec.SubnetID, n.instanceType)
 			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowEniIPs", errMsg)
 			metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "Subnet", newENI.Spec.SubnetID).Inc()
 			return fmt.Errorf(errMsg)

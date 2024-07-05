@@ -494,7 +494,12 @@ func (es *eniSyncher) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
 			newObj.Labels = map[string]string{}
 		}
 		newObj.Labels[k8s.VPCIDLabel] = eniCache.VpcId
-		newObj.Labels[k8s.LabelInstanceID] = eniCache.InstanceId
+		if eniCache.InstanceId != "" {
+			newObj.Labels[k8s.LabelInstanceID] = eniCache.InstanceId
+		} else {
+			newObj.Labels[k8s.LabelInstanceID] = newObj.Spec.ENI.InstanceID
+		}
+
 		newObj.Labels[k8s.LabelNodeName] = newObj.Spec.NodeName
 
 		newObj.Spec.ENI.PrivateIPSet = toModelPrivateIP(eniCache.PrivateIpSet, eniCache.VpcId, eniCache.SubnetId)

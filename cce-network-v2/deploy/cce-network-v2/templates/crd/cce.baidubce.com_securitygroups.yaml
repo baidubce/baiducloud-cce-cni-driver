@@ -1,0 +1,255 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.6.2
+  creationTimestamp: null
+  name: securitygroups.cce.baidubce.com
+spec:
+  group: cce.baidubce.com
+  names:
+    categories:
+    - cce
+    kind: SecurityGroup
+    listKind: SecurityGroupList
+    plural: securitygroups
+    shortNames:
+    - sg
+    singular: securitygroup
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: security group name
+      jsonPath: .spec.name
+      name: SGName
+      type: string
+    - description: type of security group
+      jsonPath: .spec.type
+      name: Type
+      type: string
+    - description: roles of user
+      jsonPath: .status.userRolesStr
+      name: Roles
+      type: string
+    - description: user count
+      jsonPath: .status.userCount
+      name: UserCount
+      type: integer
+    - description: Is the Ingress constraint violated,
+      jsonPath: .status.constraintViolated
+      name: CV
+      type: integer
+    name: v2alpha1
+    schema:
+      openAPIV3Schema:
+        description: This columns will be printed by exec `kubectl get sgs`
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              desc:
+                type: string
+              egressRule:
+                properties:
+                  allows:
+                    items:
+                      properties:
+                        destGroupId:
+                          type: string
+                        destIp:
+                          type: string
+                        direction:
+                          type: string
+                        ethertype:
+                          type: string
+                        portRange:
+                          type: string
+                        protocol:
+                          type: string
+                        remark:
+                          type: string
+                        securityGroupId:
+                          type: string
+                        sourceGroupId:
+                          type: string
+                        sourceIp:
+                          type: string
+                      required:
+                      - direction
+                      type: object
+                    type: array
+                  drops:
+                    items:
+                      properties:
+                        destGroupId:
+                          type: string
+                        destIp:
+                          type: string
+                        direction:
+                          type: string
+                        ethertype:
+                          type: string
+                        portRange:
+                          type: string
+                        protocol:
+                          type: string
+                        remark:
+                          type: string
+                        securityGroupId:
+                          type: string
+                        sourceGroupId:
+                          type: string
+                        sourceIp:
+                          type: string
+                      required:
+                      - direction
+                      type: object
+                    type: array
+                type: object
+              id:
+                type: string
+              ingressRule:
+                properties:
+                  allows:
+                    items:
+                      properties:
+                        destGroupId:
+                          type: string
+                        destIp:
+                          type: string
+                        direction:
+                          type: string
+                        ethertype:
+                          type: string
+                        portRange:
+                          type: string
+                        protocol:
+                          type: string
+                        remark:
+                          type: string
+                        securityGroupId:
+                          type: string
+                        sourceGroupId:
+                          type: string
+                        sourceIp:
+                          type: string
+                      required:
+                      - direction
+                      type: object
+                    type: array
+                  drops:
+                    items:
+                      properties:
+                        destGroupId:
+                          type: string
+                        destIp:
+                          type: string
+                        direction:
+                          type: string
+                        ethertype:
+                          type: string
+                        portRange:
+                          type: string
+                        protocol:
+                          type: string
+                        remark:
+                          type: string
+                        securityGroupId:
+                          type: string
+                        sourceGroupId:
+                          type: string
+                        sourceIp:
+                          type: string
+                      required:
+                      - direction
+                      type: object
+                    type: array
+                type: object
+              name:
+                type: string
+              tags:
+                items:
+                  properties:
+                    tagKey:
+                      type: string
+                    tagValue:
+                      type: string
+                  required:
+                  - tagKey
+                  - tagValue
+                  type: object
+                type: array
+              type:
+                description: SeurityGroupType enterprise/normal/acl normal is security
+                  group for vpc
+                type: string
+              vpcId:
+                type: string
+              vpcVersion:
+                format: int64
+                type: integer
+            required:
+            - id
+            - type
+            type: object
+          status:
+            description: SecurityGroupStatus desribes the status of security group
+              Mainly explain which elements in the cluster are using this security
+              group
+            properties:
+              constraintViolated:
+                description: ConstraintViolated is the Ingress constraint violated,
+                  which may cause traffic to be unable to access the k8s cluster normally
+                type: integer
+              eniCount:
+                type: integer
+              lastAlterTime:
+                description: LastAlterTime last alter time
+                format: date-time
+                type: string
+              machineCount:
+                type: integer
+              useStatus:
+                type: boolean
+              usedByENI:
+                type: boolean
+              usedByMater:
+                type: boolean
+              usedByNode:
+                type: boolean
+              usedByPod:
+                type: boolean
+              usedBySubnet:
+                type: boolean
+              userCount:
+                type: integer
+              userRolesStr:
+                type: string
+              version:
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

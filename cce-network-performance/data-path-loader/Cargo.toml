@@ -1,0 +1,20 @@
+[package]
+name = "data-path-loader"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.1", features = ["derive"] }
+log = "0.4.21"
+tokio = { version = "1.25", features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "net",
+    "signal",
+] }
+env_logger = "0.11"
+ipnetwork ={ version = "0.20.0"}

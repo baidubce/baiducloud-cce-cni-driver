@@ -31,6 +31,10 @@ const (
 	CustomResourceDefinitionVersion = "v2alpha1"
 
 	KindClusterPodSubnetTopologySpread = "clusterpodsubnettopologyspreads"
+
+	KindSecurityGroup = "securitygroups"
+
+	KindNetResouceConfigSet = "netresourceconfigsets"
 )
 
 // SchemeGroupVersion is group version used to register these objects
@@ -56,6 +60,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&ClusterPodSubnetTopologySpread{},
 		&ClusterPodSubnetTopologySpreadList{},
+		&SecurityGroup{},
+		&SecurityGroupList{},
+		&NetResourceConfigSet{},
+		&NetResourceConfigSetList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

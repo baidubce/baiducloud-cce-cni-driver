@@ -86,7 +86,7 @@ func (provider *BCERDMAAllocatorProvider) Start(ctx context.Context, getterUpdat
 	provider.manager.nrsGetterUpdater = getterUpdater
 
 	netResourceSetManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, ipamMetrics.IMetrics,
-		operatorOption.Config.RdmaResourceResyncWorkers, operatorOption.Config.EnableExcessIPRelease, false)
+		operatorOption.Config.RdmaResourceResyncWorkers, operatorOption.Config.ReleaseExcessIPs, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bce rdma instance manager: %w", err)
 	}

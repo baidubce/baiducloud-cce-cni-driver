@@ -24,7 +24,6 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -92,7 +91,6 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 		return err
 	}
 	scopedLog.WithField("bbceni", logfields.Repr(bbceni)).Infof("get instance bbc eni success")
-
 	err = n.refreshAvailableSubnets()
 	if err != nil {
 		n.appendAllocatedIPError(bbceni.Id, ccev2.NewCustomerErrorStatusChange(ccev2.ErrorCodeNoAvailableSubnet, "failed to refresh available subnets"))
@@ -160,6 +158,11 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 			Status: ccev2.ENIStatus{},
 		}
 
+		err = n.tryBorrowIPs(eni)
+		if err != nil {
+			return err
+		}
+
 		eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create bbc ENI: %w", err)
@@ -179,17 +182,8 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 
 func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
-	client := k8s.WatcherClient()
-	if client == nil {
-		scopeLog.Fatal("K8s client is nil")
-	}
-	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(n.k8sObj.Name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)
-	}
-
 	// default bbc ip quota
-	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
+	eniQuota := newCustomerIPQuota(scopeLog, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, n.manager.bceclient)
 	eniQuota.SetMaxENI(1)
 	eniQuota.SetMaxIP(defaultBBCMaxIPsPerENI)
 
@@ -312,20 +306,6 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 		}
 	}
 	return allocation, nil
-}
-
-// GetMaximumAllocatable implements realNodeInf
-func (*bbcNode) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
-	return eniQuota.GetMaxIP() - 1
-}
-
-// GetMinimumAllocatable implements realNodeInf
-func (n *bbcNode) getMinimumAllocatable() int {
-	min := n.k8sObj.Spec.IPAM.MinAllocate
-	if min == 0 {
-		min = defaults.IPAMPreAllocation
-	}
-	return min
 }
 
 // AllocateIPCrossSubnet implements realNodeInf

@@ -175,6 +175,10 @@ func (n *nodeOperationsMock) IsPrefixDelegated() bool {
 	return false
 }
 
+func (n *nodeOperationsMock) GetMaximumBurstableAllocatableIPv4() int {
+	return 0
+}
+
 func (e *IPAMSuite) TestGetNodeNames(c *check.C) {
 	am := newAllocationImplementationMock()
 	c.Assert(am, check.Not(check.IsNil))

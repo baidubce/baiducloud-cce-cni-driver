@@ -32,6 +32,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	k8smetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/metrics"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/synced"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/utils"
@@ -54,8 +55,10 @@ const (
 	K8sAPIGroupServiceV1Core    = "core/v1::Service"
 	k8sAPIGroupNetResourceSetV2 = "cce.baidubce.com/v2::NetResourceSet"
 	k8sAPIGroupCCEEndpointV2    = "cce.baidubce.com/v2::CCEEndpoint"
+	k8sAPIGroupPstsV2           = "cce.baidubce.com/v2::PodSubnetTopologieSpread"
 	k8sAPIGroupCCEENIV2         = "cce.baidubce.com/v2::ENI"
 	k8sAPIGroupCCESubnetV1      = "cce.baidubce.com/v1::Subnet"
+	k8sAPIGroupNRCSV2Alpha1     = "cce.baidubce.com/v2alpha1::NetResourceConfigSet"
 
 	metricKNP            = "NetworkPolicy"
 	metricNS             = "Namespace"
@@ -256,10 +259,12 @@ type watcherInfo struct {
 }
 
 var cceResourceToGroupMapping = map[string]watcherInfo{
-	synced.CRDResourceName(v2.CEPName):       {start, k8sAPIGroupCCEEndpointV2},
-	synced.CRDResourceName(v2.NRSName):       {start, k8sAPIGroupNetResourceSetV2},
-	synced.CRDResourceName(v2.ENIName):       {start, k8sAPIGroupCCEENIV2},
-	synced.CRDResourceName(ccev1.SubnetName): {start, k8sAPIGroupCCESubnetV1},
+	synced.CRDResourceName(v2.CEPName):                                                  {start, k8sAPIGroupCCEEndpointV2},
+	synced.CRDResourceName(v2.NRSName):                                                  {start, k8sAPIGroupNetResourceSetV2},
+	synced.CRDResourceName(v2.ENIName):                                                  {start, k8sAPIGroupCCEENIV2},
+	synced.CRDResourceName(ccev1.SubnetName):                                            {start, k8sAPIGroupCCESubnetV1},
+	synced.CRDResourceName(v2.PSTSName):                                                 {afterNodeInit, k8sAPIGroupPstsV2},
+	synced.CRDResourceName(v2alpha1.KindNetResouceConfigSet + "." + v2alpha1.GroupName): {start, k8sAPIGroupNRCSV2Alpha1},
 }
 
 // resourceGroups are all of the core Kubernetes and CCE resource groups
@@ -364,6 +369,12 @@ func (k *K8sWatcher) enableK8sWatchers(ctx context.Context, resourceNames []stri
 		case k8sAPIGroupCCESubnetV1:
 			asyncControllers.Add(1)
 			go k.subnetInit(cceClient, asyncControllers)
+		case k8sAPIGroupNRCSV2Alpha1:
+			asyncControllers.Add(1)
+			go k.initNRCS(cceClient, asyncControllers)
+		case k8sAPIGroupPstsV2:
+			asyncControllers.Add(1)
+			go k.initPSTS(cceClient, asyncControllers)
 		default:
 			log.WithFields(logrus.Fields{
 				logfields.Resource: r,

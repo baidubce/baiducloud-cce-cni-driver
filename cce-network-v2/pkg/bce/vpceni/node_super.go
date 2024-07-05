@@ -37,17 +37,18 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
 )
 
 const (
@@ -89,8 +90,6 @@ type realNodeInf interface {
 		ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error)
 
 	releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error
-	getMaximumAllocatable(eniQuota ENIQuotaManager) int
-	getMinimumAllocatable() int
 
 	// direct ip allocation
 	allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error)
@@ -139,10 +138,12 @@ type bceNode struct {
 	log *logrus.Entry
 
 	// availableSubnets subnets that can be used to allocate IPs and create ENIs
-	availableSubnets []*ccev1.Subnet
-
+	availableSubnets        []*bcesync.BorrowedSubnet
 	errorLock               lock.Mutex
 	eniAllocatedIPsErrorMap map[string]*ccev2.StatusChange
+
+	securityGroupIDs           []string
+	enterpriseSecurityGroupIDs []string
 }
 
 // NewNode returns a new Node
@@ -200,7 +201,7 @@ func (n *bceNode) getENIQuota() ENIQuotaManager {
 		if err != nil || t.Add(DayDuration).Before(time.Now()) {
 			goto slowPath
 		}
-		eniQuota := newCustomerIPQuota(nil, nil, nil, n.instanceID, nil)
+		eniQuota := newCustomerIPQuota(n.log, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, nil)
 		eniQuota.SetMaxENI(n.k8sObj.Spec.ENI.MaxAllocateENI)
 		eniQuota.SetMaxIP(n.k8sObj.Spec.ENI.MaxIPsPerENI)
 		// use customer max ip nums if defiend
@@ -226,28 +227,29 @@ func (n *bceNode) slowCalculateRealENICapacity(scopedLog *logrus.Entry) ENIQuota
 		return nil
 	}
 
-	if len(n.k8sObj.Annotations) > 0 {
-		// override max eni num from annotation
-		if maxENIStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxENINum]; ok {
-			maxENI, err := strconv.Atoi(maxENIStr)
-			if err != nil {
-				scopedLog.Errorf("parse max eni num [%s] from annotation failed: %v", maxENIStr, err)
-			} else if maxENI < eniQuota.GetMaxENI() {
-				scopedLog.Warnf("max eni num from annotation is smaller than real: %d < %d", maxENI, eniQuota.GetMaxENI())
-			} else if maxENI >= 0 {
-				eniQuota.SetMaxENI(maxENI)
-				scopedLog.Infof("override max eni num from annotation: %d", maxENI)
-			}
+	if len(n.k8sObj.Annotations) == 0 {
+		n.k8sObj.Annotations = make(map[string]string)
+	}
+	// override max eni num from annotation
+	if maxENIStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxENINum]; ok {
+		maxENI, err := strconv.Atoi(maxENIStr)
+		if err != nil {
+			scopedLog.Errorf("parse max eni num [%s] from annotation failed: %v", maxENIStr, err)
+		} else if maxENI < eniQuota.GetMaxENI() {
+			scopedLog.Warnf("max eni num from annotation is smaller than real: %d < %d", maxENI, eniQuota.GetMaxENI())
+		} else if maxENI >= 0 {
+			eniQuota.SetMaxENI(maxENI)
+			scopedLog.Infof("override max eni num from annotation: %d", maxENI)
 		}
+	}
 
-		// override max ip num from annotation
-		if maxIPStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum]; ok {
-			maxIP, err := strconv.Atoi(maxIPStr)
-			if err != nil {
-				scopedLog.Errorf("parse max ip num [%s] from annotation failed: %v", maxIPStr, err)
-			} else if maxIP >= 0 {
-				eniQuota.SetMaxIP(maxIP)
-			}
+	// override max ip num from annotation
+	if maxIPStr, ok := n.k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum]; ok {
+		maxIP, err := strconv.Atoi(maxIPStr)
+		if err != nil {
+			scopedLog.Errorf("parse max ip num [%s] from annotation failed: %v", maxIPStr, err)
+		} else if maxIP >= 0 {
+			eniQuota.SetMaxIP(maxIP)
 		}
 	}
 
@@ -278,22 +280,34 @@ func (n *bceNode) slowCalculateRealENICapacity(scopedLog *logrus.Entry) ENIQuota
 // overrideENICapacityToNode accoding to the Node.limiter field, override the
 // capacity of ENI to the Node.k8sObj.Spec
 func (n *bceNode) overrideENICapacityToNode(eniQuota ENIQuotaManager) error {
-	ctx := logfields.NewContext()
-	// todo move capacity to better place in k8s rest api
-	err := eniQuota.SyncCapacityToK8s(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to sync eni capacity to k8s node: %v", err)
-	}
 	// update the node until 30s timeout
 	// if update operation return error, we will get the leatest version of node and try again
-	err = wait.PollImmediate(200*time.Millisecond, 30*time.Second, func() (bool, error) {
+	err := wait.PollImmediate(200*time.Millisecond, 30*time.Second, func() (bool, error) {
 		old, err := n.manager.nrsGetterUpdater.Get(n.k8sObj.Name)
 		if err != nil {
 			return false, err
 		}
 		k8sObj := old.DeepCopy()
+
+		if len(n.k8sObj.Annotations) == 0 {
+			n.k8sObj.Annotations = make(map[string]string)
+		}
+		if len(n.securityGroupIDs) > 0 {
+			n.k8sObj.Annotations[k8s.AnnotationUseSecurityGroupIDs] = logfields.Json(n.securityGroupIDs)
+		}
+		if len(n.enterpriseSecurityGroupIDs) > 0 {
+			n.k8sObj.Annotations[k8s.AnnotationUseEnterpriseSecurityGroupIDs] = logfields.Json(n.enterpriseSecurityGroupIDs)
+		}
+
 		k8sObj.Spec.ENI.MaxAllocateENI = eniQuota.GetMaxENI()
 		k8sObj.Spec.ENI.MaxIPsPerENI = eniQuota.GetMaxIP()
+
+		// update ippool capacity
+		if k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
+			k8sObj.Spec.IPAM.MinAllocate = eniQuota.GetMaxIP() - 1
+			k8sObj.Spec.IPAM.PreAllocate = eniQuota.GetMaxIP() - 1
+			k8sObj.Spec.IPAM.MaxAboveWatermark = eniQuota.GetMaxIP() - 1
+		}
 		if k8sObj.Annotations == nil {
 			k8sObj.Annotations = map[string]string{}
 		}
@@ -321,6 +335,20 @@ func (n *bceNode) UpdatedNode(obj *ccev2.NetResourceSet) {
 	defer n.mutex.Unlock()
 	n.k8sObj = obj
 	n.instanceID = obj.Spec.InstanceID
+
+	eniQuota := n.getENIQuota()
+	if eniQuota != nil && obj.Spec.ENI.BurstableMehrfachENI > 0 {
+		eniCapacity := n.GetMaximumBurstableAllocatableIPv4()
+		if obj.Spec.IPAM.PreAllocate == 0 {
+			obj.Spec.IPAM.PreAllocate = math.IntMax(obj.Spec.IPAM.PreAllocate, eniCapacity/2)
+		}
+		if obj.Spec.IPAM.PreAllocate > 10 {
+			obj.Spec.IPAM.MinAllocate = 10
+		} else {
+			obj.Spec.IPAM.MinAllocate = n.GetMinimumAllocatableIPv4()
+		}
+		obj.Spec.IPAM.MaxAboveWatermark = math.IntMax(eniCapacity*obj.Spec.ENI.BurstableMehrfachENI, obj.Spec.IPAM.MaxAboveWatermark)
+	}
 }
 
 // ResyncInterfacesAndIPs is called to synchronize the latest list of
@@ -335,6 +363,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 	n.waitForENISynced(ctx)
 
 	availabelENIsNumber := 0
+	availableIPsNumber := 0
 	usedENIsNumber := 0
 	haveCreatingENI := false
 	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
@@ -368,6 +397,7 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 					if e.Spec.UseMode != ccev2.ENIUseModePrimaryIP && addr.Primary {
 						continue
 					}
+					availableIPsNumber++
 					// filter cross subnet private ip
 					if addr.SubnetID != eniSubnet &&
 						// only bbc enable cross subnet ip to ippool
@@ -396,6 +426,17 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 			_, _, err := n.CreateInterface(ctx, nil, scopedLog)
 			scopedLog.WithError(err).Debugf("try to create new ENI for primary IP mode")
 		}()
+	}
+
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		availableIPsNumber = 0
+	} else {
+		availabelENIsNumber = 0
+	}
+
+	err := n.eniQuota.RefreshEniCapacityToK8s(ctx, availabelENIsNumber, availableIPsNumber)
+	if err != nil {
+		scopedLog.WithError(err).Errorf("refresh eni capacity to k8s node error")
 	}
 	return a, nil
 }
@@ -545,10 +586,6 @@ func (n *bceNode) PrepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 	if quota := n.getENIQuota(); quota == nil {
 		return nil, fmt.Errorf("eniQuota is nil, please retry later")
 	}
-	err = n.refreshAvailableSubnets()
-	if err != nil {
-		return nil, err
-	}
 	return n.real.prepareIPAllocation(scopedLog)
 }
 
@@ -598,11 +635,11 @@ func (n *bceNode) refreshAvailableSubnets() error {
 			}
 		}
 	}
-
-	subnets := n.FilterAvailableSubnetIds(n.k8sObj.Spec.ENI.SubnetIDs)
+	subnets := n.FilterAvailableSubnetIds(n.k8sObj.Spec.ENI.SubnetIDs, n.GetMinimumAllocatableIPv4())
 	if len(subnets) == 0 {
 		errStr := fmt.Sprintf("subnets [%v] are not available for node %s", n.k8sObj.Spec.ENI.SubnetIDs, n.k8sObj.Name)
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, ccev2.ErrorCodeNoAvailableSubnet, errStr)
+		metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnet, "NetResourceSet", n.k8sObj.Name).Inc()
 		return fmt.Errorf(errStr)
 	}
 	n.availableSubnets = subnets
@@ -718,6 +755,14 @@ func (n *bceNode) AllocateIPs(ctx context.Context, allocation *ipam.AllocationAc
 				ipv4ToAllocate -= ipv4PaticalToAllocate
 				ipv6ToAllocate -= ipv6PaticalToAllocate
 				isPartialSuccess = true
+			}
+
+			// update borrowed subnet
+			borrowedSubnet, err := bcesync.GlobalBSM().GetSubnet(string(allocation.PoolID))
+			if err != nil {
+				scopedLog.WithField("subnetID", string(allocation.PoolID)).Warnf("get borrowed subnet failed: %v", err)
+			} else {
+				borrowedSubnet.Done(allocation.InterfaceID, len(partialIPv4Result))
 			}
 
 			ipv4AllocatedSet = appenUniqueElement(ipv4AllocatedSet, partialIPv4Result)
@@ -1043,17 +1088,57 @@ func (n *bceNode) GetMaximumAllocatableIPv4() int {
 	if eniQuota == nil {
 		return 0
 	}
-	return n.real.getMaximumAllocatable(eniQuota)
+
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		return 0
+	}
+
+	if eniQuota.GetMaxENI() == 0 {
+		return eniQuota.GetMaxIP() - 1
+	}
+	max := eniQuota.GetMaxENI() * (eniQuota.GetMaxIP() - 1)
+	if operatorOption.Config.EnableIPv6 {
+		max = max * 2
+	}
+	if n.k8sObj.Spec.IPAM.MaxAllocate > 0 {
+		return math.IntMin(n.k8sObj.Spec.IPAM.MaxAllocate, max)
+	}
+	return max
 }
 
 // GetMinimumAllocatableIPv4 impl
 func (n *bceNode) GetMinimumAllocatableIPv4() int {
-	return n.real.getMinimumAllocatable()
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		return 0
+	}
+	min := n.k8sObj.Spec.IPAM.MinAllocate
+	if min == 0 {
+		min = defaults.IPAMPreAllocation
+	}
+
+	if operatorOption.Config.EnableIPv6 {
+		min = min * 2
+	}
+	return min
 }
 
 // IsPrefixDelegated impl
 func (n *bceNode) IsPrefixDelegated() bool {
 	return false
+}
+
+func (n *bceNode) GetMaximumBurstableAllocatableIPv4() int {
+	eniQuota := n.getENIQuota()
+	if eniQuota == nil {
+		return 0
+	}
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		return 0
+	}
+	if n.k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
+		return math.IntMin(eniQuota.GetMaxIP()-1, n.GetMaximumAllocatableIPv4())
+	}
+	return 0
 }
 
 // GetUsedIPWithPrefixes Impl
@@ -1062,20 +1147,17 @@ func (n *bceNode) GetUsedIPWithPrefixes() int {
 }
 
 // FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (n *bceNode) FilterAvailableSubnet(subnets []*ccev1.Subnet) []*ccev1.Subnet {
+func (n *bceNode) FilterAvailableSubnet(subnets []*bcesync.BorrowedSubnet, minAllocateIPs int) []*bcesync.BorrowedSubnet {
 	contry := operatorOption.Config.BCECloudContry
 	region := operatorOption.Config.BCECloudRegion
 	zone := n.k8sObj.Spec.ENI.AvailabilityZone
 
-	var filtedSubnets []*ccev1.Subnet
+	var filtedSubnets []*bcesync.BorrowedSubnet
 	for _, subnet := range subnets {
 		if !strings.Contains(subnet.Spec.AvailabilityZone, api.TransAvailableZoneToZoneName(contry, region, zone)) {
 			continue
 		}
-		if subnet.Status.HasNoMoreIP || !subnet.Status.Enable {
-			continue
-		}
-		if subnet.Status.AvailableIPNum < 1 {
+		if !subnet.CanBorrow(minAllocateIPs) {
 			continue
 		}
 		filtedSubnets = append(filtedSubnets, subnet)
@@ -1084,21 +1166,21 @@ func (n *bceNode) FilterAvailableSubnet(subnets []*ccev1.Subnet) []*ccev1.Subnet
 }
 
 // FilterAvailableSubnetIds filter subnets by subnet ids
-func (n *bceNode) FilterAvailableSubnetIds(subnetIDs []string) []*ccev1.Subnet {
-	var filtedSubnets []*ccev1.Subnet
+func (n *bceNode) FilterAvailableSubnetIds(subnetIDs []string, minAllocateIPs int) []*bcesync.BorrowedSubnet {
+	var filtedSubnets []*bcesync.BorrowedSubnet
 	for _, subnetID := range subnetIDs {
-		sbn, err := bcesync.EnsureSubnet(n.k8sObj.Spec.ENI.VpcID, subnetID)
+		sbn, err := bcesync.GlobalBSM().EnsureSubnet(n.k8sObj.Spec.ENI.VpcID, subnetID)
 		if err != nil {
 			continue
 		}
 		filtedSubnets = append(filtedSubnets, sbn)
 	}
-	return n.FilterAvailableSubnet(filtedSubnets)
+	return n.FilterAvailableSubnet(filtedSubnets, minAllocateIPs)
 }
 
 // searchMaxAvailableSubnet search subnet with max available ip
-func searchMaxAvailableSubnet(subnets []*ccev1.Subnet) *ccev1.Subnet {
-	var bestSubnet *ccev1.Subnet
+func searchMaxAvailableSubnet(subnets []*bcesync.BorrowedSubnet) *bcesync.BorrowedSubnet {
+	var bestSubnet *bcesync.BorrowedSubnet
 	for _, sbn := range subnets {
 		// filter out ipv6 subnet if ipv6 is not enabled
 		if operatorOption.Config.EnableIPv6 {
@@ -1109,7 +1191,7 @@ func searchMaxAvailableSubnet(subnets []*ccev1.Subnet) *ccev1.Subnet {
 		if sbn.Spec.Exclusive {
 			continue
 		}
-		if bestSubnet == nil || bestSubnet.Status.AvailableIPNum < sbn.Status.AvailableIPNum {
+		if bestSubnet == nil || bestSubnet.BorrowedAvailableIPsCount < sbn.BorrowedAvailableIPsCount {
 			bestSubnet = sbn
 		}
 	}
@@ -1239,7 +1321,6 @@ func (n *bceNode) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
 	now := time.Now()
 	for eniID := range resource.Status.ENIs {
 		eniStastic := resource.Status.ENIs[eniID]
-		eniStastic.LastAllocatedIPError = nil
 
 		if eniStatus, ok := n.eniAllocatedIPsErrorMap[eniID]; ok {
 			if now.Sub(n.eniAllocatedIPsErrorMap[eniID].Time.Time) < 10*time.Minute {
@@ -1253,6 +1334,29 @@ func (n *bceNode) refreshENIAllocatedIPErrors(resource *ccev2.NetResourceSet) {
 			delete(n.eniAllocatedIPsErrorMap, eniID)
 		}
 	}
+}
+
+func (n *bceNode) tryBorrowIPs(newENI *ccev2.ENI) error {
+	var borrowedIPs int
+
+	if n.k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
+		subnet, err := bcesync.GlobalBSM().EnsureSubnet(newENI.Spec.VpcID, newENI.Spec.SubnetID)
+		if err != nil {
+			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowSubnet",
+				"Failed to get borrow subnet %s: %v", newENI.Spec.SubnetID, err)
+			return err
+		}
+		borrowedIPs = subnet.Borrow(newENI.Spec.SubnetID, n.eniQuota.GetMaxIP())
+		if borrowedIPs != n.eniQuota.GetMaxIP() {
+			subnet.Cancel(newENI.Name)
+			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, n.eniQuota.GetMaxIP(), newENI.Spec.SubnetID, n.instanceType)
+			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowEniIPs", errMsg)
+			metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "Subnet", newENI.Spec.SubnetID).Inc()
+			return fmt.Errorf(errMsg)
+		}
+		newENI.Spec.BorrowIPCount = borrowedIPs
+	}
+	return nil
 }
 
 var (

@@ -23,6 +23,7 @@ import (
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/baidubce/bce-sdk-go/services/eip"
 	"github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/baidubce/bce-sdk-go/services/esg"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 
 	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
@@ -30,6 +31,8 @@ import (
 )
 
 type Interface interface {
+	DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCModel, error)
+
 	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string, isIpv6 bool) (string, error)
@@ -76,6 +79,8 @@ type Interface interface {
 	ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error)
 
 	ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error)
+	ListAclEntrys(ctx context.Context, vpcID string) ([]vpc.AclEntry, error)
+	ListEsg(ctx context.Context, instanceID string) ([]esg.EnterpriseSecurityGroup, error)
 
 	GetBCCInstanceDetail(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error)
 
@@ -97,6 +102,7 @@ type Client struct {
 	vpcClient *vpc.Client
 	hpcClient *hpc.Client
 	bbcClient *bbc.Client
+	esgClient *esg.Client
 }
 
 var (

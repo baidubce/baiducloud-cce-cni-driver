@@ -1,0 +1,1 @@
+workspace = { members = [ "cce-cni-common","cce-cni-plugins", "cni-data-path", "cni-xtask", "data-path-loader"] }

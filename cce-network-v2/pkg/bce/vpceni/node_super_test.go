@@ -12,6 +12,7 @@ import (
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -22,26 +23,35 @@ import (
 )
 
 func Test_searchMaxAvailableSubnet(t *testing.T) {
-	subnets := []*ccev1.Subnet{
-		{
-			Spec: ccev1.SubnetSpec{},
-			Status: ccev1.SubnetStatus{
-				AvailableIPNum: 100,
+	subnets := []*bcesync.BorrowedSubnet{
+		&bcesync.BorrowedSubnet{
+			Subnet: &ccev1.Subnet{
+				Spec: ccev1.SubnetSpec{},
+				Status: ccev1.SubnetStatus{
+					AvailableIPNum: 100,
+				},
 			},
+			BorrowedAvailableIPsCount: 100,
 		},
-		{
-			Spec: ccev1.SubnetSpec{
-				Exclusive: true,
+		&bcesync.BorrowedSubnet{
+			Subnet: &ccev1.Subnet{
+				Spec: ccev1.SubnetSpec{
+					Exclusive: true,
+				},
+				Status: ccev1.SubnetStatus{
+					AvailableIPNum: 200,
+				},
 			},
-			Status: ccev1.SubnetStatus{
-				AvailableIPNum: 200,
-			},
+			BorrowedAvailableIPsCount: 200,
 		},
-		{
-			Spec: ccev1.SubnetSpec{},
-			Status: ccev1.SubnetStatus{
-				AvailableIPNum: 300,
+		&bcesync.BorrowedSubnet{
+			Subnet: &ccev1.Subnet{
+				Spec: ccev1.SubnetSpec{},
+				Status: ccev1.SubnetStatus{
+					AvailableIPNum: 300,
+				},
 			},
+			BorrowedAvailableIPsCount: 300,
 		},
 	}
 	best := searchMaxAvailableSubnet(subnets)
@@ -51,9 +61,10 @@ func Test_searchMaxAvailableSubnet(t *testing.T) {
 
 func Test_bceNode_FilterAvailableSubnetIds(t *testing.T) {
 	ccemock.InitMockEnv()
+	bcesync.InitBSM()
 
 	n := &bceNode{
-		availableSubnets: []*ccev1.Subnet{},
+		availableSubnets: []*bcesync.BorrowedSubnet{},
 		k8sObj: &ccev2.NetResourceSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "192.168.0.2",
@@ -73,19 +84,19 @@ func Test_bceNode_FilterAvailableSubnetIds(t *testing.T) {
 
 	t.Run("no subnet ids", func(t *testing.T) {
 		var subnetIDs []string
-		result := n.FilterAvailableSubnetIds(subnetIDs)
-		assert.Equal(t, []*ccev1.Subnet(nil), result)
+		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
+		assert.Equal(t, []*bcesync.BorrowedSubnet(nil), result)
 	})
 
 	t.Run("no available subnets", func(t *testing.T) {
 		subnetIDs := []string{"a", "b"}
-		result := n.FilterAvailableSubnetIds(subnetIDs)
-		assert.Equal(t, []*ccev1.Subnet(nil), result)
+		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
+		assert.Equal(t, []*bcesync.BorrowedSubnet(nil), result)
 	})
 
 	t.Run("have available subnets", func(t *testing.T) {
 		vpcID := n.k8sObj.Spec.ENI.VpcID
-		subnetIDs := []string{"sbn-abc", "sbn-def", "sbn-ghi"}
+		subnetIDs := []string{"sbn-noabc", "sbn-nodef", "sbn-noghi"}
 		var (
 			exceptSubnets []*ccev1.Subnet
 		)
@@ -98,8 +109,13 @@ func Test_bceNode_FilterAvailableSubnetIds(t *testing.T) {
 		}
 		ccemock.EnsureSubnetsToInformer(t, exceptSubnets)
 
-		result := n.FilterAvailableSubnetIds(subnetIDs)
-		assert.EqualValues(t, exceptSubnets, result)
+		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
+
+		var resultSbn []*ccev1.Subnet
+		for _, sbn := range result {
+			resultSbn = append(resultSbn, sbn.Subnet)
+		}
+		assert.EqualValues(t, exceptSubnets, resultSbn)
 	})
 }
 
@@ -214,7 +230,7 @@ func bccTestContext(t *testing.T) (*bceNode, error) {
 	assert.NotNil(t, node)
 
 	node.lastResyncEniQuotaTime = time.Now()
-	node.eniQuota = newCustomerIPQuota(log, k8s.Client(), nil, k8sObj.Spec.InstanceID, im.bceclient)
+	node.eniQuota = newCustomerIPQuota(log, k8s.WatcherClient(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclient)
 	node.eniQuota.SetMaxENI(8)
 	node.eniQuota.SetMaxIP(16)
 

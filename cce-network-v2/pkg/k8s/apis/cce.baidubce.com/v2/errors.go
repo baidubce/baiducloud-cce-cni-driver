@@ -24,13 +24,14 @@ import (
 
 const (
 	// errors for eni
-	ErrorCodeENIIPCapacityExceed = "ENIIPCapacityExceed"
-	ErrorCodeENISubnetNoMoreIP   = "SubnetNoMoreIP"
-	ErrorCodeWaitNewENIInuse     = "WaitCreateMoreENI"
-	ErrorCodeENICapacityExceed   = "ENICapacityExceed"
-	ErrorCodeIPPoolExhausted     = "IPPoolExhausted"
-	ErrorCodeNoMoreIP            = "NoMoreIP"
-	ErrorCodeNoAvailableSubnet   = "NoAvailableSubnet"
+	ErrorCodeENIIPCapacityExceed        = "ENIIPCapacityExceed"
+	ErrorCodeENISubnetNoMoreIP          = "SubnetNoMoreIP"
+	ErrorCodeWaitNewENIInuse            = "WaitCreateMoreENI"
+	ErrorCodeENICapacityExceed          = "ENICapacityExceed"
+	ErrorCodeIPPoolExhausted            = "IPPoolExhausted"
+	ErrorCodeNoMoreIP                   = "NoMoreIP"
+	ErrorCodeNoAvailableSubnet          = "NoAvailableSubnet"
+	ErrorCodeNoAvailableSubnetCreateENI = "NoAvailableSubnetToBorrowIP"
 
 	// errors for open api
 	ErrorCodeOpenAPIError = "OpenAPIError"

@@ -81,7 +81,7 @@ type EndpointStatus struct {
 // EndpointNetworking is the addressing information of an endpoint.
 type EndpointNetworking struct {
 	// IP4/6 addresses assigned to this Endpoint
-	Addressing AddressPairList `json:"addressing"`
+	Addressing AddressPairList `json:"addressing,omitempty"`
 
 	// NodeIP is the IP of the node the endpoint is running on. The IP must
 	// be reachable between nodes.

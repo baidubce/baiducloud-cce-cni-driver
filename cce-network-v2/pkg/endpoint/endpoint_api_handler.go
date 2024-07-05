@@ -144,7 +144,7 @@ func (handler *EndpointAPIHandler) PutEndpointProbe(ctx context.Context, namespa
 		return true, nil
 	})
 
-	if cep.Spec.Network.Bindwidth != nil {
+	if err == nil && cep.Spec.Network.Bindwidth != nil {
 		result.BandWidth = &models.BandwidthOption{
 			Mode:    string(cep.Spec.Network.Bindwidth.Mode),
 			Ingress: cep.Spec.Network.Bindwidth.Ingress,

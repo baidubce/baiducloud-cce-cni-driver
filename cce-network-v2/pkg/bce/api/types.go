@@ -10,18 +10,25 @@ type ENISpec struct {
 
 	// MaxAllocateENI maximum number of ENIs that can be applied for a single machine
 	// +kubebuilder:validation:Minimum=0
-	MaxAllocateENI int `json:"maxAllocateENI"`
+	MaxAllocateENI int `json:"maxAllocateENI,omitempty"`
 
 	// PreAllocateENI Number of ENIs pre-allocate
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default:=1
-	PreAllocateENI int `json:"preAllocateENI"`
+	PreAllocateENI int `json:"preAllocateENI,omitempty"`
+
+	// BurstableMehrfachENI is the number of idle IPs with the minimum reserved ENI
+	// IP capacity multiple. If 0, it means that the Burstable ENI mode is not used.
+	// If it is 1, it means always ensuring that an ENI's IP address is in a ready
+	// idle state (ready+IP capacity is full)
+	// default is 1
+	BurstableMehrfachENI int `json:"burstableMehrfachENI,omitempty"`
 
 	// MaxIPsPerENI the maximum number of secondary IPs that can be
 	// applied for per eni
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default:=1
-	MaxIPsPerENI int `json:"maxIPsPerENI"`
+	MaxIPsPerENI int `json:"maxIPsPerENI,omitempty"`
 
 	// InstanceType is the BCE Compute instance type, e.g. BCC BBC
 	//

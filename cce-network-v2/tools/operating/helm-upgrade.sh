@@ -22,6 +22,8 @@ resources=(
     "CustomResourceDefinition/netresourcesets.cce.baidubce.com"
     "CustomResourceDefinition/podsubnettopologyspreads.cce.baidubce.com"
     "CustomResourceDefinition/subnets.cce.baidubce.com"
+    "CustomResourceDefinition/netresourceconfigsets.cce.baidubce.com"
+    "CustomResourceDefinition/securitygroups.cce.baidubce.com"
 
     # 控制器资源
     "Deployment/cce-network-operator"

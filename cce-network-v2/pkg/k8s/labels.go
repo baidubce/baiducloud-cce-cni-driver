@@ -35,6 +35,10 @@ const (
 	LabelInstanceID    = "cce.baidubce.com/instanceid"
 	LabelContainerID   = "cce.baidubce.com/containerid"
 
+	LabelClusterRole            = "cluster-role"
+	LabelClusterRoleValueMaster = "master"
+	LabelClusterRoleValueNode   = "node"
+
 	// AnnotationFixedIPTTLSeconds If the fixed IP is stuck for a long time when the pod fails, IP recycling will be triggered
 	// default value is 6040800 (7)
 	AnnotationFixedIPTTLSeconds = "fixedip.cce.baidubce.com/ttl"
@@ -52,6 +56,10 @@ const (
 	AnnotationNodeMaxPerENIIPsNum     = "network.cce.baidubce.com/node-eni-max-ips-num"
 	AnnotationNodeMaxRdmaEniNum       = "network.cce.baidubce.com/node-max-rdma-eni-num"
 	AnnotationNodeMaxPerRdmaEniIpsNum = "network.cce.baidubce.com/node-rdma-eni-max-ips-num"
+
+	// AnnotationUseEnterpriseSecurityGroupIDs use enterprise security group
+	AnnotationUseEnterpriseSecurityGroupIDs = "network.cce.baidubce.com/use-esg-ids"
+	AnnotationUseSecurityGroupIDs           = "network.cce.baidubce.com/sg-ids"
 
 	// FinalizerOfCCEEndpointRemoteIP finalizer to remove ip from remote iaas
 	FinalizerOfCCEEndpointRemoteIP = "RemoteIPFinalizer"

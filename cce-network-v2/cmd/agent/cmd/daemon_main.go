@@ -250,7 +250,7 @@ func initializeFlags() {
 	flags.String(option.IPAM, ipamOption.IPAMClusterPool, "Backend to use for IPAM")
 	option.BindEnv(option.IPAM)
 
-	flags.Int(option.IPPoolMinAllocateIPs, 2,
+	flags.Int(option.IPPoolMinAllocateIPs, 10,
 		"IPPoolMinAllocateIPs is the minimum number of IPs that must be allocated when the Ethernet NetResourceSet of the node is first bootstrapped.")
 	option.BindEnv(option.IPPoolMinAllocateIPs)
 
@@ -258,9 +258,13 @@ func initializeFlags() {
 		"IPPoolPreAllocate defines the number of IP addresses that must be available for allocation in the IPAMspec of the NetResourceSet. ")
 	option.BindEnv(option.IPPoolPreAllocate)
 
-	flags.Int(option.IPPoolMaxAboveWatermark, 2,
+	flags.Int(option.IPPoolMaxAboveWatermark, 24,
 		"IPPoolMaxAboveWatermark is the maximum number of addresses to allocate beyond the addresses needed to reach the PreAllocate watermark.")
 	option.BindEnv(option.IPPoolMaxAboveWatermark)
+
+	flags.Int(option.BurstableMehrfachENI, 1,
+		"the number of idle IPs with the minimum reserved ENI IP capacity multiple, If 0, it means that the Burstable ENI mode is not used.")
+	option.BindEnv(option.BurstableMehrfachENI)
 
 	flags.Int(option.MaxRDMAIPsPerENI, 0, "max RDMA IPs can be allocated to a RDMA ENI , 0 means no limit")
 	option.BindEnv(option.MaxRDMAIPsPerENI)

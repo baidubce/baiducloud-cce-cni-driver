@@ -17,8 +17,8 @@ package endpoint
 import (
 	"context"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
-	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	ccelister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 	"github.com/sirupsen/logrus"
@@ -76,7 +76,7 @@ type DirectIPAllocator interface {
 
 type DirectEndpointOperation interface {
 	// FilterAvailableSubnet returns the best subnet for the endpoint
-	FilterAvailableSubnetIds([]string) []*ccev1.Subnet
+	FilterAvailableSubnetIds([]string, int) []*bcesync.BorrowedSubnet
 
 	// AllocateIP allocates an IP for the endpoint
 	// The meaning of reusing the IP address is to migrate the IP

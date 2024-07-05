@@ -192,3 +192,7 @@ func (n *Node) GetUsedIPWithPrefixes() int {
 	}
 	return len(n.k8sObj.Status.IPAM.Used)
 }
+
+func (n *Node) GetMaximumBurstableAllocatableIPv4() int {
+	return 0
+}

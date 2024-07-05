@@ -6,7 +6,7 @@ replace github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2 => ../cce-n
 
 require (
 	github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2 v0.0.0-20221124020506-a450d7066b07
-	github.com/baidubce/bce-sdk-go v0.9.148
+	github.com/baidubce/bce-sdk-go v0.9.165
 	github.com/go-logr/logr v1.2.3
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
 	k8s.io/apimachinery v0.26.0
@@ -22,6 +22,7 @@ require (
 	github.com/cilium/lumberjack/v2 v2.2.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.9.0 // indirect
+	github.com/evanphx/json-patch v5.6.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.6.0 // indirect
 	github.com/frankban/quicktest v1.14.5 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect

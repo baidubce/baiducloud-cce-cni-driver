@@ -20,3 +20,11 @@ package v2alpha1
 // ClusterPodSubnetTopologySpreadListerExpansion allows custom methods to be added to
 // ClusterPodSubnetTopologySpreadLister.
 type ClusterPodSubnetTopologySpreadListerExpansion interface{}
+
+// NetResourceConfigSetListerExpansion allows custom methods to be added to
+// NetResourceConfigSetLister.
+type NetResourceConfigSetListerExpansion interface{}
+
+// SecurityGroupListerExpansion allows custom methods to be added to
+// SecurityGroupLister.
+type SecurityGroupListerExpansion interface{}

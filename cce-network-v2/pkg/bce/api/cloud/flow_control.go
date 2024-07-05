@@ -26,11 +26,13 @@ import (
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/baidubce/bce-sdk-go/services/eip"
 	"github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/baidubce/bce-sdk-go/services/esg"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 	grate "golang.org/x/time/rate"
 )
 
 const (
+	DescribeVPC                  = "GET/bcecloud/apis/v1/vpc"
 	AddPrivateIP                 = "bcecloud/apis/v1/AddPrivateIP"
 	DeletePrivateIP              = "bcecloud/apis/v1/DeletePrivateIP"
 	BindENIPublicIP              = "bcecloud/apis/v1/BindENIPulblicIP"
@@ -57,7 +59,9 @@ const (
 	DescribeSubnet = "bcecloud/apis/v1/DescribeSubnet"
 	ListSubnets    = "bcecloud/apis/v1/ListSubnets"
 
-	ListSecurityGroup = "bcecloud/apis/v1/ListSecurityGroup"
+	ListSecurityGroup   = "bcecloud/apis/v1/ListSecurityGroup"
+	VPCListAcl          = "bcecloud/apis/v1/ListAcl"
+	BCCListEnterpriseSG = "/bcc/enterprise/security"
 
 	GetBCCInstanceDetail = "bcecloud/apis/v1/GetBCCInstanceDetail"
 	GetBBCInstanceDetail = "bcecloud/apis/v1/GetBBCInstanceDetail"
@@ -254,6 +258,37 @@ var apiRateLimitDefaults = map[string]rate.APILimiterParameters{
 type flowControlClient struct {
 	client  Interface
 	limiter rate.ServiceLimiterManager
+}
+
+// DescribeVPC implements Interface.
+func (fc *flowControlClient) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCModel, error) {
+	req, err := fc.limiter.Wait(ctx, DescribeVPC)
+	if err != nil {
+		return nil, err
+	}
+	req.Error(err)
+	return fc.client.DescribeVPC(ctx, vpcID)
+}
+
+// ListEsg implements Interface.
+func (fc *flowControlClient) ListEsg(ctx context.Context, instanceID string) ([]esg.EnterpriseSecurityGroup, error) {
+	req, err := fc.limiter.Wait(ctx, BCCListEnterpriseSG)
+	if err != nil {
+		return nil, err
+	}
+	req.Error(err)
+	return fc.client.ListEsg(ctx, instanceID)
+}
+
+// ListAclEntrys implements Interface.
+func (fc *flowControlClient) ListAclEntrys(ctx context.Context, vpcID string) ([]vpc.AclEntry, error) {
+	req, err := fc.limiter.Wait(ctx, VPCListAcl)
+	if err != nil {
+		return nil, err
+	}
+	ret, err := fc.client.ListAclEntrys(ctx, vpcID)
+	req.Error(err)
+	return ret, err
 }
 
 // BCCBatchAddIP implements Interface.

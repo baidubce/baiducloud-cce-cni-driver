@@ -227,6 +227,8 @@ const (
 	LabelEventMethodAdd    = "add"
 	LabelEventMethodUpdate = "update"
 	LabelEventMethodDelete = "delete"
+
+	LabelErrorReason = "reason"
 )
 
 var (
@@ -348,6 +350,9 @@ var (
 
 	// ControllerHandlerDurationMilliseconds is the histogram of the duration
 	ControllerHandlerDurationMilliseconds = NoOpObserverVec
+
+	// NoAvailableSubnetNodeCount is the counter of nodes that no avaiable subnet to create new eni
+	IPAMErrorCounter = NoOpCounterVec
 )
 
 type Configuration struct {
@@ -417,6 +422,7 @@ func DefaultMetrics() map[string]struct{} {
 		Namespace + "_work_queue_len":                                                   {},
 		Namespace + "_work_queue_event_counter":                                         {},
 		Namespace + "_controller_handler_duration_milliseconds":                         {},
+		Namespace + "_ipam_error_counter":                                               {},
 	}
 }
 
@@ -739,6 +745,18 @@ func CreateConfiguration(metricsEnabled []string) (Configuration, []prometheus.C
 					LabelBuildQueueName,
 					LabelEventMethod,
 					LabelError,
+				},
+			)
+		case Namespace + "_ipam_error_counter":
+			IPAMErrorCounter = prometheus.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "ipam_error_counter",
+					Help: "ipam error counter",
+				},
+				[]string{
+					LabelError,
+					LabelKind,
+					LabelBuildQueueName,
 				},
 			)
 		}

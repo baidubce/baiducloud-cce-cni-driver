@@ -75,6 +75,13 @@ spec:
                     description: AvailabilityZone is the availability zone to use
                       when allocating ENIs.
                     type: string
+                  burstableMehrfachENI:
+                    description: BurstableMehrfachENI is the number of idle IPs with
+                      the minimum reserved ENI IP capacity multiple. If 0, it means
+                      that the Burstable ENI mode is not used. If it is 1, it means
+                      always ensuring that an ENI's IP address is in a ready idle
+                      state (ready+IP capacity is full) default is 1
+                    type: integer
                   delete-on-termination:
                     description: DeleteOnTermination defines that the ENI should be
                       deleted when the associated instance is terminated. If the parameter
@@ -152,9 +159,6 @@ spec:
                     description: VpcID is the VPC ID to use when allocating ENIs.
                     type: string
                 required:
-                - maxAllocateENI
-                - maxIPsPerENI
-                - preAllocateENI
                 - routeTableOffset
                 type: object
               instance-id:

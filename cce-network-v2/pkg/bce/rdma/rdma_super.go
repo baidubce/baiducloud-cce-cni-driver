@@ -35,11 +35,9 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
@@ -899,20 +897,17 @@ func (n *bceRDMANetResourceSet) GetUsedIPWithPrefixes() int {
 }
 
 // FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (n *bceRDMANetResourceSet) FilterAvailableSubnet(subnets []*ccev1.Subnet) []*ccev1.Subnet {
+func (n *bceRDMANetResourceSet) FilterAvailableSubnet(subnets []*bcesync.BorrowedSubnet, minAllocateIPs int) []*bcesync.BorrowedSubnet {
 	contry := operatorOption.Config.BCECloudContry
 	region := operatorOption.Config.BCECloudRegion
 	zone := n.k8sObj.Spec.ENI.AvailabilityZone
 
-	var filtedSubnets []*ccev1.Subnet
+	var filtedSubnets []*bcesync.BorrowedSubnet
 	for _, subnet := range subnets {
 		if !strings.Contains(subnet.Spec.AvailabilityZone, api.TransAvailableZoneToZoneName(contry, region, zone)) {
 			continue
 		}
-		if subnet.Status.HasNoMoreIP || !subnet.Status.Enable {
-			continue
-		}
-		if subnet.Status.AvailableIPNum < 1 {
+		if !subnet.CanBorrow(minAllocateIPs) {
 			continue
 		}
 		filtedSubnets = append(filtedSubnets, subnet)
@@ -921,40 +916,28 @@ func (n *bceRDMANetResourceSet) FilterAvailableSubnet(subnets []*ccev1.Subnet) [
 }
 
 // FilterAvailableSubnetIds filter subnets by subnet ids
-func (n *bceRDMANetResourceSet) FilterAvailableSubnetIds(subnetIDs []string) []*ccev1.Subnet {
-	var filtedSubnets []*ccev1.Subnet
+func (n *bceRDMANetResourceSet) FilterAvailableSubnetIds(subnetIDs []string, minAllocateIPs int) []*bcesync.BorrowedSubnet {
+	var filtedSubnets []*bcesync.BorrowedSubnet
 	for _, subnetID := range subnetIDs {
-		sbn, err := bcesync.EnsureSubnet(n.k8sObj.Spec.ENI.VpcID, subnetID)
+		sbn, err := bcesync.GlobalBSM().EnsureSubnet(n.k8sObj.Spec.ENI.VpcID, subnetID)
 		if err != nil {
 			continue
 		}
 		filtedSubnets = append(filtedSubnets, sbn)
 	}
-	return n.FilterAvailableSubnet(filtedSubnets)
+	return n.FilterAvailableSubnet(filtedSubnets, minAllocateIPs)
 }
 
-// AllocateIP implements endpoint.DirectEndpointOperation
-func (n *bceRDMANetResourceSet) AllocateIP(ctx context.Context, action *endpoint.DirectIPAction) error {
-	panic("unimplemented")
-}
-
-// DeleteIP implements endpoint.DirectEndpointOperation
-func (n *bceRDMANetResourceSet) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAction) error {
-	var (
-		action *ipam.ReleaseAction = &ipam.ReleaseAction{
-			PoolID: ipamTypes.PoolID(allocation.SubnetID),
-		}
-	)
-
-	for _, addressPair := range allocation.Addressing {
-		if addressPair.Interface != "" {
-			action.InterfaceID = addressPair.Interface
-		}
-		action.IPsToRelease = append(action.IPsToRelease, addressPair.IP)
+func (n *bceRDMANetResourceSet) GetMaximumBurstableAllocatableIPv4() int {
+	quota := n.getRdmaEniQuota()
+	if quota == nil {
+		return 0
 	}
-	return n.ReleaseIPs(ctx, action)
+	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
+		return 0
+	}
+	if n.k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
+		return quota.GetMaxIP() - 1
+	}
+	return 0
 }
-
-var (
-	_ endpoint.DirectEndpointOperation = &bceRDMANetResourceSet{}
-)

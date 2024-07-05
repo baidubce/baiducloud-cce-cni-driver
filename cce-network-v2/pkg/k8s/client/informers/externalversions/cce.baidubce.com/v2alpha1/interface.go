@@ -25,6 +25,10 @@ import (
 type Interface interface {
 	// ClusterPodSubnetTopologySpreads returns a ClusterPodSubnetTopologySpreadInformer.
 	ClusterPodSubnetTopologySpreads() ClusterPodSubnetTopologySpreadInformer
+	// NetResourceConfigSets returns a NetResourceConfigSetInformer.
+	NetResourceConfigSets() NetResourceConfigSetInformer
+	// SecurityGroups returns a SecurityGroupInformer.
+	SecurityGroups() SecurityGroupInformer
 }
 
 type version struct {
@@ -41,4 +45,14 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // ClusterPodSubnetTopologySpreads returns a ClusterPodSubnetTopologySpreadInformer.
 func (v *version) ClusterPodSubnetTopologySpreads() ClusterPodSubnetTopologySpreadInformer {
 	return &clusterPodSubnetTopologySpreadInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// NetResourceConfigSets returns a NetResourceConfigSetInformer.
+func (v *version) NetResourceConfigSets() NetResourceConfigSetInformer {
+	return &netResourceConfigSetInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// SecurityGroups returns a SecurityGroupInformer.
+func (v *version) SecurityGroups() SecurityGroupInformer {
+	return &securityGroupInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

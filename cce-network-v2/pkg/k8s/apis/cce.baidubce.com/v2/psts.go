@@ -160,7 +160,7 @@ type CustomIPRange struct {
 	End string `json:"end"`
 }
 
-// +kubebuilder:validation:Enum=Elastic;Fixed;Manual;Custom;IPAllocTypeNil;PrimaryENI
+// +kubebuilder:validation:Enum=Elastic;Fixed;Manual;Custom;IPAllocTypeNil;PrimaryENI;RDMA
 
 // IPAllocType is the type for ip alloc strategy
 type IPAllocType string
@@ -168,6 +168,7 @@ type IPAllocType string
 // IPAllocType
 const (
 	IPAllocTypeNil        IPAllocType = ""
+	IPAllocTypeRDMA       IPAllocType = "RDMA"
 	IPAllocTypeElastic    IPAllocType = "Elastic"
 	IPAllocTypeFixed      IPAllocType = "Fixed"
 	IPAllocTypeENIPrimary IPAllocType = "PrimaryENI"

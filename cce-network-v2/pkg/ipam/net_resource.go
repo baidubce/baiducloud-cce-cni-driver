@@ -240,17 +240,26 @@ func (n *NetResource) getMinAllocate() int {
 	return n.resource.Spec.IPAM.MinAllocate
 }
 
+func (n *NetResource) getBurstableENIs() int {
+	return n.resource.Spec.ENI.BurstableMehrfachENI
+}
+
 // getMaxAllocate returns the maximum-allocation setting of an AWS node
 func (n *NetResource) getMaxAllocate() int {
 	instanceMax := n.ops.GetMaximumAllocatableIPv4()
 	if n.resource.Spec.IPAM.MaxAllocate > 0 {
 		if n.resource.Spec.IPAM.MaxAllocate > instanceMax {
 			n.loggerLocked().Warningf("max-allocate (%d) is higher than the instance type limits (%d)", n.resource.Spec.IPAM.MaxAllocate, instanceMax)
+			return instanceMax
 		}
 		return n.resource.Spec.IPAM.MaxAllocate
 	}
 
 	return instanceMax
+}
+
+func (n *NetResource) getMaxIPBurstableIPCount() int {
+	return n.ops.GetMaximumBurstableAllocatableIPv4()
 }
 
 // GetNeededAddresses returns the number of needed addresses that need to be
@@ -289,13 +298,18 @@ func getPendingPodCount(nodeName string) (int, error) {
 	return pendingPods, nil
 }
 
-func calculateNeededIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAllocate int) (neededIPs int) {
+func calculateNeededIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAllocate, burstableENIIPs int) (neededIPs int) {
 	neededIPs = preAllocate - (availableIPs - usedIPs)
 
 	if minAllocate > 0 {
 		neededIPs = math.IntMax(neededIPs, minAllocate-availableIPs)
 	}
 
+	// Ensure that the total number of IP addresses applied for each time is not less than the IP
+	// capacity of ENI if use burstableMehrfachENI
+	if neededIPs > 0 && burstableENIIPs > 0 {
+		neededIPs = burstableENIIPs
+	}
 	// If maxAllocate is set (> 0) and neededIPs is higher than the
 	// maxAllocate value, we only return the amount of IPs that can
 	// still be allocated
@@ -309,7 +323,11 @@ func calculateNeededIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAllo
 	return
 }
 
-func calculateExcessIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAboveWatermark int) (excessIPs int) {
+func calculateExcessIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAboveWatermark, burstableMehrfachENI int) (excessIPs int) {
+	// If burstableMehrfachENI is set, we do not need to calculate excessIPs
+	if burstableMehrfachENI > 0 {
+		return 0
+	}
 	// keep availableIPs above minAllocate + maxAboveWatermark as long as
 	// the initial socket of min-allocate + max-above-watermark has not
 	// been used up yet. This is the maximum potential allocation that will
@@ -448,8 +466,8 @@ func (n *NetResource) recalculate() {
 	}
 
 	n.stats.AvailableIPs = availableIPv6Count + availableIPv4Count
-	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate())
-	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark())
+	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate(), n.getMaxIPBurstableIPCount())
+	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark(), n.getMaxIPBurstableIPCount())
 
 	scopedLog.WithFields(logrus.Fields{
 		"available":                 n.stats.AvailableIPs,
@@ -458,6 +476,7 @@ func (n *NetResource) recalculate() {
 		"toRelease":                 n.stats.ExcessIPs,
 		"waitingForPoolMaintenance": n.waitingForPoolMaintenance,
 		"resyncNeeded":              n.resyncNeeded,
+		"maxBurstableIPs":           n.getMaxIPBurstableIPCount(),
 	}).Debug("Recalculated needed addresses")
 }
 
@@ -607,7 +626,8 @@ func (n *NetResource) determineMaintenanceAction() (*maintenanceAction, error) {
 
 	// Validate that the node still requires addresses to be released, the
 	// request may have been resolved in the meantime.
-	if n.manager.releaseExcessIPs && stats.ExcessIPs > 0 {
+	// we will disable the release of excess IPs for burstable ENI mode.
+	if n.manager.releaseExcessIPs && stats.ExcessIPs > 0 && n.getMaxIPBurstableIPCount() == 0 {
 		a.release = n.ops.PrepareIPRelease(stats.ExcessIPs, scopedLog)
 		return a, nil
 	}
@@ -854,7 +874,7 @@ func (n *NetResource) handleIPAllocation(ctx context.Context, a *maintenanceActi
 		return false, nil
 	}
 
-	// Assign needed addresses
+	// Assign needed addresses when use ippool
 	if a.allocation.AvailableForAllocationIPv4 > 0 || a.allocation.AvailableForAllocationIPv6 > 0 {
 		maxIPNum := a.allocation.MaxIPsToAllocate
 		a.allocation.AvailableForAllocationIPv4 = math.IntMin(a.allocation.AvailableForAllocationIPv4, maxIPNum)
@@ -875,6 +895,8 @@ func (n *NetResource) handleIPAllocation(ctx context.Context, a *maintenanceActi
 		}).WithError(err).Warning("Unable to assign additional IPs to interface, will create new interface")
 	}
 
+	// case 1 : create new interface when use ippool mode
+	// case 2 : create new interface and assign IPs when use bursable ENI mode
 	err = n.createInterface(ctx, a.allocation)
 	return err != nil, err
 }

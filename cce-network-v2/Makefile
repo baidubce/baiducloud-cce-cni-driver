@@ -128,9 +128,11 @@ define generate_mock
     github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/$(1) $(2)
 endef
 
+fmt:
+	$(GO) fmt ./...
 build: $(SUBDIRS) ## Builds all the components for CCE by executing make in the respective sub directories.
 
-$(SUBDIRS): force ## Execute default make target(make all) for the provided subdirectory.
+$(SUBDIRS): force fmt ## Execute default make target(make all) for the provided subdirectory.
 	@ $(MAKE) $(SUBMAKEOPTS) -C $@ all
 
 # If the developer provides TESTPKGS to filter the set of packages to use for testing, filter that to only packages with privileged tests.
@@ -210,7 +212,7 @@ GIT_VERSION: force
 	@if [ "$(GIT_VERSION)" != "`cat 2>/dev/null GIT_VERSION`" ] ; then echo "$(GIT_VERSION)" >GIT_VERSION; fi
 
 # DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator
-DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator-rdma
+DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni
 docker: GOARCH = amd64
 docker: $(DOCKER_IMAGES)
 docker-arm: GOARCH = arm64

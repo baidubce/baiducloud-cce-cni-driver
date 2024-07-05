@@ -67,14 +67,14 @@ var excessDef = []testExcessDef{
 
 func (e *IPAMSuite) TestCalculateNeededIPs(c *check.C) {
 	for _, d := range neededDef {
-		result := calculateNeededIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxallocate)
+		result := calculateNeededIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxallocate, 0)
 		c.Assert(result, check.Equals, d.result)
 	}
 }
 
 func (e *IPAMSuite) TestCalculateExcessIPs(c *check.C) {
 	for _, d := range excessDef {
-		result := calculateExcessIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxabovewatermark)
+		result := calculateExcessIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxabovewatermark, 0)
 		c.Assert(result, check.Equals, d.result)
 	}
 }

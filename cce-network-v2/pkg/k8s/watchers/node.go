@@ -21,7 +21,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -105,12 +104,7 @@ func (k *K8sWatcher) NodesInit(k8sClient *k8s.K8sClient) {
 // GetK8sNode returns the *local Node* from the local store.
 func (k *K8sWatcher) GetK8sNode(_ context.Context, nodeName string) (*v1.Node, error) {
 	k.WaitForCacheSync(k8sAPIGroupNodeV1Core)
-	pName := &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: nodeName,
-		},
-	}
-	nodeInterface, exists, err := k.nodeStore.Get(pName)
+	nodeInterface, exists, err := k.nodeStore.GetByKey(nodeName)
 	if err != nil {
 		return nil, err
 	}

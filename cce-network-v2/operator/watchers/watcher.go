@@ -3,6 +3,7 @@ package watchers
 import (
 	"fmt"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"k8s.io/client-go/tools/cache"
@@ -29,6 +30,10 @@ func StartWatchers(stopCh <-chan struct{}) {
 	k8s.CCEClient().Informers.Cce().V1().Subnets().Informer()
 	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
 	k8s.CCEClient().Informers.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer()
+
+	if operatorOption.Config.SecurityGroupSynerDuration > 0 {
+		k8s.CCEClient().Informers.Cce().V2alpha1().SecurityGroups().Informer()
+	}
 
 	k8s.WatcherClient().Informers.Start(stopCh)
 	k8s.CCEClient().Informers.Start(stopCh)

@@ -30,6 +30,7 @@ import (
 	api "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	eip "github.com/baidubce/bce-sdk-go/services/eip"
 	eni "github.com/baidubce/bce-sdk-go/services/eni"
+	esg "github.com/baidubce/bce-sdk-go/services/esg"
 	vpc "github.com/baidubce/bce-sdk-go/services/vpc"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -333,6 +334,21 @@ func (mr *MockInterfaceMockRecorder) DescribeSubnet(arg0, arg1 interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnet", reflect.TypeOf((*MockInterface)(nil).DescribeSubnet), arg0, arg1)
 }
 
+// DescribeVPC mocks base method.
+func (m *MockInterface) DescribeVPC(arg0 context.Context, arg1 string) (*vpc.ShowVPCModel, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DescribeVPC", arg0, arg1)
+	ret0, _ := ret[0].(*vpc.ShowVPCModel)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DescribeVPC indicates an expected call of DescribeVPC.
+func (mr *MockInterfaceMockRecorder) DescribeVPC(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeVPC", reflect.TypeOf((*MockInterface)(nil).DescribeVPC), arg0, arg1)
+}
+
 // DetachENI mocks base method.
 func (m *MockInterface) DetachENI(arg0 context.Context, arg1 *eni.EniInstance) error {
 	m.ctrl.T.Helper()
@@ -436,6 +452,21 @@ func (mr *MockInterfaceMockRecorder) GetHPCEniID(arg0, arg1 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHPCEniID", reflect.TypeOf((*MockInterface)(nil).GetHPCEniID), arg0, arg1)
 }
 
+// ListAclEntrys mocks base method.
+func (m *MockInterface) ListAclEntrys(arg0 context.Context, arg1 string) ([]vpc.AclEntry, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAclEntrys", arg0, arg1)
+	ret0, _ := ret[0].([]vpc.AclEntry)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAclEntrys indicates an expected call of ListAclEntrys.
+func (mr *MockInterfaceMockRecorder) ListAclEntrys(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAclEntrys", reflect.TypeOf((*MockInterface)(nil).ListAclEntrys), arg0, arg1)
+}
+
 // ListBCCInstanceEni mocks base method.
 func (m *MockInterface) ListBCCInstanceEni(arg0 context.Context, arg1 string) ([]api.Eni, error) {
 	m.ctrl.T.Helper()
@@ -494,6 +525,21 @@ func (m *MockInterface) ListERIs(arg0 context.Context, arg1 eni.ListEniArgs) ([]
 func (mr *MockInterfaceMockRecorder) ListERIs(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListERIs", reflect.TypeOf((*MockInterface)(nil).ListERIs), arg0, arg1)
+}
+
+// ListEsg mocks base method.
+func (m *MockInterface) ListEsg(arg0 context.Context, arg1 string) ([]esg.EnterpriseSecurityGroup, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListEsg", arg0, arg1)
+	ret0, _ := ret[0].([]esg.EnterpriseSecurityGroup)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListEsg indicates an expected call of ListEsg.
+func (mr *MockInterfaceMockRecorder) ListEsg(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEsg", reflect.TypeOf((*MockInterface)(nil).ListEsg), arg0, arg1)
 }
 
 // ListRouteTable mocks base method.

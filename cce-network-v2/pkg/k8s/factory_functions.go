@@ -520,30 +520,7 @@ func convertToTaints(v1Taints []v1.Taint) []corev1.Taint {
 func ConvertToNode(obj interface{}) interface{} {
 	switch concreteObj := obj.(type) {
 	case *v1.Node:
-		p := &corev1.Node{
-			TypeMeta: slim_metav1.TypeMeta{
-				Kind:       concreteObj.TypeMeta.Kind,
-				APIVersion: concreteObj.TypeMeta.APIVersion,
-			},
-			ObjectMeta: slim_metav1.ObjectMeta{
-				Name:            concreteObj.ObjectMeta.Name,
-				Namespace:       concreteObj.ObjectMeta.Namespace,
-				UID:             concreteObj.ObjectMeta.UID,
-				ResourceVersion: concreteObj.ObjectMeta.ResourceVersion,
-				Labels:          concreteObj.ObjectMeta.Labels,
-				Annotations:     concreteObj.ObjectMeta.Annotations,
-			},
-			Spec: corev1.NodeSpec{
-				PodCIDR:  concreteObj.Spec.PodCIDR,
-				PodCIDRs: concreteObj.Spec.PodCIDRs,
-				Taints:   convertToTaints(concreteObj.Spec.Taints),
-			},
-			Status: corev1.NodeStatus{
-				Addresses: convertToAddress(concreteObj.Status.Addresses),
-			},
-		}
-		*concreteObj = v1.Node{}
-		return p
+		return concreteObj
 	case cache.DeletedFinalStateUnknown:
 		node, ok := concreteObj.Obj.(*v1.Node)
 		if !ok {

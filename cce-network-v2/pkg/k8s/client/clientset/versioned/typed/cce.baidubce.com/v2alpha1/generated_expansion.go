@@ -18,3 +18,7 @@
 package v2alpha1
 
 type ClusterPodSubnetTopologySpreadExpansion interface{}
+
+type NetResourceConfigSetExpansion interface{}
+
+type SecurityGroupExpansion interface{}

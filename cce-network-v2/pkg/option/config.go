@@ -378,6 +378,12 @@ const (
 	IPPoolPreAllocate             = "ippool-pre-allocate"
 	IPPoolMaxAboveWatermark       = "ippool-max-above-watermark"
 
+	// BurstableMehrfachENI is the number of idle IPs with the minimum reserved ENI
+	// IP capacity multiple. If 0, it means that the Burstable ENI mode is not used.
+	// If it is 1, it means always ensuring that an ENI's IP address is in a ready
+	// idle state (ready+IP capacity is full)
+	BurstableMehrfachENI = "burstable-mehrfach-eni"
+
 	// this flags only use for vpc-rdma mode
 	MaxRDMAIPsPerENI            = "rdma-max-ips-per-eni"
 	RDMAIPPoolMinAllocateIPs    = "rdma-ippool-min-allocate-ips"
@@ -718,6 +724,13 @@ type DaemonConfig struct {
 	IPPoolMinAllocateIPs    int
 	IPPoolPreAllocate       int
 	IPPoolMaxAboveWatermark int
+
+	// BurstableMehrfachENI is the number of idle IPs with the minimum reserved ENI
+	// IP capacity multiple. If 0, it means that the Burstable ENI mode is not used.
+	// If it is 1, it means always ensuring that an ENI's IP address is in a ready
+	// idle state (ready+IP capacity is full)
+	// default is 1
+	BurstableMehrfachENI int
 
 	// RDMAIPAM Config is the Configuration to use for RDMA
 	RDMAIPPoolMinAllocateIPs    int
@@ -1130,6 +1143,7 @@ func (c *DaemonConfig) Populate() {
 	c.IPPoolMaxAboveWatermark = viper.GetInt(IPPoolMaxAboveWatermark)
 	c.IPPoolMinAllocateIPs = viper.GetInt(IPPoolMinAllocateIPs)
 	c.IPPoolPreAllocate = viper.GetInt(IPPoolPreAllocate)
+	c.BurstableMehrfachENI = viper.GetInt(BurstableMehrfachENI)
 	c.RDMAIPPoolMaxAboveWatermark = viper.GetInt(RDMAIPPoolMaxAboveWatermark)
 	c.RDMAIPPoolMinAllocateIPs = viper.GetInt(RDMAIPPoolMinAllocateIPs)
 	c.RDMAIPPoolPreAllocate = viper.GetInt(RDMAIPPoolPreAllocate)

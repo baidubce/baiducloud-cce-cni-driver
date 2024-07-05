@@ -107,6 +107,9 @@ type NetResourceOperations interface {
 	// GetUsedIPWithPrefixes returns the total number of used IPs including all IPs in a prefix if at-least one of
 	// the prefix IPs is in use.
 	GetUsedIPWithPrefixes() int
+
+	// GetMaximumBurstableAllocatableIPv4 returns the maximum amount of IPv4 addresses
+	GetMaximumBurstableAllocatableIPv4() int
 }
 
 // AllocationImplementation is the interface an implementation must provide.

@@ -38,6 +38,7 @@ import (
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	ccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -64,6 +65,10 @@ type k8sNodeGetter interface {
 	GetK8sNode(ctx context.Context, nodeName string) (*corev1.Node, error)
 }
 
+type nrcsNodeGetter interface {
+	GetNodeNrcs(nodeName string) (*ccev2alpha1.NetResourceConfigSet, error)
+}
+
 // NodeDiscovery represents a node discovery action
 type NodeDiscovery struct {
 	Manager               *nodemanager.Manager
@@ -72,6 +77,7 @@ type NodeDiscovery struct {
 	localStateInitialized chan struct{}
 	NetConf               *cnitypes.NetConf
 	k8sNodeGetter         k8sNodeGetter
+	nrcsNodeGetter        nrcsNodeGetter
 	localNodeLock         lock.Mutex
 	localNode             nodeTypes.Node
 	eventRecorder         record.EventRecorder
@@ -106,6 +112,11 @@ func NewNodeDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 		NetConf:               netConf,
 		eventRecorder:         k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: nodeDiscoverySubsys}),
 	}
+}
+
+// NewNodeDiscovery returns a pointer to new node discovery object
+func NewRdmaDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration, netConf *cnitypes.NetConf) *RdmaDiscovery {
+	return &RdmaDiscovery{NewNodeDiscovery(manager, mtuConfig, netConf)}
 }
 
 // StartDiscovery start configures the local node and starts node discovery. This is called on
@@ -311,13 +322,6 @@ func (n *NodeDiscovery) UpdateNetResourceSetResource() {
 }
 
 func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) error {
-	var (
-		providerID       string
-		k8sNodeAddresses []nodeTypes.Address
-	)
-
-	nodeResource.Spec.Addresses = []ccev2.NodeAddress{}
-
 	// If we are unable to fetch the K8s Node resource and the NetResourceSet does
 	// not have an OwnerReference set, then somehow we are running in an
 	// environment where only the NetResourceSet exists. Do not proceed as this is
@@ -354,10 +358,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 
 	// Get the addresses from k8s node and add them as part of CCE Node.
 	// CCE Node should contain all addresses from k8s.
-	nodeInterface := k8s.ConvertToNode(k8sNode)
-	typesNode := nodeInterface.(*k8sTypes.Node)
-	k8sNodeParsed := k8s.ParseNode(typesNode)
-	k8sNodeAddresses = k8sNodeParsed.IPAddresses
+	k8sNodeParsed := k8s.ParseNode(k8sNode)
 
 	// overwrite the labels from k8s node
 	if nodeResource.ObjectMeta.Labels == nil {
@@ -373,10 +374,7 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 		nodeResource.ObjectMeta.Annotations[key] = v
 	}
 
-	providerID = k8sNode.Spec.ProviderID
-	nodeResource.Labels["providerID"] = providerID
-
-	for _, k8sAddress := range k8sNodeAddresses {
+	for _, k8sAddress := range k8sNodeParsed.IPAddresses {
 		k8sAddressStr := k8sAddress.IP.String()
 		nodeResource.Spec.Addresses = append(nodeResource.Spec.Addresses, ccev2.NodeAddress{
 			Type: k8sAddress.Type,
@@ -408,6 +406,10 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 	}
 	nodeResource.Spec.InstanceID = instanceID
 
+	nrcs, err := n.nrcsNodeGetter.GetNodeNrcs(nodeTypes.GetName())
+	if err != nil {
+		log.WithError(err).Warning("get node NRCs failed")
+	}
 	switch option.Config.IPAM {
 	case ipamOption.IPAMClusterPool:
 	case ipamOption.IPAMClusterPoolV2, ipamOption.IPAMVpcRoute:
@@ -416,59 +418,8 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 			nodeResource.Spec.IPAM.PodCIDRReleaseThreshold = c.IPAM.PodCIDRReleaseThreshold
 		}
 	case ipamOption.IPAMVpcEni:
-		// only generate eni spec when it is not set
-		if nodeResource.Spec.ENI == nil {
-			eni, err := agent.GenerateENISpec()
-			if err != nil {
-				n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError02", "generate eni metadata error: %v", err)
-				log.WithError(err).Fatal("generate ENI spec fail")
-			}
-			nodeResource.Spec.ENI = eni
+		n.refreshVpcENIConfiguration(nodeResource, nrcs, k8sNode)
 
-			// if eni use mode was set on the label of local node, we use it override the eni spec
-			if eniUseMode, ok := nodeResource.Labels[k8s.LabelENIUseMode]; ok {
-				nodeResource.Spec.ENI.UseMode = eniUseMode
-			}
-			if nodeResource.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
-				if option.Config.ENI != nil {
-					nodeResource.Spec.ENI.InstallSourceBasedRouting = option.Config.ENI.InstallSourceBasedRouting
-				}
-			}
-		}
-
-		// reset eni spec when it is restart
-		if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
-			if option.Config.IPPoolMinAllocateIPs != 0 {
-				nodeResource.Spec.IPAM.MinAllocate = option.Config.IPPoolMinAllocateIPs
-			}
-			if option.Config.IPPoolPreAllocate != 0 {
-				nodeResource.Spec.IPAM.PreAllocate = option.Config.IPPoolPreAllocate
-			}
-			if option.Config.IPPoolMaxAboveWatermark != 0 {
-				nodeResource.Spec.IPAM.MaxAboveWatermark = option.Config.IPPoolMaxAboveWatermark
-			}
-			if option.Config.ENI.RouteTableOffset > 0 {
-				nodeResource.Spec.ENI.RouteTableOffset = option.Config.ENI.RouteTableOffset
-			}
-		}
-
-		// update subnet and security group ids
-		nodeResource.Spec.ENI.SecurityGroups = option.Config.ENI.SecurityGroups
-		nodeResource.Spec.ENI.EnterpriseSecurityGroupList = option.Config.ENI.EnterpriseSecurityGroupList
-
-		if option.Config.ENI.UsePrimaryAddress != nil {
-			nodeResource.Spec.ENI.UsePrimaryAddress = option.Config.ENI.UsePrimaryAddress
-		}
-
-		// do not leak subnet ids which used by eni
-		nodeResource.Spec.ENI.SubnetIDs = option.Config.ENI.SubnetIDs
-		if len(nodeResource.Status.ENIs) > 0 {
-			sbnSet := sets.NewString(nodeResource.Spec.ENI.SubnetIDs...)
-			for _, eni := range nodeResource.Status.ENIs {
-				sbnSet.Insert(eni.SubnetID)
-			}
-			nodeResource.Spec.ENI.SubnetIDs = sbnSet.List()
-		}
 	case ipamOption.IPAMPrivateCloudBase:
 		if c := n.NetConf; c != nil {
 			if c.IPAM.MinAllocate != 0 {
@@ -506,8 +457,140 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 	return nil
 }
 
+// refreshVpcENIConfiguration update eni spec param
+// over write the nrcs config
+// only generate eni spec when it is not set
+// if eni use mode was set on the label of local node, we use it override the eni spec
+// reset eni spec when it is restart
+// clean ippool config
+// set max allocate ips to node default is 128
+// update subnet and security group ids
+// this update does not take effect on existing ENI
+func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResourceSet, nrcs *ccev2alpha1.NetResourceConfigSet, k8sNode *k8sTypes.Node) {
+	var (
+		preAllocateENI       = option.Config.ENI.PreAllocateENI
+		minAllocate          = option.Config.IPPoolMinAllocateIPs
+		preAllocate          = option.Config.IPPoolPreAllocate
+		maxAboveWatermark    = option.Config.IPPoolMaxAboveWatermark
+		routeTableOffset     = option.Config.ENI.RouteTableOffset
+		burstableMehrfachENI = option.Config.BurstableMehrfachENI
+
+		subnetIDs                  = option.Config.ENI.SubnetIDs
+		securityGroups             = option.Config.ENI.SecurityGroups
+		enterpriseSecurityGroupIDs = option.Config.ENI.EnterpriseSecurityGroupList
+
+		eniUseMode        string
+		usePrimaryAddress bool
+	)
+
+	if mode, ok := nodeResource.Labels[k8s.LabelENIUseMode]; ok {
+		eniUseMode = mode
+	}
+
+	if nrcs != nil {
+		log.WithFields(
+			logrus.Fields{
+				"nrcs": nrcs.Name,
+				"spec": logfields.Repr(nrcs.Spec),
+			},
+		)
+		if nrcs.Spec.AgentConfig.IPPoolPreAllocateENI != nil {
+			preAllocateENI = *nrcs.Spec.AgentConfig.IPPoolPreAllocateENI
+		}
+		if nrcs.Spec.AgentConfig.IPPoolMinAllocate != nil {
+			minAllocate = *nrcs.Spec.AgentConfig.IPPoolMinAllocate
+		}
+		if nrcs.Spec.AgentConfig.IPPoolPreAllocate != nil {
+			preAllocate = *nrcs.Spec.AgentConfig.IPPoolPreAllocate
+		}
+		if nrcs.Spec.AgentConfig.IPPoolMaxAboveWatermark != nil {
+			maxAboveWatermark = *nrcs.Spec.AgentConfig.IPPoolMaxAboveWatermark
+		}
+		if nrcs.Spec.AgentConfig.RouteTableOffset != nil {
+			routeTableOffset = *nrcs.Spec.AgentConfig.RouteTableOffset
+		}
+		if nrcs.Spec.AgentConfig.BurstableMehrfachENI != nil {
+			burstableMehrfachENI = *nrcs.Spec.AgentConfig.BurstableMehrfachENI
+		}
+		if nrcs.Spec.AgentConfig.EniUseMode != nil {
+			eniUseMode = *nrcs.Spec.AgentConfig.EniUseMode
+		}
+
+		if len(nrcs.Spec.AgentConfig.EniSubnetIDs) > 0 {
+			subnetIDs = nrcs.Spec.AgentConfig.EniSubnetIDs
+		}
+		if len(nrcs.Spec.AgentConfig.EniSecurityGroupIds) > 0 {
+			securityGroups = nrcs.Spec.AgentConfig.EniSecurityGroupIds
+		}
+		if len(nrcs.Spec.AgentConfig.EniEnterpriseSecurityGroupIds) > 0 {
+			enterpriseSecurityGroupIDs = nrcs.Spec.AgentConfig.EniEnterpriseSecurityGroupIds
+		}
+		if nrcs.Spec.AgentConfig.UsePrimaryAddress != nil {
+			usePrimaryAddress = *nrcs.Spec.AgentConfig.UsePrimaryAddress
+		}
+	}
+
+	// create new nrs if it is not set
+	if nodeResource.Spec.ENI == nil {
+		eni, err := agent.GenerateENISpec()
+		if err != nil {
+			n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError02", "generate eni metadata error: %v", err)
+			log.WithError(err).Fatal("generate ENI spec fail")
+		}
+		nodeResource.Spec.ENI = eni
+
+		nodeResource.Spec.ENI.UseMode = eniUseMode
+		if nodeResource.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
+			if option.Config.ENI != nil {
+				nodeResource.Spec.ENI.InstallSourceBasedRouting = option.Config.ENI.InstallSourceBasedRouting
+			}
+		}
+		nodeResource.Spec.ENI.UsePrimaryAddress = &usePrimaryAddress
+		if routeTableOffset > 0 {
+			nodeResource.Spec.ENI.RouteTableOffset = routeTableOffset
+		}
+	}
+
+	// update old nrs
+	if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
+		nodeResource.Spec.ENI.BurstableMehrfachENI = burstableMehrfachENI
+		nodeResource.Spec.IPAM.PreAllocate = preAllocate
+
+		if burstableMehrfachENI == 0 {
+			nodeResource.Spec.IPAM.MinAllocate = minAllocate
+			nodeResource.Spec.IPAM.MaxAboveWatermark = maxAboveWatermark
+			nodeResource.Spec.ENI.PreAllocateENI = preAllocateENI
+		}
+
+		podsNum := k8sNode.Status.Capacity[k8sTypes.ResourcePods]
+		if nums, ok := podsNum.AsInt64(); ok {
+			nodeResource.Spec.IPAM.MaxAllocate = int(nums)
+			log.Infof("set max allocate ips %d to nrs", nodeResource.Spec.IPAM.MaxAllocate)
+		} else {
+			log.Warnf("failed to get pods number from node %s, will use default 128", k8sNode.Name)
+			nodeResource.Spec.IPAM.MaxAllocate = 128
+		}
+	}
+	nodeResource.Spec.ENI.SecurityGroups = securityGroups
+	nodeResource.Spec.ENI.EnterpriseSecurityGroupList = enterpriseSecurityGroupIDs
+
+	// do not leak subnet ids which used by eni
+	nodeResource.Spec.ENI.SubnetIDs = subnetIDs
+	if len(nodeResource.Status.ENIs) > 0 {
+		sbnSet := sets.NewString(nodeResource.Spec.ENI.SubnetIDs...)
+		for _, eni := range nodeResource.Status.ENIs {
+			sbnSet.Insert(eni.SubnetID)
+		}
+		nodeResource.Spec.ENI.SubnetIDs = sbnSet.List()
+	}
+}
+
 func (n *NodeDiscovery) RegisterK8sNodeGetter(k8sNodeGetter k8sNodeGetter) {
 	n.k8sNodeGetter = k8sNodeGetter
+}
+
+func (n *NodeDiscovery) RegisterNrcsNodeGetter(nrcsNodeGetter nrcsNodeGetter) {
+	n.nrcsNodeGetter = nrcsNodeGetter
 }
 
 // LocalAllocCIDRsUpdated informs the agent that the local allocation CIDRs have
@@ -567,12 +650,4 @@ func validatePrimaryCIDR(oldCIDR, newCIDR *cidr.CIDR, family ipam.Family) {
 			logfields.Family:  family,
 		}).Warn("Detected change of primary pod allocation CIDR. Agent restart required.")
 	}
-}
-
-func getInt(i int) *int {
-	return &i
-}
-
-func getBool(b bool) *bool {
-	return &b
 }

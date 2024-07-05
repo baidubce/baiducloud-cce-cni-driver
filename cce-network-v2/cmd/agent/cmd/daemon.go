@@ -78,7 +78,6 @@ type Daemon struct {
 	// programs.
 	compilationMutex *lock.RWMutex
 	mtuConfig        mtu.Configuration
-	rdmaMtuConfig    mtu.Configuration
 
 	// nodeDiscovery defines the node discovery logic of the agent
 	nodeDiscovery *nodediscovery.NodeDiscovery
@@ -97,8 +96,7 @@ type Daemon struct {
 	// endpointManager is the endpoint manager of the agent
 	endpointAPIHandler *endpoint.EndpointAPIHandler
 
-	netConf     *cnitypes.NetConf
-	rdmaNetConf *cnitypes.NetConf
+	netConf *cnitypes.NetConf
 
 	k8sWatcher *watchers.K8sWatcher
 
@@ -160,11 +158,9 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	cleaner.SetCancelFunc(cancel)
 
 	var (
-		err              error
-		netConf          *cnitypes.NetConf
-		rdmaNetConf      *cnitypes.NetConf
-		configuredMTU    = option.Config.MTU
-		configureRdmaMTU = option.Config.MTU
+		err           error
+		netConf       *cnitypes.NetConf
+		configuredMTU = option.Config.MTU
 	)
 
 	bootstrapStats.daemonInit.Start()
@@ -191,8 +187,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	}
 
 	var (
-		mtuConfig     mtu.Configuration
-		rdmaMtuConfig mtu.Configuration
+		mtuConfig mtu.Configuration
 	)
 	// ExternalIP could be nil but we are covering that case inside NewConfiguration
 	mtuConfig = mtu.NewConfiguration(
@@ -201,14 +196,6 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		false,
 		false,
 		configuredMTU,
-		externalIP,
-	)
-	rdmaMtuConfig = mtu.NewConfiguration(
-		0,
-		false,
-		false,
-		false,
-		configureRdmaMTU,
 		externalIP,
 	)
 
@@ -220,7 +207,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	}
 
 	nd := nodediscovery.NewNodeDiscovery(nodeMngr, mtuConfig, netConf)
-	rd := nodediscovery.NewRdmaDiscovery(nodeMngr, rdmaMtuConfig, rdmaNetConf)
+	rd := nodediscovery.NewRdmaDiscovery(nodeMngr, mtuConfig, netConf)
 
 	d := Daemon{
 		ctx:              ctx,
@@ -228,9 +215,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		buildEndpointSem: semaphore.NewWeighted(int64(numWorkerThreads())),
 		compilationMutex: new(lock.RWMutex),
 		netConf:          netConf,
-		rdmaNetConf:      rdmaNetConf,
 		mtuConfig:        mtuConfig,
-		rdmaMtuConfig:    rdmaMtuConfig,
 		nodeDiscovery:    nd,
 		rdmaDiscovery:    rd,
 		apiLimiterSet:    apiLimiterSet,
@@ -245,7 +230,11 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 
 	// register the node discovery with the k8s watcher
 	d.nodeDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
+	d.nodeDiscovery.RegisterNrcsNodeGetter(d.k8sWatcher)
+
 	d.rdmaDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
+	d.rdmaDiscovery.RegisterNrcsNodeGetter(d.k8sWatcher)
+
 	d.k8sWatcher.NodeChain.Register(d.nodeDiscovery)
 
 	bootstrapStats.daemonInit.End(true)

@@ -148,10 +148,16 @@ func filterAvailableSubnet(psts *ccev2.PodSubnetTopologySpread, provider *pstsAl
 		subnetIDs = append(subnetIDs, sbnID)
 	}
 
-	subnets := operation.FilterAvailableSubnetIds(subnetIDs)
-	if len(subnets) == 0 {
+	bsubnets := operation.FilterAvailableSubnetIds(subnetIDs, 1)
+	if len(bsubnets) == 0 {
 		log.WithField("step", "FilterAvailableSubnet").Error("no available subnet")
 		return nil, fmt.Errorf("no available subnet")
+	}
+
+	var subnets []*ccev1.Subnet
+	for _, bsbn := range bsubnets {
+
+		subnets = append(subnets, bsbn.Subnet)
 	}
 	return subnets, nil
 }

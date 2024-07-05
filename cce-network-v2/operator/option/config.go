@@ -139,9 +139,6 @@ const (
 	// Defaults to 180 secs
 	ExcessIPReleaseDelay = "excess-ip-release-delay"
 
-	// EnableExcessIPRelease enables the feature that will release excess IPs after a configurable delay
-	EnableExcessIPRelease = "enable-excess-ip-release"
-
 	// LeaderElectionLeaseDuration is the duration that non-leader candidates will wait to
 	// force acquire leadership
 	LeaderElectionLeaseDuration = "leader-election-lease-duration"
@@ -211,6 +208,15 @@ const (
 	// EnableNodeAnnotationSync wait for node annotation sync
 	// this flag is useful for vpc-eni mode, operator will wait for node annotation sync to chose the subnet
 	EnableNodeAnnotationSync = "enable-node-annotation-sync"
+
+	// ReleaseExcessIPs release excess IP when pods is deleted, defaule is false
+	ReleaseExcessIPs = "release-excess-ips"
+
+	// EnableSecurityGroupSyner enable security group syner, default is true"
+	EnableSecurityGroupSyner = "enable-securitygroup-syner"
+
+	// EnableSecurityGroupSynerDuration is the duration of security group syner send alter event, default is 1h
+	SecurityGroupSynerDuration = "securitygroup-syner-duration"
 )
 
 // OperatorConfig is the configuration used by the operator.
@@ -321,9 +327,6 @@ type OperatorConfig struct {
 	// Defaults to 180 secs
 	ExcessIPReleaseDelay int
 
-	// EnableExcessIPRelease controls whether operator should release excess IPs.
-	EnableExcessIPRelease bool
-
 	// BCE options
 
 	// AlibabaCloudVPCID allow user to specific vpc
@@ -350,6 +353,9 @@ type OperatorConfig struct {
 
 	// BCECustomerMaxRdmaIP is the max RDMA ip number of customer
 	BCECustomerMaxRdmaIP int
+
+	// ReleaseExcessIPs release excess IP when pods is deleted, defaule is false
+	ReleaseExcessIPs bool
 
 	// CCEK8sNamespace is the namespace where CCE pods are running.
 	CCEK8sNamespace string
@@ -400,6 +406,9 @@ type OperatorConfig struct {
 
 	// EnableRDMA enables RDMA support
 	EnableRDMA bool
+
+	// SecurityGroupSynerDuration is the duration of security group syner send alter event
+	SecurityGroupSynerDuration time.Duration
 }
 
 // Populate sets all options with the values from viper.
@@ -432,7 +441,6 @@ func (c *OperatorConfig) Populate() {
 	} else {
 		c.SkipManagerNodeLabels = m
 	}
-	c.ExcessIPReleaseDelay = viper.GetInt(ExcessIPReleaseDelay)
 	c.PSTSSubnetReversedIPNum = viper.GetInt(PSTSSubnetReversedIPNum)
 	c.EnableIPv4 = viper.GetBool(option.EnableIPv4Name)
 	c.EnableIPv6 = viper.GetBool(option.EnableIPv6Name)
@@ -473,14 +481,18 @@ func (c *OperatorConfig) Populate() {
 	c.SubnetResourceResyncWorkers = viper.GetInt64(SubnetResourceResyncWorkers)
 	c.BCECustomerMaxIP = viper.GetInt(BCECustomerMaxIP)
 	c.BCECustomerMaxRdmaIP = viper.GetInt(BCECustomerMaxRdmaIP)
+	c.ReleaseExcessIPs = viper.GetBool(ReleaseExcessIPs)
+	c.ExcessIPReleaseDelay = viper.GetInt(ExcessIPReleaseDelay)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
 	c.FixedIPTimeout = viper.GetDuration(option.FixedIPTimeout)
 	c.EnableRemoteFixedIPGC = viper.GetBool(EnableRemoteFixedIPGC)
-	c.EnableExcessIPRelease = viper.GetBool(EnableExcessIPRelease)
 
 	c.CCEClusterID = viper.GetString(CCEClusterID)
 	c.EnableNodeAnnotationSync = viper.GetBool(EnableNodeAnnotationSync)
+
+	// secuirty group
+	c.SecurityGroupSynerDuration = viper.GetDuration(SecurityGroupSynerDuration)
 
 	// Option maps and slices
 

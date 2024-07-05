@@ -305,6 +305,16 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		eniStatus   *ccev2.ENIStatus
 		updateError error
 	)
+	defer func() {
+		if err == nil {
+			if newObj.Spec.BorrowIPCount > 0 {
+				bsbn, e := GlobalBSM().EnsureSubnet(newObj.Spec.ENI.VpcID, newObj.Spec.ENI.SubnetID)
+				if e == nil {
+					bsbn.forceBorrowForENI(newObj.Name, newObj.Spec.BorrowIPCount-newObj.Status.LendBorrowedIPCount)
+				}
+			}
+		}
+	}()
 
 	// delete old eni
 	if newObj.Status.VPCStatus == ccev2.VPCENIStatusDeleted {
@@ -469,12 +479,16 @@ func (es *eniSyncher) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
 		newObj.Spec.ENI.ID = eniCache.EniId
 		newObj.Spec.ENI.Name = eniCache.Name
 		newObj.Spec.ENI.MacAddress = eniCache.MacAddress
-		newObj.Spec.ENI.SecurityGroupIds = eniCache.SecurityGroupIds
-		newObj.Spec.ENI.EnterpriseSecurityGroupIds = eniCache.EnterpriseSecurityGroupIds
 		newObj.Spec.ENI.Description = eniCache.Description
 		newObj.Spec.ENI.VpcID = eniCache.VpcId
 		newObj.Spec.ENI.ZoneName = eniCache.ZoneName
 		newObj.Spec.ENI.SubnetID = eniCache.SubnetId
+		if len(eniCache.SecurityGroupIds) > 0 {
+			newObj.Spec.SecurityGroupIds = eniCache.SecurityGroupIds
+		}
+		if len(eniCache.EnterpriseSecurityGroupIds) > 0 {
+			newObj.Spec.EnterpriseSecurityGroupIds = eniCache.EnterpriseSecurityGroupIds
+		}
 
 		if len(newObj.Labels) == 0 {
 			newObj.Labels = map[string]string{}
@@ -486,6 +500,16 @@ func (es *eniSyncher) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
 		newObj.Spec.ENI.PrivateIPSet = toModelPrivateIP(eniCache.PrivateIpSet, eniCache.VpcId, eniCache.SubnetId)
 		newObj.Spec.ENI.IPV6PrivateIPSet = toModelPrivateIP(eniCache.Ipv6PrivateIpSet, eniCache.VpcId, eniCache.SubnetId)
 		ElectENIIPv6PrimaryIP(newObj)
+
+		if newObj.Spec.BorrowIPCount > 0 {
+			var eniSbnIPCount int
+			for _, ip := range newObj.Spec.ENI.PrivateIPSet {
+				if ip.SubnetID == newObj.Spec.SubnetID {
+					eniSbnIPCount++
+				}
+			}
+			(&newObj.Status).LendBorrowedIPCount = eniSbnIPCount
+		}
 
 		(&newObj.Status).VPCVersion = newObj.Spec.VPCVersion
 	}

@@ -84,6 +84,9 @@ type ENISpec struct {
 	// Type eni type, default bcc
 	// +kubebuilder:default:=bcc
 	Type ENIType `json:"type,omitempty"`
+
+	// BorrowIPCount
+	BorrowIPCount int `json:"borrowIPCount,omitempty"`
 }
 
 type ENIStatus struct {
@@ -129,6 +132,8 @@ type ENIStatus struct {
 	// VPCVersion vpc version, default 0
 	// data version of vpc, used to determine whether the object needs to be updated
 	VPCVersion int64 `json:"vpcVersion,omitempty"`
+
+	LendBorrowedIPCount int `json:"lendBorrowedIPCount,omitempty"`
 }
 
 // ENIStatusChange history of ENIStatus. This is used to track changes

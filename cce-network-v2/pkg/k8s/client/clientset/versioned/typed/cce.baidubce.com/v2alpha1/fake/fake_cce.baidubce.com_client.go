@@ -31,6 +31,14 @@ func (c *FakeCceV2alpha1) ClusterPodSubnetTopologySpreads() v2alpha1.ClusterPodS
 	return &FakeClusterPodSubnetTopologySpreads{c}
 }
 
+func (c *FakeCceV2alpha1) NetResourceConfigSets() v2alpha1.NetResourceConfigSetInterface {
+	return &FakeNetResourceConfigSets{c}
+}
+
+func (c *FakeCceV2alpha1) SecurityGroups() v2alpha1.SecurityGroupInterface {
+	return &FakeSecurityGroups{c}
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeCceV2alpha1) RESTClient() rest.Interface {

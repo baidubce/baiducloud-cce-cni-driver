@@ -28,6 +28,8 @@ import (
 type CceV2alpha1Interface interface {
 	RESTClient() rest.Interface
 	ClusterPodSubnetTopologySpreadsGetter
+	NetResourceConfigSetsGetter
+	SecurityGroupsGetter
 }
 
 // CceV2alpha1Client is used to interact with features provided by the cce.baidubce.com group.
@@ -37,6 +39,14 @@ type CceV2alpha1Client struct {
 
 func (c *CceV2alpha1Client) ClusterPodSubnetTopologySpreads() ClusterPodSubnetTopologySpreadInterface {
 	return newClusterPodSubnetTopologySpreads(c)
+}
+
+func (c *CceV2alpha1Client) NetResourceConfigSets() NetResourceConfigSetInterface {
+	return newNetResourceConfigSets(c)
+}
+
+func (c *CceV2alpha1Client) SecurityGroups() SecurityGroupInterface {
+	return newSecurityGroups(c)
 }
 
 // NewForConfig creates a new CceV2alpha1Client for the given config.

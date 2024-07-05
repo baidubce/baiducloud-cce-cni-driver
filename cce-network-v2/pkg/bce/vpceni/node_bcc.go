@@ -23,7 +23,7 @@ import (
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -81,11 +81,26 @@ func (n *bccNode) refreshBCCInfo() (*bccapi.InstanceModel, error) {
 		}
 	}
 
-	n.bccLock.Lock()
-	defer n.bccLock.Unlock()
 	if bccInfo.EniQuota == 0 {
 		n.usePrimaryENIWithSecondaryMode = true
 	}
+
+	n.bccLock.Lock()
+	defer n.bccLock.Unlock()
+	// add security group to node
+	if operatorOption.Config.SecurityGroupSynerDuration > 0 {
+		n.securityGroupIDs = bccInfo.NicInfo.SecurityGroups
+		esgs, err := n.manager.bceclient.ListEsg(context.TODO(), n.instanceID)
+		if err != nil {
+			n.log.WithError(err).Error("list esg failed")
+		} else {
+			n.enterpriseSecurityGroupIDs = make([]string, 0)
+			for _, esg := range esgs {
+				n.enterpriseSecurityGroupIDs = append(n.securityGroupIDs, esg.Id)
+			}
+		}
+	}
+
 	n.bccInfo = bccInfo
 	return n.bccInfo, nil
 }
@@ -107,7 +122,7 @@ func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, erro
 		return nil, err
 	}
 
-	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceclient)
+	eniQuota := newCustomerIPQuota(scopeLog, client, n.k8sObj.Name, n.instanceID, n.manager.bceclient)
 	// default bbc ip quota
 	defaltENINums, defaultIPs := getDefaultBCCEniQuota(k8sNode)
 
@@ -252,16 +267,21 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 				a.AvailableForAllocationIPv6 = availableIPv6OnENI
 				return nil
 			}
-			if subnet, _ := n.manager.sbnlister.Get(e.Spec.ENI.SubnetID); subnet != nil {
-				if subnet.Status.Enable && subnet.Status.AvailableIPNum > 0 && a.InterfaceID == "" {
+
+			if subnet, err := bcesync.GlobalBSM().GetSubnet(e.Spec.ENI.SubnetID); err == nil {
+				if subnet.GetBorrowedIPNum(interfaceID) > 0 {
+					a.AvailableForAllocationIPv4 = math.IntMin(subnet.BorrowedAvailableIPsCount, availableIPv4OnENI)
+				} else {
+					a.AvailableForAllocationIPv4 = math.IntMin(subnet.BorrowedAvailableIPsCount, availableIPv4OnENI)
+				}
+				if subnet.CanBorrow(a.AvailableForAllocationIPv4) {
 					scopedLog.WithFields(logrus.Fields{
 						"subnetID":           e.Spec.ENI.SubnetID,
-						"availableAddresses": subnet.Status.AvailableIPNum,
+						"availableAddresses": subnet.BorrowedAvailableIPsCount,
 					}).Debug("Subnet has IPs available")
 
 					a.InterfaceID = interfaceID
 					a.PoolID = ipamTypes.PoolID(subnet.Name)
-					a.AvailableForAllocationIPv4 = math.IntMin(subnet.Status.AvailableIPNum, availableIPv4OnENI)
 					// does not need to be checked for subnet with ipv6
 					a.AvailableForAllocationIPv6 = availableIPv6OnENI
 				}
@@ -330,38 +350,6 @@ func (n *bccNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 		}
 	}
 	return nil
-}
-
-// GetMaximumAllocatable Impl
-func (n *bccNode) getMaximumAllocatable(eniQuota ENIQuotaManager) int {
-	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
-		return 0
-	}
-
-	if eniQuota.GetMaxENI() == 0 {
-		return eniQuota.GetMaxIP() - 1
-	}
-	max := eniQuota.GetMaxENI() * (eniQuota.GetMaxIP() - 1)
-	if operatorOption.Config.EnableIPv6 {
-		max = max * 2
-	}
-	return max
-}
-
-// GetMinimumAllocatable impl
-func (n *bccNode) getMinimumAllocatable() int {
-	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
-		return 0
-	}
-	min := n.k8sObj.Spec.IPAM.MinAllocate
-	if min == 0 {
-		min = defaults.IPAMPreAllocation
-	}
-
-	if operatorOption.Config.EnableIPv6 {
-		min = min * 2
-	}
-	return min
 }
 
 // AllocateIPCrossSubnet implements realNodeInf

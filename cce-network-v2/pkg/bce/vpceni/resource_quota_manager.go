@@ -8,10 +8,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 )
 
 var (
@@ -22,15 +20,18 @@ var (
 )
 
 type simpleIPQuotaManager struct {
-	kubeClient kubernetes.Interface
-	node       *corev1.Node
+	kubeClient *k8s.K8sClient
+	nodeName   string
 	instanceID string
 }
 
 // patchENICapacityInfoToNode patches eni capacity info to node if not exists.
 // so user can reset these values.
 func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Context, maxENINum, maxIPNum int) error {
-	node := manager.node
+	node, err := manager.kubeClient.Informers.Core().V1().Nodes().Lister().Get(manager.nodeName)
+	if err != nil {
+		return fmt.Errorf("get node failed: %v", err)
+	}
 	if node.Annotations == nil {
 		node.Annotations = make(map[string]string)
 	}
@@ -39,7 +40,7 @@ func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Cont
 	needUpdateIPResourceFlag := true
 	ipPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "ip", maxIPNum)
 	if ipRe, ok := node.Status.Capacity[k8s.ResourceIPForNode]; ok {
-		if ipRe.Value() == int64(maxIPNum) {
+		if ipRe.Value() == int64(maxIPNum) || maxIPNum == 0 {
 			needUpdateIPResourceFlag = false
 		}
 		ipPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "ip", maxIPNum)
@@ -48,7 +49,7 @@ func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Cont
 	needUpdateENIResourceFlag := true
 	eniPathBody := fmt.Sprintf(patchCapacityBodyTemplate, patchAddOp, "eni", maxENINum)
 	if eniRe, ok := node.Status.Capacity[k8s.ResourceENIForNode]; ok {
-		if eniRe.Value() == int64(maxENINum) {
+		if eniRe.Value() == int64(maxENINum) || maxENINum == 0 {
 			needUpdateENIResourceFlag = false
 		}
 		eniPathBody = fmt.Sprintf(patchCapacityBodyTemplate, patchModiffyOp, "eni", maxENINum)
@@ -57,7 +58,7 @@ func (manager *simpleIPQuotaManager) patchENICapacityInfoToNode(ctx context.Cont
 	// patch annotations
 	if needUpdateENIResourceFlag || needUpdateIPResourceFlag {
 		patchData := []byte(fmt.Sprintf(`[%s, %s]`, ipPathBody, eniPathBody))
-		_, err := manager.kubeClient.CoreV1().Nodes().Patch(ctx, manager.node.Name, types.JSONPatchType, patchData, metav1.PatchOptions{}, "status")
+		_, err := manager.kubeClient.CoreV1().Nodes().Patch(ctx, manager.nodeName, types.JSONPatchType, patchData, metav1.PatchOptions{}, "status")
 		if err != nil {
 			return err
 		}
@@ -75,6 +76,7 @@ type ENIQuotaManager interface {
 
 	// SyncCapacity syncs node capacity
 	SyncCapacityToK8s(ctx context.Context) error
+	RefreshEniCapacityToK8s(ctx context.Context, maxENINum, maxIPNum int) error
 }
 
 type customerIPQuota struct {
@@ -93,13 +95,14 @@ var _ ENIQuotaManager = &customerIPQuota{}
 
 func newCustomerIPQuota(
 	log *logrus.Entry,
-	kubeClient kubernetes.Interface, node *corev1.Node, instanceID string,
+	kubeClient *k8s.K8sClient,
+	nodeName string, instanceID string,
 	bceclient cloud.Interface,
 ) ENIQuotaManager {
 	return &customerIPQuota{
 		simpleIPQuotaManager: &simpleIPQuotaManager{
 			kubeClient: kubeClient,
-			node:       node,
+			nodeName:   nodeName,
 			instanceID: instanceID,
 		},
 		log:       log,
@@ -132,11 +135,11 @@ func (ciq *customerIPQuota) SetMaxIP(max int) {
 
 // SyncCapacityToK8s implements IPResourceManager.
 func (ciq *customerIPQuota) SyncCapacityToK8s(ctx context.Context) error {
-	maxIP := ciq.maxENINum * (ciq.maxIPPerENI - 1)
-	if maxIP <= 0 {
-		maxIP = ciq.maxIPPerENI - 1
-	}
-	return ciq.patchENICapacityInfoToNode(ctx, ciq.maxENINum, maxIP)
+	return ciq.patchENICapacityInfoToNode(ctx, ciq.maxENINum, ciq.maxIPPerENI)
+}
+
+func (ciq *customerIPQuota) RefreshEniCapacityToK8s(ctx context.Context, maxENINum, maxIPNum int) error {
+	return ciq.patchENICapacityInfoToNode(ctx, maxENINum, maxIPNum)
 }
 
 // calculateMaxIPPerENI returns the max num of IPs that can be attached to single ENI

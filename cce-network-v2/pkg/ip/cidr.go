@@ -16,6 +16,7 @@
 package ip
 
 import (
+	"math/big"
 	"net"
 
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -62,4 +63,33 @@ func ConvertIPPairToIPNet(addrPair *ccev2.AddressPair) *net.IPNet {
 		ipnet.Mask = IPv6Mask128
 	}
 	return ipnet
+}
+
+// IsOverlapCIDRs Determine if two CIDR have overlapping IPs
+func IsOverlapCIDRs(valid1, valid2 *net.IPNet) bool {
+	min, max := cidrToRangeInt(valid1)
+	min2, max2 := cidrToRangeInt(valid2)
+	return min.Cmp(max2) <= 0 && max.Cmp(min2) >= 0
+}
+
+func cidrToRangeInt(cidr *net.IPNet) (min, max *big.Int) {
+	newNetToRange := ipNetToRange(*cidr)
+	var (
+		tmin = big.NewInt(0)
+		tmax = big.NewInt(0)
+	)
+	if newNetToRange.First.To4() != nil {
+		tmin.SetBytes(newNetToRange.First.To4())
+		tmax.SetBytes(newNetToRange.Last.To4())
+	} else {
+		tmin.SetBytes(*newNetToRange.First)
+		tmax.SetBytes(*newNetToRange.Last)
+	}
+	return tmin, tmax
+}
+
+func IsContainsCIDRs(valid1, valid2 *net.IPNet) bool {
+	min, max := cidrToRangeInt(valid1)
+	min2, max2 := cidrToRangeInt(valid2)
+	return min.Cmp(min2) <= 0 && max.Cmp(max2) >= 0
 }

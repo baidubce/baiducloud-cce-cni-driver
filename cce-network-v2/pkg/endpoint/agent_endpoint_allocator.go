@@ -66,6 +66,7 @@ type EndpointAllocator struct {
 	dynamicIPAM ipam.IPAMAllocator
 	rdmaAttr    rdmaEndpointAllocatorAttr
 	c           ipam.Configuration
+	nrsName     string
 
 	cceEndpointClient *watchers.CCEEndpointClient
 	podClient         *watchers.PodClient
@@ -81,6 +82,7 @@ func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primar
 		rdmaAttr:          rdmaEndpointAllocatorAttr{isRdmaEndpointAllocator, primaryMacAddress},
 		cceEndpointClient: watcher.NewCCEEndpointClient(),
 		podClient:         watcher.NewPodClient(),
+		nrsName:           networkResourceSetName,
 		c:                 c,
 
 		pstsLister:    k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Lister(),
@@ -91,19 +93,18 @@ func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primar
 	k8s.CCEClient().Informers.Start(wait.NeverStop)
 
 	e.Restore()
+
 	// Start an interval based  background resync for safety, it will
 	// synchronize the state regularly and resolve eventual deficit if the
 	// event driven trigger fails, and also release excess IP addresses
 	// if release-excess-ips is enabled
+	gcer := newAgentGcer(e)
 	go func() {
 		mngr := controller.NewManager()
 		mngr.UpdateController("psts-ipam-endpoint-interval-gc",
 			controller.ControllerParams{
 				RunInterval: c.GetCCEEndpointGC(),
-				DoFunc: func(ctx context.Context) error {
-					e.gc()
-					return nil
-				},
+				DoFunc:      gcer.gc,
 			})
 	}()
 	return e
@@ -163,7 +164,7 @@ func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
 		return err
 	}
 	if isSameContainerID(oldEP, containerID) {
-		return e.tryDeleteEndpointAfterPodDeleted(oldEP, logEntry)
+		return e.tryDeleteEndpointAfterPodDeleted(oldEP, false, logEntry)
 	} else {
 		logEntry.Infof("ignore to release ip case by container id is not match")
 	}
@@ -246,76 +247,87 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 	}
 
 	// if it is RdmaEndpointAllocator, do not allocate IP for pods without RDMA resource
-	if e.rdmaAttr.isRdmaEndpointAllocator && !wantRoce(pod) {
+	if e.isRDMAMode() && !wantRoce(pod) {
 		return nil, nil, nil
 	}
 
 	isFixedPod := k8s.HaveFixedIPLabel(&pod.ObjectMeta)
-	// warning: old wep use node selector,
-	// So here oldWEP from the cache may not exist,
-	// we need to retrieve it from the api-server
-	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, namespace, name)
-	if err != nil {
-		return
+	mode := e.c.IPAMMode()
+	// rdma not support psts, so we need to check if it is rdma mode
+	if e.isRDMAMode() {
+		mode = ipamOption.IPAMRdma
 	}
 
-	switch e.c.IPAMMode() {
+	switch mode {
 	case ipamOption.IPAMVpcEni:
 		psts, err = pststrategy.SelectPSTS(logEntry, e.pstsLister, pod)
 		if err != nil {
 			return
 		}
-	case ipamOption.IPAMVpcRoute:
+	default:
 		isFixedPod = false
 		psts = nil
 	}
 	// allocate dynamic ip
 	// allocate ip by psts
 	// Wait circularly until the fixed IP is assigned by the operator or a timeout occurs
-	return e.allocateIP(ctx, logEntry, containerID, family, owner, netns, psts, oldEP, pod, isFixedPod)
+	return e.allocateIP(ctx, logEntry, containerID, family, owner, netns, psts, pod, isFixedPod)
 
 }
 
 // allocateIP allocates an IP for the given owner and returns the allocated IP.
-func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Entry, containerID, family, owner, netns string, psts *ccev2.PodSubnetTopologySpread, oldEP *ccev2.CCEEndpoint, pod *corev1.Pod, isFixedIPPod bool) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
-	newEP := NewEndpointTemplate(containerID, netns, pod)
-	// rename for rdma cep, rdma cep is like "podname-rdma-primarymacaddressinhex"
-	// cep name is like "podname"
-	newEP.Name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, pod.Name, e.rdmaAttr.primaryMacAddress)
+func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Entry, containerID, family, owner, netns string, psts *ccev2.PodSubnetTopologySpread, pod *corev1.Pod, isFixedIPPod bool) (ipv4Result, ipv6Result *ipam.AllocationResult, err error) {
+	epName := bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, pod.Name, e.rdmaAttr.primaryMacAddress)
+	// warning: old wep use node selector,
+	// So here oldWEP from the cache may not exist,
+	// we need to retrieve it from the api-server
+	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, pod.Namespace, epName)
+	if err != nil {
+		return
+	}
 
+	newEP := NewEndpointTemplate(containerID, netns, pod)
 	ipTTLSeconds := k8s.ExtractFixedIPTTLSeconds(pod)
 	if ipTTLSeconds != 0 {
 		newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &ipTTLSeconds
 	}
 
-	// allocate the new dynamic endpoint
-	if psts == nil {
-		if !isFixedIPPod {
-			if oldEP != nil {
-				err := DeleteEndpointAndWait(ctx, e.cceEndpointClient, oldEP)
-				if err != nil {
-					return nil, nil, err
-				}
-				logEntry.Info("clean the old dynamic endpoint success")
-			}
+	// rename for rdma cep, rdma cep is like "podname-rdma-primarymacaddressinhex"
+	// cep name is like "podname"
+	newEP.Name = epName
+	if e.rdmaAttr.isRdmaEndpointAllocator {
+		newEP.Annotations[k8s.AnnotationRDMAInfoMacAddress] = e.rdmaAttr.primaryMacAddress
+		newEP.Annotations[k8s.PodLabelOwnerName] = pod.Name
+		newEP.Spec.Network.IPAllocation.Type = ccev2.IPAllocTypeRDMA
+		newEP.Labels[k8s.LabelENIType] = "rdma"
+	}
 
-			ipv4Result, ipv6Result, err = e.dynamicIPAM.AllocateNext(family, owner)
+	// allocate the new dynamic endpoint
+	if psts == nil && !isFixedIPPod {
+		if oldEP != nil {
+			err := e.tryDeleteEndpointAfterPodDeleted(oldEP, true, logEntry.WithField("scope", "recreate cep"))
 			if err != nil {
-				return
+				return nil, nil, err
 			}
-			err = e.createDynamicEndpoint(ctx, newEP, ipv4Result, ipv6Result)
-			if err == nil {
-				logEntry.Infof("create dynamic endpoint success")
-			}
-			return
-		} else {
-			// allocate fixed ip
-			newEP, err = e.createDelegateEndpoint(ctx, nil, newEP, oldEP)
-			if err != nil {
-				return
-			}
-			logEntry.Info("create fixed endpoint success")
+			logEntry.Info("clean the old dynamic endpoint success")
 		}
+
+		ipv4Result, ipv6Result, err = e.dynamicIPAM.AllocateNext(family, owner)
+		if err != nil {
+			return
+		}
+		newEP.OwnerReferences = append(newEP.OwnerReferences, metav1.OwnerReference{
+			APIVersion: "v1",
+			Kind:       "Pod",
+			Name:       pod.Name,
+			UID:        pod.UID,
+		})
+
+		err = e.createDynamicEndpoint(ctx, newEP, ipv4Result, ipv6Result)
+		if err == nil {
+			logEntry.Infof("create dynamic endpoint success")
+		}
+		return
 	} else {
 		newEP, err = e.createDelegateEndpoint(ctx, psts, newEP, oldEP)
 		if err != nil {
@@ -330,6 +342,10 @@ func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Ent
 		logEntry.Info("wait endpoint ip allocated success")
 	}
 	return ipv4Result, ipv6Result, err
+}
+
+func (e *EndpointAllocator) isRDMAMode() bool {
+	return e.rdmaAttr.isRdmaEndpointAllocator
 }
 
 // Restore all the IP addresses applied for by the current machine to the node cache pool
@@ -365,7 +381,7 @@ func (e *EndpointAllocator) Restore() {
 			}
 			epLog.Infof("restore rdma ips %v", ips)
 			for _, ip := range ips {
-				podName := bceutils.GetPodNameFromCEPName(ep.Name)
+				_, podName := GetPodNameFromCEP(ep)
 				_, err = e.dynamicIPAM.AllocateIPWithoutSyncUpstream(net.ParseIP(ip), ep.Namespace+"/"+podName)
 				if err != nil {
 					epLog.WithError(err).Error("AllocateIPWithoutSyncUpstream error")
@@ -602,6 +618,12 @@ func (e *EndpointAllocator) createReuseIPEndpoint(ctx context.Context, newEP, ol
 	return
 }
 
+// createDynamicEndpoint dynamic endpint means that
+// its lifecycle is equivalent to the lifecycle of the container:
+// *The lifecycle of de is greater than that of sandbox containers
+// *The lifecycle of de is smaller than that of nrs
+//
+// To avoid residual CEP objects after the agent is killed, we will bind the lifecycle of CEP and NRS
 func (e *EndpointAllocator) createDynamicEndpoint(ctx context.Context, newEP *ccev2.CCEEndpoint, ipv4Result, ipv6Result *ipam.AllocationResult) error {
 	newEP.Spec.Network.IPAllocation.ReleaseStrategy = ccev2.ReleaseStrategyTTL
 	newEP.Status = ccev2.EndpointStatus{
@@ -636,76 +658,18 @@ var (
 	_ ipam.CNIIPAMServer = &EndpointAllocator{}
 )
 
-// Periodically run garbage collection. When the pod on the node has been killed,
-// the IP occupied by the pod should be released
-func (e *EndpointAllocator) gc() {
-	logEntry := allocatorLog.WithField("module", "gc")
-	eps, err := e.cceEndpointClient.List()
-	if err != nil {
-		logEntry.WithError(err).Error("list endpoint error")
-		return
-	}
-	for _, ep := range eps {
-		podName := bceutils.GetPodNameFromCEPName(ep.Name)
-		pod, err := e.podClient.Get(ep.Namespace, podName)
-		if err != nil && kerrors.IsNotFound(err) {
-			e.tryDeleteEndpointAfterPodDeleted(ep, logEntry)
-			continue
-		}
-
-		// ep is expire
-		if ep.Spec.ExternalIdentifiers != nil && ep.Spec.ExternalIdentifiers.K8sObjectID != string(pod.UID) {
-			e.tryDeleteEndpointAfterPodDeleted(ep, logEntry)
-		}
-	}
-
-	e.dynamicUsedIPsGC(logEntry)
-}
-
-func (e *EndpointAllocator) dynamicUsedIPsGC(logEntry *logrus.Entry) {
-	allocv4, allocv6, _ := e.dynamicIPAM.Dump()
-	releaseExpiredIPs := func(alloc map[string]string) {
-		if len(alloc) == 0 {
-			return
-		}
-		for addr, owner := range alloc {
-			scopedLog := logEntry.WithFields(logrus.Fields{
-				"ip":    addr,
-				"owner": owner,
-				"step":  "dynamicUsedIPsGC",
-			})
-			if strings.HasSuffix(owner, ipamOption.IPAMVpcRoute) {
-				continue
-			}
-			namespace, name, err := cache.SplitMetaNamespaceKey(owner)
-			if err != nil {
-				scopedLog.WithError(err).Error("split owner error")
-				continue
-			}
-			_, err = e.podClient.Get(namespace, name)
-			if err != nil && kerrors.IsNotFound(err) {
-				_, err := e.cceEndpointClient.CCEEndpoints(namespace).Get(context.TODO(), name, metav1.GetOptions{})
-				if err != nil && kerrors.IsNotFound(err) {
-					err = e.dynamicIPAM.ReleaseIPString(addr)
-					scopedLog.WithError(err).Info("gc ip when pod deleted")
-				}
-
-				continue
-			}
-		}
-	}
-	releaseExpiredIPs(allocv4)
-	releaseExpiredIPs(allocv6)
-}
-
 // tryDeleteEndpointAfterPodDeleted The garbage collection dynamic endpoint first recycles the pre allocated
 // IP address of the node, and then deletes the object. If the IP cannot be recycled,
 // the corresponding object will also be kept continuously
-func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoint, logEntry *logrus.Entry) (err error) {
+func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoint, releaseByOwner bool, logEntry *logrus.Entry) (err error) {
+	namespace, name := GetPodNameFromCEP(ep)
+	owner := fmt.Sprintf("%s/%s", namespace, name)
 	logEntry = logEntry.WithFields(logrus.Fields{
-		"namespace": ep.Namespace,
-		"name":      ep.Name,
-		"info":      "delete dynamic endpoint after pod deleted",
+		"namespace":      ep.Namespace,
+		"name":           ep.Name,
+		"info":           "delete dynamic endpoint after pod deleted",
+		"releaseByOwner": releaseByOwner,
+		"owner":          owner,
 	})
 
 	var (
@@ -734,7 +698,6 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		goto deleteObj
 	}
 
-	logEntry.Infof("start")
 	defer func() {
 		if err != nil {
 			logEntry.WithError(err).Error("release ip failed")
@@ -743,13 +706,24 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		}
 	}()
 
-	ips, err = e.extractEndpointIPs(ep)
+	if releaseByOwner {
+		err = e.dynamicIPAM.ReleaseIPString(owner)
+		if err != nil {
+			logEntry.WithField("err", err).Warningf("failed to release ip by oner")
+		}
+	} else {
+		if ep.Status.Networking != nil && len(ep.Status.Networking.Addressing) != 0 {
+			for _, pair := range ep.Status.Networking.Addressing {
+				ips = append(ips, pair.IP)
+			}
+		}
 
-	for _, ip := range ips {
-		if ip != "" {
-			err = e.dynamicIPAM.ReleaseIPString(ip)
-			if err != nil {
-				logEntry.WithField("err", err).Warningf("failed to release ip %s", ip)
+		for _, ip := range ips {
+			if ip != "" {
+				err = e.dynamicIPAM.ReleaseIPString(ip)
+				if err != nil {
+					logEntry.WithField("err", err).Warningf("failed to release ip %s", ip)
+				}
 			}
 		}
 	}

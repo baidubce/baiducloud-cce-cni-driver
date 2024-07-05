@@ -99,7 +99,7 @@ func (manager *EndpointManager) Start(ctx context.Context) error {
 	go func() {
 		mngr.UpdateController(controllerName,
 			controller.ControllerParams{
-				RunInterval: time.Minute,
+				RunInterval: operatorOption.Config.EndpointGCInterval,
 				DoFunc:      manager.Resync,
 			})
 	}()
@@ -366,12 +366,12 @@ removeFinalizer:
 }
 
 func (manager *EndpointManager) Resync(ctx context.Context) error {
-	manager.gcLocalFixedEndpointTTL()
+	manager.gcReusedEndpointTTL()
 	return nil
 }
 
-// gcLocalFixedEndpointTTL delete fixed ip endpoint when ttl is expired
-func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
+// gcReusedEndpointTTL delete fixed ip endpoint when ttl is expired
+func (manager *EndpointManager) gcReusedEndpointTTL() {
 	var (
 		logEntry = managerLog.WithFields(logrus.Fields{
 			logfields.LogSubsys: "EndpointManager",
@@ -387,9 +387,6 @@ func (manager *EndpointManager) gcLocalFixedEndpointTTL() {
 	}
 	for _, cep := range ceps {
 		if !IsFixedIPEndpoint(cep) && !IsPSTSEndpoint(cep) {
-			continue
-		}
-		if cep.Spec.Network.IPAllocation == nil {
 			continue
 		}
 		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL {

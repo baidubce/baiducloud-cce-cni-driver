@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync/bcesg"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
@@ -60,7 +61,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/pprof"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/rand"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/rate"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/version"
 )
 
@@ -98,20 +98,6 @@ var (
 	}
 
 	shutdownSignal = make(chan struct{})
-
-	cceK8sClient *k8s.K8sCCEClient
-
-	// identityRateLimiter is a rate limiter to rate limit the number of
-	// identities being GCed by the operator. See the documentation of
-	// rate.Limiter to understand its difference than 'x/time/rate.Limiter'.
-	//
-	// With our rate.Limiter implementation CCE will be able to handle bursts
-	// of identities being garbage collected with the help of the functionality
-	// provided by the 'policy-trigger-interval' in the cce-agent. With the
-	// policy-trigger even if we receive N identity changes over the interval
-	// set, CCE will only need to process all of them at once instead of
-	// processing each one individually.
-	identityRateLimiter *rate.Limiter
 	// Use a Go context so we can tell the leaderelection code when we
 	// want to step down
 	leaderElectionCtx, leaderElectionCtxCancel = context.WithCancel(context.Background())
@@ -336,6 +322,7 @@ func startEthernetOperator(ctx context.Context) {
 		cceEndpointManager    operatorWatchers.EndpointEventHandler
 		sbnHandler            syncer.SubnetEventHandler
 		eniHandler            syncer.ENIEventHandler
+		sgHandler             syncer.SecurityGroupEventHandler
 	)
 
 	log.WithField(logfields.Mode, option.Config.IPAM).Info("Initializing Ethernet IPAM")
@@ -346,6 +333,7 @@ func startEthernetOperator(ctx context.Context) {
 		ipamOption.IPAMVpcEni,
 		ipamOption.IPAMPrivateCloudBase,
 		ipamOption.IPAMVpcRoute:
+
 		alloc, providerBuiltin := allocatorProviders[ipamMode]
 		if !providerBuiltin {
 			log.Fatalf("%s allocator is not supported by this version of %s", ipamMode, binaryName)
@@ -376,6 +364,7 @@ func startEthernetOperator(ctx context.Context) {
 	if enableRdma || option.Config.IPAM == ipamOption.IPAMVpcEni {
 		subnetSyncer := &bcesync.VPCSubnetSyncher{}
 		eniSyncer := &bcesync.VPCENISyncerRouter{}
+		sgSyncer := bcesg.VPCSecurityGroupSyncher{}
 
 		// task to sync subnet between ipam and cloud
 		err := subnetSyncer.Init(ctx)
@@ -390,6 +379,14 @@ func startEthernetOperator(ctx context.Context) {
 			log.WithError(err).Fatalf("Unable to init %s cce eni syncer", option.Config.IPAM)
 		}
 		eniHandler = eniSyncer.StartENISyncer(ctx, operatorWatchers.ENIClient)
+
+		if operatorOption.Config.SecurityGroupSynerDuration > 0 {
+			err = sgSyncer.Init(ctx)
+			if err != nil {
+				log.WithError(err).Fatalf("Unable to init %s cce security syncer", option.Config.IPAM)
+			}
+			sgHandler = sgSyncer.StartSecurityGroupSyncer(ctx, operatorWatchers.SecurityGroupClient)
+		}
 	}
 
 	if k8s.IsEnabled() &&
@@ -420,6 +417,16 @@ func startEthernetOperator(ctx context.Context) {
 
 	if err := operatorWatchers.StartSynchronizingENI(ctx, eniHandler); err != nil {
 		log.WithError(err).Fatal("Unable to setup eni watcher")
+	}
+
+	if operatorOption.Config.SecurityGroupSynerDuration > 0 && sgHandler != nil {
+		if err := operatorWatchers.StartSynchronizingSecurityGroup(ctx, sgHandler); err != nil {
+			log.WithError(err).Fatal("Unable to setup security group watcher")
+		}
+	}
+
+	if operatorOption.Config.NodeGCInterval != 0 {
+		operatorWatchers.RunNetResourceSetGC(ctx, operatorOption.Config.NodeGCInterval)
 	}
 
 	if option.Config.IPAM == ipamOption.IPAMClusterPool ||

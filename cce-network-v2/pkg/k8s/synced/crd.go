@@ -33,6 +33,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	v1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/informer"
 	k8sversion "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/version"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
@@ -51,6 +52,9 @@ func CRDResourceName(crd string) string {
 func agentCRDResourceNames() []string {
 	result := []string{
 		CRDResourceName(v2.NRSName),
+		CRDResourceName(v2.PSTSName),
+		CRDResourceName(v1.SubnetName),
+		CRDResourceName(v2alpha1.KindNetResouceConfigSet + "." + v2alpha1.GroupName),
 	}
 
 	if !option.Config.DisableCCEEndpointCRD {
@@ -59,7 +63,6 @@ func agentCRDResourceNames() []string {
 	if !option.Config.DisableENICRD {
 		result = append(result, CRDResourceName(v2.ENIName))
 	}
-	result = append(result, CRDResourceName(v1.SubnetName))
 	return result
 }
 

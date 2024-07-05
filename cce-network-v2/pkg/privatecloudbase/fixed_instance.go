@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
-	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/privatecloudbase/api"
 	"github.com/sirupsen/logrus"
@@ -41,7 +41,7 @@ type fixedIPOperation struct {
 }
 
 // FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (*fixedIPOperation) FilterAvailableSubnetIds(param []string) []*ccev1.Subnet {
+func (*fixedIPOperation) FilterAvailableSubnetIds(param []string, nums int) []*bcesync.BorrowedSubnet {
 	return nil
 }
 

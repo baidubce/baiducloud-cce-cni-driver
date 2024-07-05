@@ -16,6 +16,8 @@
 package watchers
 
 import (
+	"sync"
+
 	v1 "k8s.io/api/core/v1"
 	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -27,6 +29,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	corev1 "k8s.io/api/core/v1"
 )
+
+func (k *K8sWatcher) initPSTS(cceClient *k8s.K8sCCEClient, asyncControllers *sync.WaitGroup) {
+	apiGroup := k8sAPIGroupPstsV2
+	informer := cceClient.Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
+	k.blockWaitGroupToSyncResources(k.stop, nil, informer.HasSynced, apiGroup)
+	go informer.Run(k.stop)
+	asyncControllers.Done()
+}
 
 func (k *K8sWatcher) servicesInit(k8sClient kubernetes.Interface, swgSvcs *lock.StoppableWaitGroup, optsModifier func(*v1meta.ListOptions)) {
 	apiGroup := resources.K8sAPIGroupServiceV1Core

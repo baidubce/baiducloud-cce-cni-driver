@@ -58,6 +58,9 @@ spec:
             type: object
           spec:
             properties:
+              borrowIPCount:
+                description: BorrowIPCount
+                type: integer
               description:
                 description: description
                 type: string
@@ -282,6 +285,8 @@ spec:
                 description: InterfaceName is the interface name, it is generated
                   by the agent
                 type: string
+              lendBorrowedIPCount:
+                type: integer
               vpcVersion:
                 description: VPCVersion vpc version, default 0 data version of vpc,
                   used to determine whether the object needs to be updated

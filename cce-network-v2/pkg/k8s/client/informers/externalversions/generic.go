@@ -70,6 +70,10 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		// Group=cce.baidubce.com, Version=v2alpha1
 	case v2alpha1.SchemeGroupVersion.WithResource("clusterpodsubnettopologyspreads"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer()}, nil
+	case v2alpha1.SchemeGroupVersion.WithResource("netresourceconfigsets"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2alpha1().NetResourceConfigSets().Informer()}, nil
+	case v2alpha1.SchemeGroupVersion.WithResource("securitygroups"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Cce().V2alpha1().SecurityGroups().Informer()}, nil
 
 	}
 

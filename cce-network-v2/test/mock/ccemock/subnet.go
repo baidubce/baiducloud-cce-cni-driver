@@ -137,6 +137,7 @@ func NewMockSubnet(name, cidr string) *ccev1.Subnet {
 			Name:             name,
 			AvailabilityZone: "cn-bj-d",
 			CIDR:             cidr,
+			VPCID:            "vpc-test",
 		},
 		Status: ccev1.SubnetStatus{
 			Enable:         true,

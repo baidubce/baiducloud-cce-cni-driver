@@ -277,9 +277,6 @@ func init() {
 	flags.Bool(operatorOption.EnableRemoteFixedIPGC, true, "gc remote fixed ip when endpoint have been deleted")
 	option.BindEnv(operatorOption.EnableRemoteFixedIPGC)
 
-	flags.Bool(operatorOption.EnableExcessIPRelease, false, "enable release excess ips for eni")
-	option.BindEnv(operatorOption.EnableExcessIPRelease)
-
 	flags.Int(operatorOption.PSTSSubnetReversedIPNum, 1, "the number of reversed IP in subnet, this flag is useful for psts mode")
 	option.BindEnv(operatorOption.PSTSSubnetReversedIPNum)
 
@@ -294,7 +291,10 @@ func init() {
 	flags.Int64(operatorOption.SubnetResourceResyncWorkers, defaults.DefaultResourceResyncWorkers, "Number of workers to process resource event")
 	option.BindEnv(operatorOption.SubnetResourceResyncWorkers)
 
+	flags.Bool(operatorOption.ReleaseExcessIPs, false, "release excess ips")
+	option.BindEnv(operatorOption.ReleaseExcessIPs)
 	flags.Int(operatorOption.ExcessIPReleaseDelay, 180, "controls how long operator would wait before an IP previously marked as excess is released. default is 180 seconds")
+	option.BindEnv(operatorOption.ExcessIPReleaseDelay)
 
 	flags.String(operatorOption.BCECloudAccessKey, "", "BCE OpenApi AccessKeyID.")
 	option.BindEnv(operatorOption.BCECloudAccessKey)
@@ -323,6 +323,9 @@ func init() {
 
 	flags.Duration(operatorOption.ResourceENIResyncInterval, operatorOption.DefaultResourceResyncInterval*2, "How often to resync resources")
 	option.BindEnv(operatorOption.ResourceENIResyncInterval)
+
+	flags.Duration(operatorOption.SecurityGroupSynerDuration, 0, "How often to resync security group")
+	option.BindEnv(operatorOption.SecurityGroupSynerDuration)
 
 	flags.String(operatorOption.CCEClusterID, "", "cluster id defined in CCE")
 	option.BindEnv(operatorOption.CCEClusterID)

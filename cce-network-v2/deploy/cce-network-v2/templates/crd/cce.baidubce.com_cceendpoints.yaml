@@ -168,6 +168,7 @@ spec:
                         - Custom
                         - IPAllocTypeNil
                         - PrimaryENI
+                        - RDMA
                         type: string
                       useIPV4:
                         type: boolean
@@ -389,8 +390,6 @@ spec:
                     description: NodeIP is the IP of the node the endpoint is running
                       on. The IP must be reachable between nodes.
                     type: string
-                required:
-                - addressing
                 type: object
               state:
                 description: State is the state of the endpoint.

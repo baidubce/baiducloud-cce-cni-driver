@@ -26,6 +26,7 @@ import (
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/baidubce/bce-sdk-go/services/eip"
 	"github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/baidubce/bce-sdk-go/services/esg"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 	sdklog "github.com/baidubce/bce-sdk-go/util/log"
 	"k8s.io/client-go/kubernetes"
@@ -116,6 +117,10 @@ func New(
 	hpcClient := &hpc.Client{
 		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
 	}
+
+	esgClient := &esg.Client{
+		BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx)),
+	}
 	c := &Client{
 		vpcClient: vpcClient,
 		hpcClient: hpcClient,
@@ -123,6 +128,7 @@ func New(
 		eipClient: eipClient,
 		eniClient: eniClient,
 		bbcClient: bbcClient,
+		esgClient: esgClient,
 	}
 	return c, nil
 }
@@ -469,6 +475,39 @@ func (c *Client) ListSecurityGroup(ctx context.Context, vpcID, instanceID string
 	return securityGroups, nil
 }
 
+func (c *Client) ListAclEntrys(ctx context.Context, vpcID string) ([]vpc.AclEntry, error) {
+	t := time.Now()
+	result, err := c.vpcClient.ListAclEntrys(vpcID)
+	exportMetric("ListAclEntrys", t, err)
+	if err != nil {
+		return nil, err
+	}
+	return result.AclEntrys, nil
+}
+
+// ListEsg implements Interface.
+func (c *Client) ListEsg(ctx context.Context, instanceID string) ([]esg.EnterpriseSecurityGroup, error) {
+	var result []esg.EnterpriseSecurityGroup
+	isTruncated := true
+	nextMarker := ""
+	for isTruncated {
+		t := time.Now()
+		args := esg.ListEsgArgs{
+			Marker:     nextMarker,
+			InstanceId: instanceID,
+		}
+		res, err := c.esgClient.ListEsg(&args)
+		exportMetricAndLog(ctx, "ListEsg", t, err)
+		if err != nil {
+			return nil, err
+		}
+		nextMarker = res.NextMarker
+		isTruncated = res.IsTruncated
+		result = append(result, res.EnterpriseSecurityGroups...)
+	}
+	return result, nil
+}
+
 func (c *Client) GetBBCInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
 	t := time.Now()
 	resp, err := c.bbcClient.GetInstanceDetail(instanceID)
@@ -550,4 +589,15 @@ func (c *Client) ListBCCInstanceEni(ctx context.Context, instanceID string) ([]b
 		return nil, err
 	}
 	return resp.EniList, err
+}
+
+// DescribeVPC implements Interface.
+func (c *Client) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCModel, error) {
+	t := time.Now()
+	resp, err := c.vpcClient.GetVPCDetail(vpcID)
+	exportMetricAndLog(ctx, DescribeVPC, t, err)
+	if err != nil {
+		return nil, err
+	}
+	return &resp.VPC, nil
 }

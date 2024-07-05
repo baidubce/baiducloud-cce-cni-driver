@@ -1,5 +1,22 @@
 # 2.0
 v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如下：
+### 2.12
+新特性功能：
+1. 支持 Burstable ENI 池，有效避免子网 IP 资源紧张时，节点 ENI 池资源不足的问题。
+2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
+3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
+
+#### 2.12.0 [2024/06/28]
+1. [Feature] 支持 Burstable ENI 池，有效避免子网 IP 资源紧张时，节点 ENI 池资源不足的问题。
+2. [Feature] 新增子网不足导致 ENI 创建失败 metrics 指标
+3. [Feature] 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步
+4. [Feature] 优化Pod调度算法，增加节点 ip capacity 自动适配，避免节点 IP 地址资源浪费
+5. [Feature] 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源
+6. [Optimize] 修复 psts 对象在使用enableReuseIPAddress时可能更新 cep 时Addressing为空，不能记录错误信息的问题
+7. [Optimize] 优化 operator 事件积压问题，避免事件长期超时积压
+8. [Optimize] agent 优化 IP 地址 gc 算法，在达到 gc 周期后，支持按照 IP 地址清理已变更 cep 遗留地址的能力
+9. [Optimize] 将动态 cep 与 nrs 生命周期绑定，减少 agent 被杀死的缩容时，遗留的 cep 对象数
+10. [Optimize] 优化 rdma IP 申请流程，避免rdma 使用固定 IP 的 cep
 
 ### 2.11 (2024/5/27)
 新特性功能：

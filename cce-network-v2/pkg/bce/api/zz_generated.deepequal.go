@@ -36,6 +36,9 @@ func (in *ENISpec) DeepEqual(other *ENISpec) bool {
 	if in.PreAllocateENI != other.PreAllocateENI {
 		return false
 	}
+	if in.BurstableMehrfachENI != other.BurstableMehrfachENI {
+		return false
+	}
 	if in.MaxIPsPerENI != other.MaxIPsPerENI {
 		return false
 	}

@@ -79,7 +79,7 @@ func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater i
 	provider.manager.nrsGetterUpdater = getterUpdater
 
 	netResourceSetManager, err := ipam.NewNetResourceSetManager(provider.manager, getterUpdater, ipamMetrics.IMetrics,
-		operatorOption.Config.NrsResourceResyncWorkers, operatorOption.Config.EnableExcessIPRelease, false)
+		operatorOption.Config.NrsResourceResyncWorkers, operatorOption.Config.ReleaseExcessIPs, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize bce instance manager: %w", err)
 	}

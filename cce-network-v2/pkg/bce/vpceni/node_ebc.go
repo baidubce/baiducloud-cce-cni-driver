@@ -77,7 +77,7 @@ func (n *ebcNode) refreshPrimarySubnet() error {
 		return err
 	}
 	n.primaryENISubnetID = bccInfo.NicInfo.SubnetId
-	subnets := n.FilterAvailableSubnetIds([]string{n.primaryENISubnetID})
+	subnets := n.FilterAvailableSubnetIds([]string{n.primaryENISubnetID}, n.GetMinimumAllocatableIPv4())
 	n.availableSubnets = subnets
 	return nil
 }
@@ -143,6 +143,12 @@ func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logr
 			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
 		},
 	}
+	// revert eni if can not borrow IPs
+	err = n.tryBorrowIPs(newENI)
+	if err != nil {
+		return err
+	}
+
 	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
 	if err != nil {
 		scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", newENI.Name, err)

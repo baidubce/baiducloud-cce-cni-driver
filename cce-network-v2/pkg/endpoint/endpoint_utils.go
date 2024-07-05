@@ -137,6 +137,7 @@ func DeleteEndpointAndWait(ctx context.Context, cceEndpointClient *watchers.CCEE
 	if err != nil && !kerrors.IsNotFound(err) {
 		return fmt.Errorf("delete endpoint error: %w", err)
 	}
+
 	err = wait.PollImmediateUntilWithContext(ctx, time.Second/2, func(context.Context) (done bool, err error) {
 		ep, err := cceEndpointClient.Get(oldEP.Namespace, oldEP.Name)
 		if !kerrors.IsNotFound(err) || ep != nil {
@@ -158,4 +159,15 @@ func ConverteIPAllocation2EndpointAddress(result *ipam.AllocationResult, family 
 		Gateway:   result.GatewayIP,
 		CIDRs:     result.CIDRs,
 	}
+}
+
+func GetPodNameFromCEP(cep *ccev2.CCEEndpoint) (namesapce, name string) {
+	if cep == nil {
+		return "", ""
+	}
+
+	if cep.Spec.ExternalIdentifiers.K8sPodName != "" {
+		return cep.Namespace, cep.Spec.ExternalIdentifiers.K8sPodName
+	}
+	return cep.Namespace, cep.Name
 }

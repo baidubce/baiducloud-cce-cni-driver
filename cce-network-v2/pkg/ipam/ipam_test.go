@@ -99,7 +99,7 @@ func (s *IPAMSuite) TestLock(c *C) {
 
 func BenchmarkIPAMRun(b *testing.B) {
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM("test-node", fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 	// Since the IPs we have allocated to the endpoints might or might not
 	// be in the allocrange specified in cce, we need to specify them
 	// manually on the endpoint based on the alloc range.
@@ -174,7 +174,7 @@ func BenchmarkCNIPluginNoAPIServer(b *testing.B) {
 	node.SetIPv4AllocRange(&cidr.CIDR{IPNet: cidrs[0]})
 
 	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM("test-node", fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM("nrs-test", fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
 	for i := 0; i < b.N; i++ {
 		ipv4, _, _ := ipam.AllocateNext("", "foo")

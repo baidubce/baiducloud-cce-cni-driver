@@ -21,31 +21,21 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	k8sTypes "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
-	cnitypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/mtu"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/addressing"
-	nodemanager "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/manager"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
@@ -114,40 +104,7 @@ func canUseIPVlanOnRdmaNode() (isCan bool, err error) {
 
 // RdmaDiscovery represents a node discovery action
 type RdmaDiscovery struct {
-	Manager               *nodemanager.Manager
-	LocalConfig           datapath.LocalNodeConfiguration
-	Registered            chan struct{}
-	localStateInitialized chan struct{}
-	NetConf               *cnitypes.NetConf
-	k8sNodeGetter         k8sNodeGetter
-	localNodeLock         lock.Mutex
-	localNode             nodeTypes.Node
-	eventRecorder         record.EventRecorder
-}
-
-// NewNodeDiscovery returns a pointer to new node discovery object
-func NewRdmaDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration, netConf *cnitypes.NetConf) *RdmaDiscovery {
-	auxPrefixes := []*cidr.CIDR{}
-	return &RdmaDiscovery{
-		Manager: manager,
-		LocalConfig: datapath.LocalNodeConfiguration{
-			MtuConfig:               mtuConfig,
-			UseSingleClusterRoute:   option.Config.UseSingleClusterRoute,
-			EnableIPv4:              option.Config.EnableIPv4,
-			EnableIPv6:              option.Config.EnableIPv6,
-			EnableRDMA:              option.Config.EnableRDMA,
-			EnableAutoDirectRouting: option.Config.EnableAutoDirectRouting,
-			EnableLocalNodeRoute:    enableLocalNodeRoute(),
-			AuxiliaryPrefixes:       auxPrefixes,
-			IPv4PodSubnets:          option.Config.IPv4PodSubnets,
-			IPv6PodSubnets:          option.Config.IPv6PodSubnets,
-		},
-		localNode:             nodeTypes.Node{},
-		Registered:            make(chan struct{}),
-		localStateInitialized: make(chan struct{}),
-		NetConf:               netConf,
-		eventRecorder:         k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: rdmaDiscoverySubsys}),
-	}
+	*NodeDiscovery
 }
 
 // start configures the local node and starts node discovery. This is called on
@@ -164,6 +121,22 @@ func (rd *RdmaDiscovery) StartDiscovery() {
 		return
 	}
 
+	nrcs, err := rd.nrcsNodeGetter.GetNodeNrcs(nodeTypes.GetName())
+	if err != nil {
+		log.WithError(err).Warning("get node NRCs failed")
+	}
+	if nrcs != nil {
+		if nrcs.Spec.AgentConfig.EnableRDMA != nil {
+			option.Config.EnableRDMA = *nrcs.Spec.AgentConfig.EnableRDMA
+			log.WithFields(
+				logrus.Fields{
+					"enableRDMA": option.Config.EnableRDMA,
+					"nrcs":       nrcs.Name,
+				},
+			).Info("update enable rdma flag success")
+		}
+	}
+
 	if !option.Config.EnableRDMA {
 		return
 	}
@@ -173,11 +146,13 @@ func (rd *RdmaDiscovery) StartDiscovery() {
 	if err != nil {
 		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "KernelDetectError01", "ipvlan is not supported, skipping rdma node discovery, err: %v", err)
 		rdLog.Info("ipvlan is not supported, skipping rdma node discovery")
+		option.Config.EnableRDMA = false
 		return
 	}
 	if !isCan {
 		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "KernelDetectError02", "ipvlan is not supported, skipping rdma node discovery")
 		rdLog.Infof("ipvlan is not supported, skipping rdma node discovery")
+		option.Config.EnableRDMA = false
 		return
 	}
 
@@ -206,77 +181,6 @@ func (rd *RdmaDiscovery) StartDiscovery() {
 	close(rd.localStateInitialized)
 
 	rd.updateLocalNode()
-}
-
-// WaitForLocalNodeInit blocks until StartDiscovery() has been called.  This is used to block until
-// Node's local IP addresses have been allocated, see https://github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pull/14299
-// and https://github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pull/14670.
-func (rd *RdmaDiscovery) WaitForLocalNodeInit() {
-	<-rd.localStateInitialized
-}
-
-func (rd *RdmaDiscovery) NodeDeleted(node nodeTypes.Node) {
-	rd.Manager.NodeDeleted(node)
-}
-
-func (rd *RdmaDiscovery) NodeUpdated(node nodeTypes.Node) {
-	rd.Manager.NodeUpdated(node)
-}
-
-func (rd *RdmaDiscovery) ClusterSizeDependantInterval(baseInterval time.Duration) time.Duration {
-	return rd.Manager.ClusterSizeDependantInterval(baseInterval)
-}
-
-func (rd *RdmaDiscovery) fillLocalNode() {
-	rd.localNode.Name = nodeTypes.GetName()
-	rd.localNode.Cluster = option.Config.ClusterID
-	rd.localNode.IPAddresses = []nodeTypes.Address{}
-	rd.localNode.IPv4AllocCIDR = node.GetIPv4AllocRange()
-	rd.localNode.IPv6AllocCIDR = node.GetIPv6AllocRange()
-	rd.localNode.ClusterID = option.Config.ClusterID
-	rd.localNode.Labels = node.GetLabels()
-
-	if node.GetK8sExternalIPv4() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeExternalIP,
-			IP:   node.GetK8sExternalIPv4(),
-		})
-	}
-
-	if node.GetIPv4() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeInternalIP,
-			IP:   node.GetIPv4(),
-		})
-	}
-
-	if node.GetIPv6() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeInternalIP,
-			IP:   node.GetIPv6(),
-		})
-	}
-
-	if node.GetInternalIPv4Router() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeCCEInternalIP,
-			IP:   node.GetInternalIPv4Router(),
-		})
-	}
-
-	if node.GetIPv6Router() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeCCEInternalIP,
-			IP:   node.GetIPv6Router(),
-		})
-	}
-
-	if node.GetK8sExternalIPv6() != nil {
-		rd.localNode.IPAddresses = append(rd.localNode.IPAddresses, nodeTypes.Address{
-			Type: addressing.NodeExternalIP,
-			IP:   node.GetK8sExternalIPv6(),
-		})
-	}
 }
 
 func (rd *RdmaDiscovery) updateLocalNode() {
@@ -318,6 +222,7 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 	}
 	rdmaIfNum := len(rdmaIFs)
 	if rdmaIfNum == 0 {
+		option.Config.EnableRDMA = false
 		return
 	}
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).WithField("rdmaIFs", rdmaIFs).Infof("Discovery %d RDMA interface for this node", rdmaIfNum)
@@ -419,12 +324,6 @@ func generateRdmaENISpec(vifFeatures string) (eni *api.ENISpec, err error) {
 }
 
 func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourceSet, vifFeatures, macAddress string) error {
-	var (
-		providerID       string
-		k8sNodeAddresses []nodeTypes.Address
-	)
-
-	rdmaNetResourceSet.Spec.Addresses = []ccev2.NodeAddress{}
 
 	// If we are unable to fetch the K8s Node resource and the NetResourceSet does
 	// not have an OwnerReference set, then somehow we are running in an
@@ -462,10 +361,7 @@ func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourc
 
 	// Get the addresses from k8s node and add them as part of CCE Node.
 	// CCE Node should contain all addresses from k8s.
-	nodeInterface := k8s.ConvertToNode(k8sNode)
-	typesNode := nodeInterface.(*k8sTypes.Node)
-	k8sNodeParsed := k8s.ParseNode(typesNode)
-	k8sNodeAddresses = k8sNodeParsed.IPAddresses
+	k8sNodeParsed := k8s.ParseNode(k8sNode)
 
 	// overwrite the labels from k8s node
 	if rdmaNetResourceSet.ObjectMeta.Labels == nil {
@@ -475,10 +371,7 @@ func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourc
 		rdmaNetResourceSet.ObjectMeta.Labels[key] = v
 	}
 
-	providerID = k8sNode.Spec.ProviderID
-	rdmaNetResourceSet.Labels["providerID"] = providerID
-
-	for _, k8sAddress := range k8sNodeAddresses {
+	for _, k8sAddress := range k8sNodeParsed.IPAddresses {
 		k8sAddressStr := k8sAddress.IP.String()
 		rdmaNetResourceSet.Spec.Addresses = append(rdmaNetResourceSet.Spec.Addresses, ccev2.NodeAddress{
 			Type: k8sAddress.Type,

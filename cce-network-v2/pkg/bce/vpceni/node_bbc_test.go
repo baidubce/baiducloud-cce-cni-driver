@@ -13,6 +13,7 @@ import (
 	k8sutilnet "k8s.io/utils/net"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -282,10 +283,11 @@ func bbcTestContext(t *testing.T) (*bceNode, error) {
 	im.GetMockCloudInterface().EXPECT().
 		GetBBCInstanceENI(gomock.Any(), gomock.Eq(k8sObj.InstanceID())).Return(newMockBBCEniWithMultipleIPs(k8sObj, sbn), nil).AnyTimes()
 
+	bcesync.InitBSM()
 	node := NewNode(nil, k8sObj, im)
 	assert.NotNil(t, node)
 
-	node.eniQuota = newCustomerIPQuota(log, k8s.Client(), nil, k8sObj.Spec.InstanceID, im.bceclient)
+	node.eniQuota = newCustomerIPQuota(log, k8s.Client(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclient)
 	node.eniQuota.SetMaxENI(1)
 	node.eniQuota.SetMaxIP(40)
 

@@ -27,6 +27,7 @@ type VPCSubnetSyncher struct {
 }
 
 func (ss *VPCSubnetSyncher) Init(ctx context.Context) error {
+	InitBSM()
 	ss.subnetSyncher = &subnetSyncher{}
 	ss.VPCIDs = append(ss.VPCIDs, operatorOption.Config.BCECloudVPCID)
 	return ss.subnetSyncher.Init(ctx)
@@ -92,6 +93,9 @@ func (ss *subnetSyncher) Update(resource *ccev1.Subnet) error {
 		newObj    = resource.DeepCopy()
 		newStatus *ccev1.SubnetStatus
 	)
+	defer func() {
+		GlobalBSM().updateSubnet(newObj)
+	}()
 	sbnCache, err := ss.getSubnetWithCache(resource.Name)
 	if err != nil || sbnCache == nil {
 		// If the subnet does not exist on the corresponding VPC,

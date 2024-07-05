@@ -81,6 +81,8 @@ const (
 
 	// ENIName is the full name of CCE Node
 	ENIName = ENIPluralName + "." + CustomResourceDefinitionGroup
+
+	PSTSName = "podsubnettopologyspreads" + "." + CustomResourceDefinitionGroup
 )
 
 // SchemeGroupVersion is group version used to register these objects

@@ -40,6 +40,15 @@ import (
 // have their event handling methods called in order of registration.
 func (k *K8sWatcher) RegisterENISubscriber(s subscriber.ENI) {
 	k.ENIChain.Register(s)
+	enis, err := k.NewENIClient().List()
+	if err == nil {
+		for _, eni := range enis {
+			if eni == nil {
+				continue
+			}
+			k.ENIChain.OnUpdateENI(nil, eni)
+		}
+	}
 }
 
 func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync.WaitGroup) {
@@ -69,26 +78,32 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 		options.LabelSelector = selector.String()
 	}
 
+	updateFunc := func(oldObj, newObj interface{}) {
+		var valid, equal bool
+		defer func() { k.K8sEventReceived(apiGroup, metricENI, resources.MetricUpdate, valid, equal) }()
+		oldEndpoint, ok := oldObj.(*ccev2.ENI)
+		if ok {
+			errs := k.ENIChain.OnUpdateENI(nil, oldEndpoint)
+			k.K8sEventProcessed(metricENI, resources.MetricUpdate, errs == nil)
+		}
+		newEndpoint, ok := newObj.(*ccev2.ENI)
+		if ok {
+			valid = true
+			errs := k.ENIChain.OnUpdateENI(nil, newEndpoint)
+			k.K8sEventProcessed(metricENI, resources.MetricCreate, errs == nil)
+		}
+	}
+
 	eniStore, eniController := informer.NewInformer(
 		cache.NewFilteredListWatchFromClient(cceClient.CceV2().RESTClient(),
 			"enis", metav1.NamespaceAll, optionsModifier),
 		&ccev2.ENI{},
 		option.Config.ResourceResyncInterval,
 		cache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				var valid, equal bool
-				defer func() { k.K8sEventReceived(apiGroup, metricENI, resources.MetricUpdate, valid, equal) }()
-				oldEndpoint, ok := oldObj.(*ccev2.ENI)
-				if ok {
-					newEndpoint, ok := newObj.(*ccev2.ENI)
-					if ok {
-						valid = true
-						errs := k.ENIChain.OnUpdateENI(oldEndpoint, newEndpoint)
-						k.K8sEventProcessed(metricENI, resources.MetricUpdate, errs == nil)
-					}
-
-				}
+			AddFunc: func(obj interface{}) {
+				updateFunc(nil, obj)
 			},
+			UpdateFunc: updateFunc,
 			DeleteFunc: func(obj interface{}) {
 				var valid, equal bool
 				defer func() { k.K8sEventReceived(apiGroup, metricENI, resources.MetricDelete, valid, equal) }()

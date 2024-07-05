@@ -74,17 +74,20 @@ func (l *ENIChain) OnAddENI(node *ccev2.ENI) error {
 }
 
 // OnUpdateENI notifies all the subscribers of an update event to a ENI.
-func (l *ENIChain) OnUpdateENI(oldNode, newNode *ccev2.ENI) error {
+func (l *ENIChain) OnUpdateENI(oldNode, newObj *ccev2.ENI) error {
+	if newObj == nil {
+		return nil
+	}
 	l.RLock()
 	defer l.RUnlock()
 	errs := []error{}
 	for _, s := range l.subs {
-		if err := s.OnUpdateENI(oldNode, newNode); err != nil {
+		if err := s.OnUpdateENI(oldNode, newObj); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("Errors: %v", errs)
+		return fmt.Errorf("errors: %v", errs)
 	}
 	return nil
 }

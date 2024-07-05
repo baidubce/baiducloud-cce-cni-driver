@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -628,6 +630,14 @@ func (esm *eniStateMachine) attachingENI() error {
 
 // toModelPrivateIP convert private ip to model
 func toModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*models.PrivateIP {
+	sort.Slice(ipset, func(i, j int) bool {
+		if ipset[i].Primary {
+			return true
+		} else if ipset[j].Primary {
+			return false
+		}
+		return strings.Compare(ipset[i].PrivateIpAddress, ipset[j].PrivateIpAddress) < 0
+	})
 	var pIPSet []*models.PrivateIP
 	for _, pip := range ipset {
 		newPIP := &models.PrivateIP{

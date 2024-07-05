@@ -5,8 +5,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
 
-#### 2.11.3 [未发布]
-1. [Bug] 优化手工删除subnet情况下StartSynchronizingSubnet可能遇到空指针
+#### 2.11.3 [20240628]
+1. [Feature] `--endpoint-gc-interval` 增加控制 agent 更新 nrs 的最小间隔时间
+2. [Optimize] 优化对 eni 重启事件的处理逻辑，优化 agent 重启速度
+3. [Optimize] 对 bce ENI 的 IP 地址做重排序，减少非必要 ENI 更新事件
+4. [Bug] 优化手工删除subnet情况下StartSynchronizingSubnet可能遇到空指针
 
 #### 2.11.2 [20240616]
 1. [Bug] 修复 nrs 删除后，仍会不断错误重试的问题，持续新建 eni 的问题

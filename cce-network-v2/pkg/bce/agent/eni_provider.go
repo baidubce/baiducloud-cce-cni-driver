@@ -39,12 +39,11 @@ func RegisterENIInitFatory(watcher *watchers.K8sWatcher) {
 		fullENIs:  make(map[string]*ccev2.ENI),
 		eniClient: watcher.NewENIClient(),
 	}
+	qos.InitEgressPriorityManager()
 	eniHandler.release, _ = os.NewOSDistribution()
 
 	watcher.RegisterENISubscriber(eniHandler)
 	plugin.RegisterPlugin("eni-init-factory", eniHandler)
-
-	qos.InitEgressPriorityManager()
 	qos.GlobalManager.Start(watcher.NewCCEEndpointClient())
 }
 
@@ -139,7 +138,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		if !reflect.DeepEqual(&resource.Status, &newObj.Status) {
 			(&resource.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
 
-			resource, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
+			_, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
 			if err != nil {
 				scopedLog.WithError(err).Error("update eni status")
 				return err

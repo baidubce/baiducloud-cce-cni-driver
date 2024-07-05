@@ -56,10 +56,6 @@ var (
 )
 
 const (
-	// customResourceUpdateRate is the maximum rate in which a custom
-	// resource is updated
-	customResourceUpdateRate = 15 * time.Second
-
 	fieldName = "name"
 )
 
@@ -108,7 +104,7 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 
 	t, err := trigger.NewTrigger(trigger.Parameters{
 		Name:        "crd-allocator-node-refresher",
-		MinInterval: customResourceUpdateRate,
+		MinInterval: conf.GetCCEEndpointGC(),
 		TriggerFunc: store.refreshNodeTrigger,
 	})
 	if err != nil {

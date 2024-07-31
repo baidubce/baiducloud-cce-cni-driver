@@ -8,13 +8,26 @@ import (
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
 var (
 	globalBSM *bsm
 	once      sync.Once
+)
+
+const (
+	IPKindAvailable     = "available"
+	IPKindBorrowed      = "borrowed"
+	IPKindBorrowedAvail = "borrowed_avail"
+	IPKindCount         = "count"
+	IPKindUsed          = "used"
+
+	EniTypeSubnet = "subnet"
 )
 
 // bsm is a global map of borrowed subnets
@@ -27,18 +40,20 @@ func InitBSM() error {
 	once.Do(func() {
 		globalBSM = &bsm{mutex: &lock.RWMutex{}, subnets: make(map[string]*BorrowedSubnet)}
 	})
-	return restoreBSM()
+	return resyncBSM()
 }
 
 // restore bsm when restarting
-func restoreBSM() error {
+func resyncBSM() error {
 	// restore all subnets
 	sbns, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("bsm failed to list subnets: %v", err)
 	}
+
+	var subnets = make(map[string]*BorrowedSubnet)
 	for _, sbn := range sbns {
-		globalBSM.subnets[sbn.Spec.ID] = NewBorrowedSubnet(sbn)
+		subnets[sbn.Spec.ID] = NewBorrowedSubnet(sbn)
 	}
 
 	// restore all tasks
@@ -47,24 +62,48 @@ func restoreBSM() error {
 		return fmt.Errorf("bsm failed to list enis: %v", err)
 	}
 	for _, eni := range enis {
-		bsbn, err := globalBSM.GetSubnet(eni.Spec.SubnetID)
-		if err != nil {
-			log.WithField("task", "restoreBSM").Errorf("bsm failed to get subnet %q: %v", eni.Spec.SubnetID, err)
-			continue
+		bsbn, ok := subnets[eni.Spec.SubnetID]
+		if !ok {
+			sbn, err := GlobalBSM().GetSubnet(eni.Spec.SubnetID)
+			if err != nil {
+				log.WithField("task", "restoreBSM").Errorf("bsm failed to get subnet %q: %v", eni.Spec.SubnetID, err)
+				continue
+			}
+			bsbn = sbn
+			subnets[sbn.Spec.ID] = bsbn
 		}
+
 		// should borrow cross subnet IP
 		if eni.Spec.BorrowIPCount > 0 {
-			if eni.Spec.BorrowIPCount-eni.Status.LendBorrowedIPCount > 0 {
-				borrowed := bsbn.Borrow(eni.Spec.ID, eni.Spec.BorrowIPCount-eni.Status.LendBorrowedIPCount)
-				if borrowed == 0 {
+			ipCount := math.IntMax(eni.Spec.BorrowIPCount-len(eni.Spec.PrivateIPSet), 0)
+			if ipCount > 0 {
+				count := bsbn.forceBorrowForENI(eni.Spec.ID, ipCount)
+				if count != ipCount {
 					metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "ENI", eni.Spec.ID).Inc()
 				}
 			}
 		}
 
+		var usedIPCount int
+		for _, ipset := range eni.Spec.PrivateIPSet {
+			if ipset.SubnetID == eni.Spec.SubnetID {
+				usedIPCount++
+			}
+		}
+		metrics.SubnetIPsGuage.WithLabelValues(IPKindBorrowed, eni.Spec.ID, eni.Spec.SubnetID, eni.Spec.NodeName).Set(float64(bsbn.GetBorrowedIPNum(eni.Spec.ID)))
+		metrics.SubnetIPsGuage.WithLabelValues(IPKindUsed, eni.Spec.ID, eni.Spec.SubnetID, eni.Spec.NodeName).Set(float64(usedIPCount))
 	}
 
-	log.WithField("task", "restoreBSM").Info("bsm restored successfully")
+	for id, bs := range subnets {
+		metrics.SubnetIPsGuage.WithLabelValues(IPKindAvailable, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.Status.AvailableIPNum))
+		metrics.SubnetIPsGuage.WithLabelValues(IPKindBorrowed, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.BorrowedIPsCount))
+		metrics.SubnetIPsGuage.WithLabelValues(IPKindBorrowedAvail, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.BorrowedAvailableIPsCount))
+	}
+	GlobalBSM().mutex.Lock()
+	GlobalBSM().subnets = subnets
+	GlobalBSM().mutex.Unlock()
+
+	log.WithField("task", "restoreBSM").Debug("resync bsm successfully")
 	return nil
 }
 
@@ -94,6 +133,16 @@ func (bsm *bsm) EnsureSubnet(vpcID, sbnID string) (*BorrowedSubnet, error) {
 	}
 
 	return bsm.GetSubnet(sbnID)
+}
+
+func (bsm *bsm) ForceBorrowForENI(eni *ccev2.ENI) {
+	if eni != nil && eni.Spec.BorrowIPCount > 0 {
+		bsbn, e := bsm.EnsureSubnet(eni.Spec.ENI.VpcID, eni.Spec.ENI.SubnetID)
+		if e == nil {
+			ipCount := math.IntMax(eni.Spec.BorrowIPCount-len(eni.Spec.PrivateIPSet), 0)
+			bsbn.forceBorrowForENI(eni.Name, ipCount)
+		}
+	}
 }
 
 // updateSubnet update subnet in bsm
@@ -127,6 +176,16 @@ func NewBorrowedSubnet(subnet *ccev1.Subnet) *BorrowedSubnet {
 	}
 }
 
+func (bs *BorrowedSubnet) logger() *logrus.Entry {
+	return log.WithFields(logrus.Fields{
+		"module":                    "borrowedSubnet",
+		"sbnID":                     bs.SubnetId,
+		"BorrowedIPsCount":          bs.BorrowedIPsCount,
+		"BorrowedAvailableIPsCount": bs.BorrowedAvailableIPsCount,
+		"AvailableIPNum":            bs.Status.AvailableIPNum,
+	})
+}
+
 func (bs *BorrowedSubnet) update(subnet *ccev1.Subnet) {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
@@ -138,39 +197,61 @@ func (bs *BorrowedSubnet) Borrow(enid string, ipNum int) (borrowedIPNum int) {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 	if bs.BorrowedAvailableIPsCount < ipNum {
+		bs.logger().WithFields(logrus.Fields{
+			"task":      "borrow",
+			"eniID":     enid,
+			"needIPNum": ipNum,
+			"tasks":     logfields.Json(bs.tasks),
+		}).Warning("subnet not enough available ips to borrow by eni")
 		return
 	}
 
-	if task, ok := bs.tasks[enid]; !ok {
-		bs.tasks[enid] = IPBorrowTask{SubnetId: bs.SubnetId, EniID: enid, IPNum: ipNum}
-	} else {
-		task.IPNum += ipNum
-		bs.tasks[enid] = task
-	}
-
-	bs.BorrowedIPsCount += ipNum
-	bs.BorrowedAvailableIPsCount = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
-
-	return ipNum
+	return bs._forceBorrowForENI(enid, ipNum)
 }
 
-func (bs *BorrowedSubnet) forceBorrowForENI(enid string, ipNum int) {
-	if ipNum <= 0 {
-		return
-	}
+// forceBorrowForENI borrow ip for eni
+// return borrowed ip num
+func (bs *BorrowedSubnet) forceBorrowForENI(enid string, ipNum int) int {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 
+	return bs._forceBorrowForENI(enid, ipNum)
+}
+
+func (bs *BorrowedSubnet) _forceBorrowForENI(enid string, ipNum int) int {
+	var (
+		eniBorrowedIPNum int
+		sbnAvailBorrowIP int
+	)
 	if task, ok := bs.tasks[enid]; ok {
 		bs.BorrowedIPsCount -= task.IPNum
-		task.IPNum = ipNum
+		sbnAvailBorrowIP = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
+		eniBorrowedIPNum = math.IntMin(sbnAvailBorrowIP, ipNum)
+		task.IPNum = eniBorrowedIPNum
 		bs.tasks[enid] = task
 	} else {
-		bs.tasks[enid] = IPBorrowTask{SubnetId: bs.SubnetId, EniID: enid, IPNum: ipNum}
+		sbnAvailBorrowIP = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
+		eniBorrowedIPNum = math.IntMin(sbnAvailBorrowIP, ipNum)
+		bs.tasks[enid] = IPBorrowTask{SubnetId: bs.SubnetId, EniID: enid, IPNum: eniBorrowedIPNum}
 	}
 
-	bs.BorrowedIPsCount += ipNum
+	bs.BorrowedIPsCount += eniBorrowedIPNum
 	bs.BorrowedAvailableIPsCount = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
+
+	if eniBorrowedIPNum < ipNum {
+		bs.logger().WithFields(logrus.Fields{
+			"task":                            "forceBorrowForENI",
+			"eniID":                           "enid",
+			"sbnID":                           bs.SubnetId,
+			"needIPNum":                       ipNum,
+			"eniBorrowedIPNum":                eniBorrowedIPNum,
+			"subnetBorrowedAvailableIPsCount": bs.BorrowedAvailableIPsCount,
+			"subnetAvailableIPsCount":         bs.Status.AvailableIPNum,
+			"subnetBorrowedIPNum":             bs.BorrowedIPsCount,
+		}).Warning("not enough available ips to force borrow")
+	}
+
+	return eniBorrowedIPNum
 }
 
 func (bs *BorrowedSubnet) Done(enid string, ipNum int) {

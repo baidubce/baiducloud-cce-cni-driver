@@ -353,6 +353,9 @@ var (
 
 	// NoAvailableSubnetNodeCount is the counter of nodes that no avaiable subnet to create new eni
 	IPAMErrorCounter = NoOpCounterVec
+
+	// SubnetIPsGuage is the gauge of available IPs in subnet and borrowed IPs by eni
+	SubnetIPsGuage = NoOpGaugeVec
 )
 
 type Configuration struct {
@@ -381,6 +384,7 @@ type Configuration struct {
 	KubernetesAPICallsEnabled            bool
 	KubernetesCNPStatusCompletionEnabled bool
 	IpamEventEnabled                     bool
+	SubnetIPsGuageEnabled                bool
 
 	VersionMetric                        bool
 	APILimiterProcessHistoryDuration     bool
@@ -423,6 +427,7 @@ func DefaultMetrics() map[string]struct{} {
 		Namespace + "_work_queue_event_counter":                                         {},
 		Namespace + "_controller_handler_duration_milliseconds":                         {},
 		Namespace + "_ipam_error_counter":                                               {},
+		Namespace + "_subnet_ips_guage":                                                 {},
 	}
 }
 
@@ -591,6 +596,15 @@ func CreateConfiguration(metricsEnabled []string) (Configuration, []prometheus.C
 
 			collectors = append(collectors, IpamEvent)
 			c.IpamEventEnabled = true
+
+		case Namespace + "_subnet_ips_guage":
+			SubnetIPsGuage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: Namespace,
+				Name:      "subnet_ips_guage",
+				Help:      "Number of IP addresses in a subnet labeled by eni and subnet id",
+			}, []string{LabelKind, "eniid", "sbnid", "owner"})
+			collectors = append(collectors, SubnetIPsGuage)
+			c.SubnetIPsGuageEnabled = true
 
 		case Namespace + "_version":
 			VersionMetric = prometheus.NewGaugeVec(prometheus.GaugeOpts{

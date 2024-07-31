@@ -270,7 +270,7 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 
 			if subnet, err := bcesync.GlobalBSM().GetSubnet(e.Spec.ENI.SubnetID); err == nil {
 				if subnet.GetBorrowedIPNum(interfaceID) > 0 {
-					a.AvailableForAllocationIPv4 = math.IntMin(subnet.BorrowedAvailableIPsCount, availableIPv4OnENI)
+					a.AvailableForAllocationIPv4 = math.IntMin(subnet.GetBorrowedIPNum(interfaceID), availableIPv4OnENI)
 				} else {
 					a.AvailableForAllocationIPv4 = math.IntMin(subnet.BorrowedAvailableIPsCount, availableIPv4OnENI)
 				}

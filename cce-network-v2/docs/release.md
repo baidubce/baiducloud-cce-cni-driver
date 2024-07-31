@@ -7,6 +7,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.2 [2024/07/09]
+1. [Feature] 支持borrowed subnet 可观测，新增 cce_subnet_ips_guage 指标代表子网可用 IP 地址数量
+2. [Optimize] borrowed subnet 支持定时同步能力，避免因单次 IP 计算错误，导致错误借用未归还的问题。
+3. [Optimize] 更新子网可用 IP 借用语义，单个 ENI 从子网借用 IP 地址数以最新一次为准
+
 #### 2.12.1 [2024/07/02]
 1. [Bug] 修复 bbc 机型开启 burstable ENI 时，初始化会导致空指针的问题
 2. [Bug] 修复 bbc ENI 不返回实例 id 时，无法选中 ENI 的，影响节点就绪时间的问题

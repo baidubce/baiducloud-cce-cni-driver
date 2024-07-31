@@ -24,8 +24,8 @@ func TestBorrowedSubnet_Borrow(t *testing.T) {
 
 	num = bs.Borrow("eni1", 2)
 	assert.Equal(t, 2, num)
-	assert.Equal(t, 252, bs.BorrowedAvailableIPsCount)
-	assert.Equal(t, 3, bs.BorrowedIPsCount)
+	assert.Equal(t, 253, bs.BorrowedAvailableIPsCount)
+	assert.Equal(t, 2, bs.BorrowedIPsCount)
 	assert.Equal(t, 255, bs.Status.AvailableIPNum)
 
 	bs.forceBorrowForENI("eni1", 10)

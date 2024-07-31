@@ -78,6 +78,7 @@ func (ss *subnetSyncher) syncSubnet(ctx context.Context) (result []vpc.Subnet, e
 		}
 		result = append(result, *sbn)
 	}
+	resyncBSM()
 	return
 }
 

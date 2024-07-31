@@ -307,12 +307,7 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 	)
 	defer func() {
 		if err == nil {
-			if newObj.Spec.BorrowIPCount > 0 {
-				bsbn, e := GlobalBSM().EnsureSubnet(newObj.Spec.ENI.VpcID, newObj.Spec.ENI.SubnetID)
-				if e == nil {
-					bsbn.forceBorrowForENI(newObj.Name, newObj.Spec.BorrowIPCount-newObj.Status.LendBorrowedIPCount)
-				}
-			}
+			GlobalBSM().ForceBorrowForENI(newObj)
 		}
 	}()
 

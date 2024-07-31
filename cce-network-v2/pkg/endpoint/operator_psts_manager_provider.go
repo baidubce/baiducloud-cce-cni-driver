@@ -213,6 +213,8 @@ func (local *localAllocator) allocateNext() (ipv4, ipv6 *ccev2.AddressPair, rele
 	return
 }
 
+// allocateFromLocalPool allocates IPs from local pool
+// num 1 means allocate one ip, and this function usual usage is to return only one IP address
 func (local *localAllocator) allocateFromLocalPool(family ccev2.IPFamily, num int) (map[string][]net.IP, []func()) {
 	var (
 		subnetAvailableIPs          = make(map[string][]net.IP)
@@ -220,43 +222,52 @@ func (local *localAllocator) allocateFromLocalPool(family ccev2.IPFamily, num in
 		count                       = 0
 	)
 	for _, subnet := range local.subnets {
+		allocator := local.localPool.getPool(subnet.Name, string(family))
+		if allocator == nil {
+			local.log.WithField("step", "get customer range allocator").
+				WithField("subnet", subnet.Name).
+				Error("no available pool")
+			continue
+		}
+
+		// allocate ip from local pool
+		allocate := func(startIP, endIP net.IP) bool {
+			if count >= num {
+				return false
+			}
+			ips, err := allocator.ReservedAllocateMany(startIP, endIP, 1)
+			if err != nil {
+				local.log.WithField("step", "allocate local ip").WithError(err).Debug("allocate local ip failed")
+				return false
+			}
+			local.log.WithField("step", "allocate local ip").Debug("allocate local ip success")
+			subnetAvailableIPs[subnet.Name] = append(subnetAvailableIPs[subnet.Name], ips...)
+			releaseIPFuncs = append(releaseIPFuncs, func() {
+				allocator.ReleaseMany(ips)
+			})
+			count++
+			return true
+		}
+
 		customs := local.psts.Spec.Subnets[subnet.Name]
+		if len(customs) == 0 {
+			allocate(nil, nil)
+		}
 		for _, custom := range customs {
 			if custom.Family != family {
 				continue
 			}
-			allocator := local.localPool.getPool(subnet.Name, string(custom.Family))
-			if allocator == nil {
-				local.log.WithField("step", "get customer range allocator").
-					WithField("subnet", subnet.Name).
-					Error("no available pool")
-				continue
+			if count >= num {
+				break
 			}
-
-			// allocate ip from local pool
-			allocate := func(startIP, endIP net.IP) bool {
-				if count >= num {
-					return false
-				}
-				ips, err := allocator.ReservedAllocateMany(startIP, endIP, 1)
-				if err != nil {
-					local.log.WithField("step", "allocate local ip").WithError(err).Debug("allocate local ip failed")
-					return false
-				}
-				local.log.WithField("step", "allocate local ip").Debug("allocate local ip success")
-				subnetAvailableIPs[subnet.Name] = append(subnetAvailableIPs[subnet.Name], ips...)
-				releaseIPFuncs = append(releaseIPFuncs, func() {
-					allocator.ReleaseMany(ips)
-				})
-				count++
-				return true
-			}
-
 			// allocate ip from customer range
 			if custom.Range == nil {
 				allocate(nil, nil)
 			} else {
 				for _, rg := range custom.Range {
+					if count >= num {
+						break
+					}
 					allocate(net.ParseIP(rg.Start), net.ParseIP(rg.End))
 				}
 			}

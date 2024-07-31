@@ -19,11 +19,13 @@ package allocator
 
 import (
 	"net"
+	"testing"
 
 	"gopkg.in/check.v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/stretchr/testify/assert"
 )
 
 func (e *AllocatorSuite) TestPoolID(c *check.C) {
@@ -123,4 +125,21 @@ func (e *AllocatorSuite) TestPoolAllocatorRelease(c *check.C) {
 	ips, err = s.AllocateMany(3)
 	c.Assert(err, check.IsNil)
 	c.Assert(len(ips), check.Equals, 3)
+}
+
+func TestSubRangePoolAllocator_ReservedAllocateMany(t *testing.T) {
+	_, ipnet, err := net.ParseCIDR("10.10.10.0/24")
+
+	poolID := types.PoolID("test-pool")
+	s, err := NewSubRangePoolAllocator(poolID, &cidr.CIDR{ipnet}, 0)
+	ips, err := s.ReservedAllocateMany(nil, nil, 2)
+	assert.NoError(t, err)
+
+	assert.Equal(t, len(ips), 2)
+	for _, ip := range ips {
+		assert.True(t, ipnet.Contains(ip))
+	}
+
+	assert.Equal(t, s.Free(), 252)
+	assert.Equal(t, []net.IP{net.ParseIP("10.10.10.1"), net.ParseIP("10.10.10.2")}, ips)
 }

@@ -171,7 +171,7 @@ func (s *cpstsSyncher) Update(resource *ccev2alpha1.ClusterPodSubnetTopologySpre
 		return err
 	}
 
-	if resource.Spec.Selector != nil {
+	if resource.Spec.NamespaceSelector != nil {
 		selector = labels.Set(resource.Spec.NamespaceSelector.MatchLabels).AsSelector()
 	}
 	affectNamespaces, err = k8s.WatcherClient().Informers.Core().V1().Namespaces().Lister().List(selector)

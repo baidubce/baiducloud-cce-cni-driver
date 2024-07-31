@@ -21,6 +21,7 @@ import (
 	"net"
 
 	"github.com/cilium/ipam/service/ipallocator"
+	"github.com/sirupsen/logrus"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -90,11 +91,21 @@ func NewSubRangePoolAllocator(poolID types.PoolID, allocationCIDR *cidr.CIDR, re
 	if err != nil {
 		return nil, err
 	}
+
+	subAllocator := &SubRangePoolAllocator{allocator}
+
 	// reserve the first ip
-	allocator.AllocateMany(reserve)
-	return &SubRangePoolAllocator{allocator}, nil
+	ips, err := subAllocator.ReservedAllocateMany(nil, nil, reserve)
+	log.WithFields(logrus.Fields{
+		"poolID":         poolID,
+		"allocationCIDR": allocationCIDR.String(),
+		"reserve":        reserve,
+		"ips":            ips,
+	}).Infof("new sub range pool allocator ips: %v", ips)
+	return subAllocator, err
 }
 
+// ReservedAllocateMany reserves a slice of IP addresses
 func (s *SubRangePoolAllocator) ReservedAllocateMany(startIP, endIP net.IP, num int) ([]net.IP, error) {
 	ips := make([]net.IP, 0, num)
 

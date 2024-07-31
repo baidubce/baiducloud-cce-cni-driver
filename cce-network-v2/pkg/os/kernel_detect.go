@@ -57,7 +57,8 @@ func (kh *LinuxKernelHandler) DetectKernelVersion(ctx context.Context) (string, 
 	return strings.TrimSpace(string(fileContent)), nil
 }
 
-// GetModules returns all installed kernel modules.
+// GetModules returns all installed kernel modules which match any of the specified names.
+// Try to load the required kernel modules if not built in.
 func (kh *LinuxKernelHandler) GetModules(ctx context.Context, wantedModules []string) ([]string, error) {
 	var bmods, lmods []string
 
@@ -103,8 +104,8 @@ func (kh *LinuxKernelHandler) GetModules(ctx context.Context, wantedModules []st
 			// Try to load the required IPVS kernel modules if not built in
 			err := kh.executor.Command("modprobe", "--", module).Run()
 			if err != nil {
-				kernelLog.Infof("failed to load kernel module %v with modprobe. "+
-					"You can ignore this message when this is running inside container without mounting /lib/modules", module)
+				kernelLog.Infof("failed to load kernel module %v with modprobe. The error is %v."+
+					"You can ignore this message when this is running inside container without mounting /lib/modules", module, err)
 			} else {
 				lmods = append(lmods, module)
 			}

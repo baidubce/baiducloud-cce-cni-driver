@@ -85,7 +85,8 @@ func canUseIPVlanOnRdmaNode() (isCan bool, err error) {
 		return false, err
 	}
 
-	// load kernel module
+	// GetModules returns all installed kernel modules which match ipvlanKernelModuleName.
+	// Try to load the required kernel modules which are named in ipvlanKernelModuleName if not built in.
 	kernelModules, err := kernelhandler.GetModules(context.TODO(), []string{ipvlanKernelModuleName})
 	if err != nil {
 		rdLog.Errorf("get kernel modules failed: %v", err)

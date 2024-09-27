@@ -19,7 +19,7 @@ CCE CNI 为预分配辅助 IP 模式提供了一个默认的 Helm Values 文件�
 
 ```
 CNIMode: host-local-secondary-ip-ipvlan
-CCECNIImage: registry.baidubce.com/cce-plugin-dev/cce-cni:host-local
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:host-local
 ServiceCIDR: # 集群 ClusterIP 网段, 例如 192.168.0.0/16
 ```
 

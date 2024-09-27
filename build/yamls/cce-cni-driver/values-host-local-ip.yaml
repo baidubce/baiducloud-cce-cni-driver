@@ -1,2 +1,2 @@
 CNIMode: host-local-secondary-ip-veth
-CCECNIImage: registry.baidubce.com/cce-plugin-dev/cce-cni:host-local
+CCECNIImage: registry.baidubce.com/cce-plugin-pro/cce-cni:host-local

@@ -7,6 +7,14 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.7 [20240923]
+1. [Optimize] psts 增加对 cep ttl 未过期时直接移除 Node 导致 cep 后续 ttl 过期后因无对应 eni 而无法正常删除时的清理逻辑
+2. [Optimize] 增加 ENI 同步时不一致信息的差异对比日志，方便出现 ENI 数据不一致时排查问题
+3. [Optimize] 去掉 ERI 的独立同步逻辑，复用 ERI 和 ENI 的同步流程
+4. [Optimize] 去掉 Underlay RDMA 的独立同步逻辑，创建 underlay RDMA 网卡后，状态不再变更
+5. [Optimize] 去掉 BBC/EBC 主网卡状态机同步流程，ENI 状态不再变更
+6. [Optimize] 优化 ENI 同步流程，仅对 ENI 状态变更时同步，减少 IP 地址变更同步的消耗
+
 #### 2.12.6 [20240913]
 1. [Bug] 修复在 RDMA 场景查询子网为空，打印错误日志的问题
 2. [Bug] 修复在VPC-Route 模式下，开启 RDMA 后，重启 operator 进程会为 RDMA nrs 分配 podCIDR 的问题。
@@ -53,7 +61,14 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
 
-#### 2.11.4 [20240827]
+#### 2.11.5 [20240920]
+1. [Optimize] 增加 ENI 同步时不一致信息的差异对比日志，方便出现 ENI 数据不一致时排查问题
+2. [Optimize] 去掉 ERI 的独立同步逻辑，复用 ERI 和 ENI 的同步流程
+3. [Optimize] 去掉 Underlay RDMA 的独立同步逻辑，创建 underlay RDMA 网卡后，状态不再变更
+4. [Optimize] 去掉 BBC/EBC 主网卡状态机同步流程，ENI 状态不再变更
+5. [Optimize] 优化 ENI 同步流程，仅对 ENI 状态变更时同步，减少 IP 地址变更同步的消耗
+
+#### 2.11.4 [20240823]
 1. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题
 2. [Bug] 修复重复 update nrs,导致 Operation cannot be fulfilled的问题
 

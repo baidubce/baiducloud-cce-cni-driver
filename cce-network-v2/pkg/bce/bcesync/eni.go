@@ -2,11 +2,7 @@ package bcesync
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"reflect"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,7 +12,6 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
@@ -33,7 +28,7 @@ import (
 const (
 	eniControllerName = "eni-sync-manager"
 
-	ENIReadyTimeToAttach = 5 * time.Second
+	ENIReadyTimeToAttach = 1 * time.Second
 	ENIMaxCreateDuration = 5 * time.Minute
 
 	FinalizerENI = "eni-syncer"
@@ -54,11 +49,7 @@ type remoteEniSyncher interface {
 
 // VPCENISyncerRouter only work with single vpc cluster
 type VPCENISyncerRouter struct {
-	eni        *eniSyncher
-	primaryENI *eniSyncher
-	hpcENI     *eniSyncher
-	bbcENI     *eniSyncher
-	eriENI     *eniSyncher
+	eni *eniSyncher
 }
 
 // NewVPCENISyncer create a new VPCENISyncer
@@ -86,141 +77,41 @@ func (es *VPCENISyncerRouter) Init(ctx context.Context) error {
 	}
 	vpcRemote.syncManager = es.eni.syncManager
 	vpcRemote.VPCIDs = operatorOption.Config.BCECloudVPCID
-
-	// 2. init bcc remote syncer
-	bccRemote := &remoteBCCPrimarySyncher{
-		bceclient: bceclient,
-	}
-	es.primaryENI = &eniSyncher{
-		bceclient:    bceclient,
-		resyncPeriod: resyncPeriod,
-
-		remoteSyncer:  bccRemote,
-		eventRecorder: eventRecorder,
-	}
-	err = es.primaryENI.Init(ctx)
-	if err != nil {
-		return fmt.Errorf("init primary eni syncer failed: %v", err)
-	}
-	bccRemote.syncManager = es.primaryENI.syncManager
-
-	// 3. init hpc remote syncer
-	hpcRemote := &remoteHPCSyncher{
-		bceclient: bceclient,
-	}
-	es.hpcENI = &eniSyncher{
-		bceclient:    bceclient,
-		resyncPeriod: operatorOption.Config.ResourceHPCResyncInterval,
-
-		remoteSyncer:  hpcRemote,
-		eventRecorder: eventRecorder,
-	}
-	err = es.hpcENI.Init(ctx)
-	if err != nil {
-		return fmt.Errorf("init hpc eni syncer failed: %v", err)
-	}
-	hpcRemote.syncManager = es.hpcENI.syncManager
-
-	// 4. init bbc remote syncer
-	bbcRemote := &remoteBBCPrimarySyncher{
-		bceclient: bceclient,
-	}
-	es.bbcENI = &eniSyncher{
-		bceclient:    bceclient,
-		resyncPeriod: resyncPeriod,
-
-		remoteSyncer:  bbcRemote,
-		eventRecorder: eventRecorder,
-	}
-	err = es.bbcENI.Init(ctx)
-	if err != nil {
-		return fmt.Errorf("init bbc primary eni syncer failed: %v", err)
-	}
-	bbcRemote.syncManager = es.bbcENI.syncManager
-
-	//  5. init eri remote syncer
-	eriRemote := &remoteERISyncher{
-		remoteVpcEniSyncher: &remoteVpcEniSyncher{
-			bceclient:     bceclient,
-			eventRecorder: eventRecorder,
-			ClusterID:     operatorOption.Config.CCEClusterID,
-		},
-	}
-	es.eriENI = &eniSyncher{
-		bceclient:    bceclient,
-		resyncPeriod: resyncPeriod,
-
-		remoteSyncer:  eriRemote,
-		eventRecorder: eventRecorder,
-	}
-	err = es.eriENI.Init(ctx)
-	if err != nil {
-		return fmt.Errorf("init eri syncer failed: %v", err)
-	}
-	eriRemote.syncManager = es.eni.syncManager
-	eriRemote.VPCIDs = operatorOption.Config.BCECloudVPCID
-
 	return nil
 }
 
 // StartENISyncer implements syncer.ENISyncher
 func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
 	es.eni.StartENISyncer(ctx, updater)
-	es.primaryENI.StartENISyncer(ctx, updater)
-	es.hpcENI.StartENISyncer(ctx, updater)
-	es.bbcENI.StartENISyncer(ctx, updater)
-	es.eriENI.StartENISyncer(ctx, updater)
 	return es
 }
 
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBBC {
-		return es.bbcENI.Create(resource)
-	} else if types == ccev2.ENIForERI {
-		return es.eriENI.Create(resource)
-	} else if types == ccev2.ENIForHPC {
-		return es.hpcENI.Create(resource)
-	} else if resource.Spec.Type == ccev2.ENIForEBC &&
-		resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
-		return es.primaryENI.Create(resource)
+	if types == ccev2.ENIForBCC {
+		return es.eni.Create(resource)
 	}
-	return es.eni.Create(resource)
+	return nil
 }
 
 // Delete implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Delete(name string) error {
-	es.bbcENI.Delete(name)
-	es.eriENI.Delete(name)
-	es.hpcENI.Delete(name)
-	es.primaryENI.Delete(name)
 	return es.eni.Delete(name)
 }
 
 // ResyncENI implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
-	es.bbcENI.ResyncENI(ctx)
-	es.eriENI.ResyncENI(ctx)
-	es.hpcENI.ResyncENI(ctx)
-	es.primaryENI.ResyncENI(ctx)
 	return es.eni.ResyncENI(ctx)
 }
 
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBBC {
-		return es.bbcENI.Update(resource)
-	} else if types == ccev2.ENIForERI {
-		return es.eriENI.Update(resource)
-	} else if types == ccev2.ENIForHPC {
-		return es.hpcENI.Update(resource)
-	} else if resource.Spec.Type == ccev2.ENIForEBC &&
-		resource.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
-		return es.primaryENI.Update(resource)
+	if types == ccev2.ENIForBCC {
+		return es.eni.Update(resource)
 	}
-	return es.eni.Update(resource)
+	return nil
 }
 
 var (
@@ -328,45 +219,24 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 			}
 
 			err = machine.start()
+			eniStatus = &newObj.Status
 			_, isDelayError := err.(*cm.DelayEvent)
-			if err != nil {
-				if isDelayError && newObj.Status.VPCStatus == resource.Status.VPCStatus {
-					// if vpc status is not changed, will retry after 5s
-					scopeLog.Infof("eni vpc status not changed, will retry later")
-					return err
-				} else {
-					scopeLog.WithError(err).Error("eni machine failed")
-					return err
-				}
+			if isDelayError {
+				goto updateStatus
+			} else if err != nil {
+				scopeLog.WithError(err).Error("eni machine failed")
+				return err
 			}
 		}
-
-		scopeLog.Debug("start refresh eni")
-		err = es.refreshENI(ctx, newObj)
-		if err != nil {
-			scopeLog.WithError(err).Error("refresh eni failed")
-			return err
-		}
-		eniStatus = &newObj.Status
 	}
 
-	// update spec and status
-	if logfields.Json(&newObj.Spec) != logfields.Json(&resource.Spec) ||
-		!reflect.DeepEqual(newObj.Labels, resource.Labels) ||
-		!reflect.DeepEqual(newObj.Finalizers, resource.Finalizers) {
-		newObj, updateError = es.updater.Update(newObj)
-		if updateError != nil {
-			scopeLog.WithError(updateError).Error("update eni spec failed")
-			return updateError
-		}
-		scopeLog.Info("update eni spec success")
-	}
-
+updateStatus:
 	if logfields.Json(eniStatus) != logfields.Json(&resource.Status) &&
 		eniStatus != nil {
 		newObj.Status = *eniStatus
 		scopeLog = scopeLog.WithFields(logrus.Fields{
 			"vpcStatus": newObj.Status.VPCStatus,
+			"oldStatus": resource.Status.VPCStatus,
 			"cceStatus": newObj.Status.CCEStatus,
 		})
 		_, updateError = es.updater.UpdateStatus(newObj)
@@ -376,7 +246,7 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		}
 		scopeLog.Info("update eni status success")
 	}
-	return nil
+	return err
 }
 
 // mangeFinalizer except for node deletion, direct deletion of ENI objects is prohibited
@@ -438,98 +308,6 @@ func (es *eniSyncher) ResyncENI(context.Context) time.Duration {
 	log.WithField(taskLogField, eniControllerName).Infof("start to resync eni")
 	es.syncManager.RunImmediately()
 	return es.resyncPeriod
-}
-
-// override ENI spec
-// convert private IP set
-// 1. set ip family by private ip address
-// 2. set subnet by priveip search subnet of the private IP from subnets
-// 3. override eni status
-func (es *eniSyncher) refreshENI(ctx context.Context, newObj *ccev2.ENI) error {
-	var (
-		eniCache *eni.Eni
-		err      error
-	)
-
-	// should refresh eni
-	if newObj.Spec.VPCVersion != newObj.Status.VPCVersion {
-		eniCache, err = es.remoteSyncer.statENI(ctx, newObj.Name)
-	} else {
-		eniCache, err = es.getENIWithCache(ctx, newObj)
-	}
-	if err != nil {
-		if cloud.IsErrorENINotFound(err) || cloud.IsErrorReasonNoSuchObject(err) {
-			if newObj.Status.VPCStatus != ccev2.VPCENIStatusNone {
-				newObj.Status.VPCStatus = ccev2.VPCENIStatusDeleted
-			}
-		}
-		return err
-	}
-
-	if eniCache != nil {
-		if eniCache.MacAddress == "" {
-			return errors.New("vpc mac address is empty")
-		}
-
-		newObj.Spec.ENI.ID = eniCache.EniId
-		newObj.Spec.ENI.Name = eniCache.Name
-		newObj.Spec.ENI.MacAddress = eniCache.MacAddress
-		newObj.Spec.ENI.Description = eniCache.Description
-		newObj.Spec.ENI.VpcID = eniCache.VpcId
-		newObj.Spec.ENI.ZoneName = eniCache.ZoneName
-		newObj.Spec.ENI.SubnetID = eniCache.SubnetId
-		if len(eniCache.SecurityGroupIds) > 0 {
-			newObj.Spec.SecurityGroupIds = eniCache.SecurityGroupIds
-		}
-		if len(eniCache.EnterpriseSecurityGroupIds) > 0 {
-			newObj.Spec.EnterpriseSecurityGroupIds = eniCache.EnterpriseSecurityGroupIds
-		}
-
-		if len(newObj.Labels) == 0 {
-			newObj.Labels = map[string]string{}
-		}
-		newObj.Labels[k8s.VPCIDLabel] = eniCache.VpcId
-		if eniCache.InstanceId != "" {
-			newObj.Labels[k8s.LabelInstanceID] = eniCache.InstanceId
-		} else {
-			newObj.Labels[k8s.LabelInstanceID] = newObj.Spec.ENI.InstanceID
-		}
-
-		newObj.Labels[k8s.LabelNodeName] = newObj.Spec.NodeName
-
-		newObj.Spec.ENI.PrivateIPSet = toModelPrivateIP(eniCache.PrivateIpSet, eniCache.VpcId, eniCache.SubnetId)
-		newObj.Spec.ENI.IPV6PrivateIPSet = toModelPrivateIP(eniCache.Ipv6PrivateIpSet, eniCache.VpcId, eniCache.SubnetId)
-		ElectENIIPv6PrimaryIP(newObj)
-
-		if newObj.Spec.BorrowIPCount > 0 {
-			var eniSbnIPCount int
-			for _, ip := range newObj.Spec.ENI.PrivateIPSet {
-				if ip.SubnetID == newObj.Spec.SubnetID {
-					eniSbnIPCount++
-				}
-			}
-			(&newObj.Status).LendBorrowedIPCount = eniSbnIPCount
-		}
-
-		(&newObj.Status).VPCVersion = newObj.Spec.VPCVersion
-	}
-
-	(&newObj.Status).AppendVPCStatus(ccev2.VPCENIStatus(eniCache.Status))
-	return nil
-}
-
-// getENIWithCache gets a ENI from the cache if it is there, otherwise
-func (es *eniSyncher) getENIWithCache(ctx context.Context, resource *ccev2.ENI) (*eni.Eni, error) {
-	var err error
-	eniCache := es.syncManager.Get(resource.Name)
-	// Directly request VPC back to the source
-	if eniCache == nil {
-		eniCache, err = es.remoteSyncer.statENI(ctx, resource.Name)
-	}
-	if err == nil && eniCache == nil {
-		return nil, errors.New(string(cloud.ErrorReasonNoSuchObject))
-	}
-	return eniCache, err
 }
 
 // eniStateMachine ENI state machine, used to control the state flow of ENI
@@ -650,29 +428,6 @@ func (esm *eniStateMachine) attachingENI() error {
 		return esm.deleteENI()
 	}
 	return nil
-}
-
-// toModelPrivateIP convert private ip to model
-func toModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*models.PrivateIP {
-	sort.Slice(ipset, func(i, j int) bool {
-		if ipset[i].Primary {
-			return true
-		} else if ipset[j].Primary {
-			return false
-		}
-		return strings.Compare(ipset[i].PrivateIpAddress, ipset[j].PrivateIpAddress) < 0
-	})
-	var pIPSet []*models.PrivateIP
-	for _, pip := range ipset {
-		newPIP := &models.PrivateIP{
-			PublicIPAddress:  pip.PublicIpAddress,
-			PrivateIPAddress: pip.PrivateIpAddress,
-			Primary:          pip.Primary,
-		}
-		newPIP.SubnetID = SearchSubnetID(vpcID, subnetID, pip.PrivateIpAddress)
-		pIPSet = append(pIPSet, newPIP)
-	}
-	return pIPSet
 }
 
 // ElectENIIPv6PrimaryIP elect a ipv6 primary ip for eni

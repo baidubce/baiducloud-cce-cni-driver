@@ -91,6 +91,13 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rdma eni %s from lister", n.rdmaeniName)
 		}
+		if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+			_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(context.TODO(), eni, metav1.UpdateOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to update %s ENI status: %w", n.rdmaeniName, err)
+			}
+			n.log.Infof("update %s ENI status successed", n.rdmaeniName)
+		}
 		return eni, nil
 	}
 
@@ -167,6 +174,12 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 			return nil, fmt.Errorf("failed to create %s ENI: %w", vifFeatures, err)
 		}
 		n.log.Infof("create %s ENI resource successed", vifFeatures)
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to update %s ENI status: %w", vifFeatures, err)
+		}
+		n.log.Infof("update %s ENI status successed", vifFeatures)
 	} else if err != nil {
 		n.log.Errorf("failed to get %s ENI resource: %v", vifFeatures, err)
 		return nil, err

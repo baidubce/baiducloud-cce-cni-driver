@@ -347,8 +347,9 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 		Addressing: newCEP.Status.Networking.Addressing,
 	}
 	err = operation.DeleteIP(ctx, action)
-	if err != nil {
-		log.Errorf("failed to delete ip %v", err)
+	// if err is eni not found, it means that the ip has been released, just ignore it and continue to remove finalizer
+	if err != nil && !errors.IsNotFound(err) {
+		log.Errorf("failed to delete ip: %v", err)
 		return err
 	}
 

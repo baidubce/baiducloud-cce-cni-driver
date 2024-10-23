@@ -62,6 +62,10 @@ func resyncBSM() error {
 		return fmt.Errorf("bsm failed to list enis: %v", err)
 	}
 	for _, eni := range enis {
+		// ignore eni without subnetID like RDMA device
+		if eni.Spec.SubnetID == "" {
+			continue
+		}
 		bsbn, ok := subnets[eni.Spec.SubnetID]
 		if !ok {
 			sbn, err := GlobalBSM().GetSubnet(eni.Spec.SubnetID)

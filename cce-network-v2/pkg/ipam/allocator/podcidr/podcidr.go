@@ -30,6 +30,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	ipPkg "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
@@ -405,7 +406,10 @@ func (n *NodesPodCIDRManager) Resync(context.Context, time.Time) {
 			log.WithError(err).Fatal("Failed to list NetResourceSet")
 		}
 		for _, nrs := range nrsDatas {
-			n.upsertLocked(nrs)
+			// should not allocate podCIDRs for the nrs which use RDMA
+			if k8s.MatchNetworkResourceType(nrs.Annotations, n.ResourceType()) {
+				n.upsertLocked(nrs)
+			}
 		}
 
 		log.Infof("completed to resync %d nrs cidr", len(nrsDatas))

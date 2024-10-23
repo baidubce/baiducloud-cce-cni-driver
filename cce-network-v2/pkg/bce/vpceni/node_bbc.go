@@ -21,6 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
@@ -319,11 +320,54 @@ func (n *bbcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
+func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (string, error) {
 	if n.tryRefreshBBCENI() == nil {
 		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}
-	scopeLog := n.log.WithField("func", "reuseIPs")
+
+	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
+	if err != nil {
+		return "", fmt.Errorf("invalid owner %s: %v", owner, err)
+	}
+
+	scopeLog := n.log.WithFields(logrus.Fields{
+		"func":      "reuseIPs",
+		"namespace": namespace,
+		"name":      name,
+		"ips":       logfields.Repr(ips),
+	})
+
+	// check ip conflict
+	// should to delete ip from the old eni
+	isLocalIP, err := n.rleaseOldIP(ctx, scopeLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+		eni, err := n.manager.enilister.Get(eniID)
+		if err != nil {
+			return fmt.Errorf("fail to release old ip. get eni %s failed: %v", eniID, err)
+		}
+		instanceID := eni.Spec.InstanceID
+		scopedLog.WithFields(logrus.Fields{
+			"oldENI":       eniID,
+			"instanceID":   instanceID,
+			"toReleaseIPs": toReleaseIPs,
+		})
+		err = n.manager.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+			InstanceId: instanceID,
+			PrivateIps: toReleaseIPs,
+		})
+		if err != nil {
+			scopedLog.Warnf("release old ip from bbc eni %s failed: %v", n.instanceID, err)
+		} else {
+			scopedLog.Info("release old ip from bbc eni successfully")
+		}
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	if isLocalIP {
+		scopeLog.Info("ip is local, no need to release ip from bbc eni")
+		return n.bbceni.Name, nil
+	}
 
 	// TODO: release ip from bbc/ebc/vpc eni before reuse ip
 	var ipAndSubnets []bbc.IpAndSubnet

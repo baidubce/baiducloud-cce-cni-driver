@@ -147,6 +147,16 @@ var (
 	PodLabelOwnerInstance  = "cce.io/ownerInstance"
 )
 
+func MatchNetworkResourceType(annotations map[string]string, networkType string) bool {
+	objType := ccev2.NetResourceSetEventHandlerTypeEth
+	if len(annotations) > 0 {
+		if _, ok := annotations[AnnotationRDMAInfoVifFeatures]; ok {
+			objType = ccev2.NetResourceSetEventHandlerTypeRDMA
+		}
+	}
+	return objType == networkType
+}
+
 // ExtractFixedIPTTLSeconds Extract the expiration time of the fixed
 // IP from the annotation of the pod. The unit is s
 func ExtractFixedIPTTLSeconds(pod *corev1.Pod) int64 {

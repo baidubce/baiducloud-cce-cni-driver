@@ -7,6 +7,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.6 [20240913]
+1. [Bug] 修复在 RDMA 场景查询子网为空，打印错误日志的问题
+2. [Bug] 修复在VPC-Route 模式下，开启 RDMA 后，重启 operator 进程会为 RDMA nrs 分配 podCIDR 的问题。
+3. [Optimize] psts 增加对未被 CCE 管理的跨子网 IP 地址的清理逻辑
+
 #### 2.12.5 [20240829]
 1. [Bug] 修复在 2.12.4 版本中同步 ENI 状态时丢失 IPv6 地址的问题。
 2. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题

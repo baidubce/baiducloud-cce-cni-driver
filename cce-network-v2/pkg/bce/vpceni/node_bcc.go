@@ -499,7 +499,16 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 
 	// check ip conflict
 	// should to delete ip from the old eni
-	isLocalIP, err := n.rleaseOldIP(ctx, scopedLog, ips, namespace, name)
+	isLocalIP, err := n.rleaseOldIP(ctx, scopedLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+		scopedLog.WithField("oldENI", eniID).WithField("toReleaseIPs", toReleaseIPs)
+		err = n.manager.bceclient.BatchDeletePrivateIP(ctx, toReleaseIPs, eniID, false)
+		if err != nil {
+			scopedLog.Warnf("release ip %s from eni %s failed: %v", toReleaseIPs, eniID, err)
+		} else {
+			scopedLog.Info("release ip from old eni success")
+		}
+		return err
+	})
 	if err != nil {
 		return
 	}
@@ -560,75 +569,6 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 	scopedLog.Debug("update eni success")
 	return
 
-}
-
-// rleaseOldIP release old ip if it is not used by other endpoint
-// return true: ip is used by current endpoint, do not need to release
-// return false: ip is used by other endpoint, need to release
-func (n *bccNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string) (bool, error) {
-	for _, privateIP := range ips {
-		ceps, err := n.manager.cepClient.GetByIP(privateIP.PrivateIPAddress)
-		if err == nil && len(ceps) > 0 {
-			for _, cep := range ceps {
-				if cep.Namespace != namespace || cep.Name != name {
-					return false, fmt.Errorf("ip %s has been used by other endpoint %s/%s", privateIP.PrivateIPAddress, cep.Namespace, cep.Name)
-				}
-			}
-		}
-	}
-
-	// if ip is local eni, do not need to release
-	isLocalENI := false
-	for _, privateIP := range ips {
-		enis, err := watchers.ENIClient.GetByIP(privateIP.PrivateIPAddress)
-		if err != nil && len(enis) == 0 {
-			isLocalENI = false
-			break
-		}
-		if err == nil {
-			for _, eni := range enis {
-				if eni.Spec.NodeName == n.k8sObj.Name {
-					isLocalENI = true
-				} else {
-					isLocalENI = false
-					break
-				}
-			}
-		}
-	}
-	if isLocalENI {
-		return true, nil
-	}
-
-	cep, err := n.manager.cepClient.Lister().CCEEndpoints(namespace).Get(name)
-	if err != nil {
-		return false, fmt.Errorf("get endpoint %s/%s failed: %v", namespace, name, err)
-	}
-	if cep.Status.Networking == nil || cep.Status.Networking.NodeIP != n.k8sObj.Name {
-		var (
-			oldENI       string
-			toReleaseIPs []string
-		)
-		scopedLog.WithField("namespace", namespace).WithField("name", name).Debug("try to clean ip from old eni")
-
-		if cep.Status.Networking != nil {
-			for _, addr := range cep.Status.Networking.Addressing {
-				oldENI = addr.Interface
-				toReleaseIPs = append(toReleaseIPs, addr.IP)
-			}
-		}
-		if len(toReleaseIPs) > 0 {
-			releaseLog := scopedLog.WithField("oldENI", oldENI).WithField("toReleaseIPs", toReleaseIPs)
-			err = n.manager.bceclient.BatchDeletePrivateIP(ctx, toReleaseIPs, oldENI, false)
-			if err != nil {
-				releaseLog.Warnf("delete ip %s from eni %s failed: %v", toReleaseIPs, oldENI, err)
-
-			} else {
-				releaseLog.Info("clean ip from old eni success")
-			}
-		}
-	}
-	return false, nil
 }
 
 var _ realNodeInf = &bccNetworkResourceSet{}

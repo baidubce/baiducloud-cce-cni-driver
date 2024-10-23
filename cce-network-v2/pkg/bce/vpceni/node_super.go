@@ -34,6 +34,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
@@ -1387,6 +1388,74 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 		newENI.Spec.BorrowIPCount = borrowedIPs
 	}
 	return nil
+}
+
+type fnReleaseIPsFromCLoud func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error
+
+// rleaseOldIP release old ip if it is not used by other endpoint
+// return true: ip is used by current endpoint, do not need to release
+// return false: ip is used by other endpoint, need to release
+func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string, releaseIPsFromCLoud fnReleaseIPsFromCLoud) (bool, error) {
+	for _, privateIP := range ips {
+		ceps, err := n.manager.cepClient.GetByIP(privateIP.PrivateIPAddress)
+		if err == nil && len(ceps) > 0 {
+			for _, cep := range ceps {
+				if cep.Namespace != namespace || cep.Name != name {
+					return false, fmt.Errorf("ip %s has been used by other endpoint %s/%s", privateIP.PrivateIPAddress, cep.Namespace, cep.Name)
+				}
+			}
+		}
+	}
+
+	// if ip is local eni, do not need to release
+	isLocalENI := false
+	toReleaseEniIPs := make(map[string][]string, 0)
+	for _, privateIP := range ips {
+		enis, err := watchers.ENIClient.GetByIP(privateIP.PrivateIPAddress)
+		if err != nil && len(enis) == 0 {
+			isLocalENI = false
+			break
+		}
+		if err == nil {
+			for _, eni := range enis {
+				if eni.Spec.NodeName == n.k8sObj.Name {
+					isLocalENI = true
+				} else {
+					// do not release ip which use same subnet with eni
+					if eni.Spec.SubnetID == privateIP.SubnetID {
+						return false, fmt.Errorf("ip %s has been used by other eni %s for cached ip", privateIP.PrivateIPAddress, eni.Name)
+					}
+					toReleaseEniIPs[eni.Name] = append(toReleaseEniIPs[eni.Name], privateIP.PrivateIPAddress)
+					isLocalENI = false
+					break
+				}
+			}
+		}
+	}
+	if isLocalENI {
+		return true, nil
+	}
+
+	cep, err := n.manager.cepClient.Lister().CCEEndpoints(namespace).Get(name)
+	if err != nil {
+		return false, fmt.Errorf("get endpoint %s/%s failed: %v", namespace, name, err)
+	}
+	if cep.Status.Networking == nil || cep.Status.Networking.NodeIP != n.k8sObj.Name {
+		scopedLog.WithField("namespace", namespace).WithField("name", name).Debug("try to clean ip from old eni")
+
+		if cep.Status.Networking != nil {
+			for _, addr := range cep.Status.Networking.Addressing {
+				toReleaseEniIPs[addr.Interface] = append(toReleaseEniIPs[addr.Interface], addr.IP)
+			}
+		}
+		for eniid := range toReleaseEniIPs {
+			toReleaseIPs := toReleaseEniIPs[eniid]
+			if len(toReleaseIPs) > 0 {
+				err = releaseIPsFromCLoud(ctx, scopedLog, eniid, toReleaseIPs)
+			}
+		}
+	}
+	return false, err
 }
 
 var (

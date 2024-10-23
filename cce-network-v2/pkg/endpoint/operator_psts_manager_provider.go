@@ -97,15 +97,13 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 				log.WithField("step", "allocateFromLocalPool").Error("no available ipv4 ip")
 				return fmt.Errorf("no available ipv4 ip")
 			}
+
 			releaseIPFuncs = append(releaseIPFuncs, release...)
 			log = log.WithField("ipv4", logfields.Repr(ipv4Address)).WithField("ipv6", logfields.Repr(ipv6Address))
 			log.WithField("step", "allocate local ip").Info("allocate local ip success")
 
-			if ipv4Address != nil {
-				action.Addressing = append(action.Addressing, ipv4Address)
-				action.SubnetID = ipv4Address.Subnet
-			}
-
+			action.Addressing = append(action.Addressing, ipv4Address)
+			action.SubnetID = ipv4Address.Subnet
 			if ipv6Address != nil {
 				action.Addressing = append(action.Addressing, ipv6Address)
 				action.SubnetID = ipv6Address.Subnet

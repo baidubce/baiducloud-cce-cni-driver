@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -95,6 +96,10 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 	if err != nil {
 		return fmt.Errorf("list ENIs failed: %w", err)
 	}
+
+	sort.Slice(enis, func(i, j int) bool {
+		return enis[i].CreationTimestamp.After(enis[j].CreationTimestamp.Time)
+	})
 	for i := 0; i < len(enis); i++ {
 		if enis[i].DeletionTimestamp != nil || enis[i].Status.VPCStatus == ccev2.VPCENIStatusDeleted {
 			continue

@@ -5,6 +5,10 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
 
+#### 2.11.4 [20240823]
+1. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题
+2. [Bug] 修复重复 update nrs 的问题,导致 Operation cannot be fulfilled的问题
+
 #### 2.11.3 [20240628]
 1. [Feature] `--endpoint-gc-interval` 增加控制 agent 更新 nrs 的最小间隔时间
 2. [Optimize] 优化对 eni 重启事件的处理逻辑，优化 agent 重启速度

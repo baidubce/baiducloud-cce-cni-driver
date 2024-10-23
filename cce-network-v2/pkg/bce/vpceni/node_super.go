@@ -300,7 +300,6 @@ func (n *bceNode) overrideENICapacityToNode(eniQuota ENIQuotaManager) error {
 
 		now := time.Now().Format(time.RFC3339)
 		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = now
-		n.manager.nrsGetterUpdater.Update(old, k8sObj)
 		updated, err := n.manager.nrsGetterUpdater.Update(old, k8sObj)
 		if err == nil {
 			n.k8sObj = updated

@@ -37,9 +37,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// bccNode is a wrapper of Node, which is used to distinguish bcc node
-type bccNode struct {
-	*bceNode
+// bccNetworkResourceSet is a wrapper of bceNetworkResourceSet, which is used to distinguish bcc node
+type bccNetworkResourceSet struct {
+	*bceNetworkResourceSet
 
 	// bcc instance info
 	bccInfo *bccapi.InstanceModel
@@ -49,9 +49,9 @@ type bccNode struct {
 	usePrimaryENIWithSecondaryMode bool
 }
 
-func newBCCNode(super *bceNode) *bccNode {
-	node := &bccNode{
-		bceNode: super,
+func newBCCNetworkResourceSet(super *bceNetworkResourceSet) *bccNetworkResourceSet {
+	node := &bccNetworkResourceSet{
+		bceNetworkResourceSet: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExBCC)
 	return node
@@ -59,7 +59,7 @@ func newBCCNode(super *bceNode) *bccNode {
 
 // refreshBCCInfo refresh bcc instance info
 // caller should ensure be locked
-func (n *bccNode) refreshBCCInfo() (*bccapi.InstanceModel, error) {
+func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) {
 	n.bccLock.RLock()
 	if n.bccInfo != nil {
 		n.bccLock.RUnlock()
@@ -105,7 +105,7 @@ func (n *bccNode) refreshBCCInfo() (*bccapi.InstanceModel, error) {
 	return n.bccInfo, nil
 }
 
-func (n *bccNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
+func (n *bccNetworkResourceSet) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "getENIQuota")
 	client := k8s.WatcherClient()
 	if client == nil {
@@ -161,7 +161,7 @@ func getDefaultBCCEniQuota(k8sNode *corev1.Node) (int, int) {
 // PrepareIPAllocation is called to calculate the number of IPs that
 // can be allocated on the node and whether a new network interface
 // must be attached to the node.
-func (n *bccNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
+func (n *bccNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
 	_, err = n.refreshBCCInfo()
 	if err != nil {
 		scopedLog.Errorf("failed to refresh ebc info: %v", err)
@@ -170,15 +170,15 @@ func (n *bccNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 	return n.__prepareIPAllocation(scopedLog, true)
 }
 
-func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet bool) (a *ipam.AllocationAction, err error) {
+func (n *bccNetworkResourceSet) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet bool) (a *ipam.AllocationAction, err error) {
 	a = &ipam.AllocationAction{}
-	eniQuota := n.bceNode.getENIQuota()
+	eniQuota := n.bceNetworkResourceSet.getENIQuota()
 	if eniQuota == nil {
 		return nil, fmt.Errorf("eniQuota is nil, please retry later")
 	}
 	eniCount := 0
 
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+	err = n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// available eni have been found
 			eniCount++
@@ -203,13 +203,10 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 				return nil
 			}
 
-			// Eni that is not in an in use state should be ignored, as even if the VPC interface is called to apply for an IP,
-			// the following error will be obtained
-			// [Code: EniStatusException; Message: The eni status is not allowed
-			//  to operate; RequestId: 0f4d190a-76af-4671-9f29-b954dbb47195]
+			// Eni that is not in an in use state should not be ignored.
+			// Otherwise, this will result in the creation of a new eni.
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-				scopedLog.WithField("vpcStatus", e.Status.VPCStatus).Warnf("skip ENI which is not in use")
-				return nil
+				return fmt.Errorf("can not prepare ip allocation. eni %s is not inuse on vpc, please try again later", interfaceID)
 			}
 			// The limits include the primary IP, so we need to take it into account
 			// when computing the effective number of available addresses on the ENI.
@@ -274,17 +271,12 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 				} else {
 					a.AvailableForAllocationIPv4 = math.IntMin(subnet.BorrowedAvailableIPsCount, availableIPv4OnENI)
 				}
-				if subnet.CanBorrow(a.AvailableForAllocationIPv4) {
-					scopedLog.WithFields(logrus.Fields{
-						"subnetID":           e.Spec.ENI.SubnetID,
-						"availableAddresses": subnet.BorrowedAvailableIPsCount,
-					}).Debug("Subnet has IPs available")
-
-					a.InterfaceID = interfaceID
-					a.PoolID = ipamTypes.PoolID(subnet.Name)
-					// does not need to be checked for subnet with ipv6
-					a.AvailableForAllocationIPv6 = availableIPv6OnENI
-				}
+				a.InterfaceID = interfaceID
+				a.PoolID = ipamTypes.PoolID(subnet.Name)
+				// does not need to be checked for subnet with ipv6
+				a.AvailableForAllocationIPv6 = availableIPv6OnENI
+			} else {
+				return fmt.Errorf("get subnet by id %s failed: %v", e.Spec.ENI.SubnetID, err)
 			}
 			return nil
 		})
@@ -294,7 +286,7 @@ func (n *bccNode) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet boo
 
 // AllocateIPs is called after invoking PrepareIPAllocation and needs
 // to perform the actual allocation.
-func (n *bccNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
+func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	var ips []string
 	if ipv4ToAllocate > 0 {
@@ -336,7 +328,7 @@ func (n *bccNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allo
 
 // ReleaseIPs is called after invoking PrepareIPRelease and needs to
 // perform the release of IPs.
-func (n *bccNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
+func (n *bccNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if len(ipv4ToRelease) > 0 {
 		err := n.manager.bceclient.BatchDeletePrivateIP(ctx, ipv4ToRelease, release.InterfaceID, false)
 		if err != nil {
@@ -353,7 +345,7 @@ func (n *bccNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 }
 
 // AllocateIPCrossSubnet implements realNodeInf
-func (n *bccNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
+func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return nil, "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
@@ -450,7 +442,7 @@ func (n *bccNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) (resu
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bccNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
@@ -573,7 +565,7 @@ func (n *bccNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner s
 // rleaseOldIP release old ip if it is not used by other endpoint
 // return true: ip is used by current endpoint, do not need to release
 // return false: ip is used by other endpoint, need to release
-func (n *bccNode) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string) (bool, error) {
+func (n *bccNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string) (bool, error) {
 	for _, privateIP := range ips {
 		ceps, err := n.manager.cepClient.GetByIP(privateIP.PrivateIPAddress)
 		if err == nil && len(ceps) > 0 {
@@ -639,4 +631,4 @@ func (n *bccNode) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips 
 	return false, nil
 }
 
-var _ realNodeInf = &bccNode{}
+var _ realNodeInf = &bccNetworkResourceSet{}

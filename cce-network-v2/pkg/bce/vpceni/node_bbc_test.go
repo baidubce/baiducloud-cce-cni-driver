@@ -256,7 +256,7 @@ func Test_bbcNode_allocateIPs(t *testing.T) {
 
 // 准备 BCC 测试上下文环境
 // 包含初始化 mock 对象，保存到 clientgo缓存中，并返回 BCCNode 实例
-func bbcTestContext(t *testing.T) (*bceNode, error) {
+func bbcTestContext(t *testing.T) (*bceNetworkResourceSet, error) {
 	ccemock.InitMockEnv()
 	mockCtl := gomock.NewController(t)
 	im := newMockInstancesManager(mockCtl)
@@ -284,7 +284,7 @@ func bbcTestContext(t *testing.T) (*bceNode, error) {
 		GetBBCInstanceENI(gomock.Any(), gomock.Eq(k8sObj.InstanceID())).Return(newMockBBCEniWithMultipleIPs(k8sObj, sbn), nil).AnyTimes()
 
 	bcesync.InitBSM()
-	node := NewNode(nil, k8sObj, im)
+	node := NewBCENetworkResourceSet(nil, k8sObj, im)
 	assert.NotNil(t, node)
 
 	node.eniQuota = newCustomerIPQuota(log, k8s.Client(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclient)

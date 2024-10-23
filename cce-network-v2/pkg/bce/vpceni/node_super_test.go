@@ -63,7 +63,7 @@ func Test_bceNode_FilterAvailableSubnetIds(t *testing.T) {
 	ccemock.InitMockEnv()
 	bcesync.InitBSM()
 
-	n := &bceNode{
+	n := &bceNetworkResourceSet{
 		availableSubnets: []*bcesync.BorrowedSubnet{},
 		k8sObj: &ccev2.NetResourceSet{
 			ObjectMeta: metav1.ObjectMeta{
@@ -126,7 +126,7 @@ func TestNewNode(t *testing.T) {
 		mockCtl := gomock.NewController(t)
 		im := newMockInstancesManager(mockCtl)
 
-		node := NewNode(nil, k8sObj, im)
+		node := NewBCENetworkResourceSet(nil, k8sObj, im)
 		assert.NotNil(t, node)
 		assert.Implements(t, new(realNodeInf), node.real)
 	})
@@ -136,7 +136,7 @@ func TestNewNode(t *testing.T) {
 		im := newMockInstancesManager(mockCtl)
 
 		k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "BCC")
-		node := NewNode(nil, k8sObj, im)
+		node := NewBCENetworkResourceSet(nil, k8sObj, im)
 		assert.NotNil(t, node)
 		assert.Implements(t, new(realNodeInf), node.real)
 	})
@@ -200,7 +200,7 @@ func TestPrepareIPAllocation(t *testing.T) {
 
 // 准备 BCC 测试上下文环境
 // 包含初始化 mock 对象，保存到 clientgo缓存中，并返回 BCCNode 实例
-func bccTestContext(t *testing.T) (*bceNode, error) {
+func bccTestContext(t *testing.T) (*bceNetworkResourceSet, error) {
 	ccemock.InitMockEnv()
 
 	mockCtl := gomock.NewController(t)
@@ -226,7 +226,7 @@ func bccTestContext(t *testing.T) (*bceNode, error) {
 		return newMockBccInfo(k8sObj, 8), nil
 	}).AnyTimes()
 
-	node := NewNode(nil, k8sObj, im)
+	node := NewBCENetworkResourceSet(nil, k8sObj, im)
 	assert.NotNil(t, node)
 
 	node.lastResyncEniQuotaTime = time.Now()
@@ -234,7 +234,7 @@ func bccTestContext(t *testing.T) (*bceNode, error) {
 	node.eniQuota.SetMaxENI(8)
 	node.eniQuota.SetMaxIP(16)
 
-	if bn, ok := node.real.(*bccNode); ok {
+	if bn, ok := node.real.(*bccNetworkResourceSet); ok {
 		bn.bccInfo = newMockBccInfo(k8sObj, node.eniQuota.GetMaxENI())
 	}
 

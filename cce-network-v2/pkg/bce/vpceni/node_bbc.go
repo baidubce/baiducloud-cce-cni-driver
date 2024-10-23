@@ -37,25 +37,25 @@ const (
 	defaultBBCMaxIPsPerENI = 40
 )
 
-// bccNode is a wrapper of Node, which is used to distinguish bcc node
-type bbcNode struct {
-	*bceNode
+// bbcNetworkResourceSet is a wrapper of Node, which is used to distinguish bcc node
+type bbcNetworkResourceSet struct {
+	*bceNetworkResourceSet
 
 	primaryENISubnetID string
 	// bbceni is the eni of the node
 	bbceni *ccev2.ENI
 }
 
-func newBBCNode(super *bceNode) *bbcNode {
-	node := &bbcNode{
-		bceNode: super,
+func newBBCNetworkResourceSet(super *bceNetworkResourceSet) *bbcNetworkResourceSet {
+	node := &bbcNetworkResourceSet{
+		bceNetworkResourceSet: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExBBC)
 	node.tryRefreshBBCENI()
 	return node
 }
 
-func (n *bbcNode) tryRefreshBBCENI() *ccev2.ENI {
+func (n *bbcNetworkResourceSet) tryRefreshBBCENI() *ccev2.ENI {
 	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 		e, ok := iface.Resource.(*eniResource)
 		if !ok {
@@ -75,7 +75,7 @@ func (n *bbcNode) tryRefreshBBCENI() *ccev2.ENI {
 
 // createBBCENI means create a eni object for bbc node
 // bbc node has only one eni, so we use bbc instance id as eni name
-func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
+func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 	if n.bbceni != nil {
 		return nil
 	}
@@ -174,7 +174,7 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 	return n.updateNrsSubnetIfNeed([]string{bbceni.SubnetId})
 }
 
-func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
+func (n *bbcNetworkResourceSet) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
 	// default bbc ip quota
 	eniQuota := newCustomerIPQuota(scopeLog, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, n.manager.bceclient)
@@ -185,7 +185,7 @@ func (n *bbcNode) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, erro
 }
 
 // allocateIPs implements realNodeInf
-func (n *bbcNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
+func (n *bbcNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	var ips *bbc.BatchAddIpResponse
 	if ipv4ToAllocate > 0 {
@@ -229,7 +229,7 @@ func (n *bbcNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allo
 }
 
 // createInterface implements realNodeInf
-func (n *bbcNode) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
+func (n *bbcNetworkResourceSet) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	err = n.createBBCENI(scopedLog)
 	if err != nil {
 		return 0, "", err
@@ -238,7 +238,7 @@ func (n *bbcNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 }
 
 // releaseIPs implements realNodeInf
-func (n *bbcNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
+func (n *bbcNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if len(ipv4ToRelease) > 0 {
 		err := n.manager.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
 			InstanceId: n.instanceID,
@@ -254,7 +254,7 @@ func (n *bbcNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 // PrepareIPAllocation is called to calculate the number of IPs that
 // can be allocated on the node and whether a new network interface
 // must be attached to the node.
-func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
+func (n *bbcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
 	// Calculate the number of IPs that can be allocated on the node
 	allocation := &ipam.AllocationAction{}
 
@@ -306,7 +306,7 @@ func (n *bbcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 // use for scene 1: bbc node use cross subnet to allocate ip
 // use for scene 2: psts
 // Note that scene 1 and scene 2 cannot be mixed
-func (n *bbcNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error) {
+func (n *bbcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error) {
 	if n.tryRefreshBBCENI() == nil {
 		return nil, "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}
@@ -319,7 +319,7 @@ func (n *bbcNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*m
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bbcNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
+func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error) {
 	if n.tryRefreshBBCENI() == nil {
 		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}
@@ -355,4 +355,4 @@ func (n *bbcNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner s
 	return n.bbceni.Name, nil
 }
 
-var _ realNodeInf = &bbcNode{}
+var _ realNodeInf = &bbcNetworkResourceSet{}

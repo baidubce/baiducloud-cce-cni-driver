@@ -57,9 +57,9 @@ func (kh *LinuxKernelHandler) DetectKernelVersion(ctx context.Context) (string, 
 	return strings.TrimSpace(string(fileContent)), nil
 }
 
-// GetModules returns all installed kernel modules which match any of the specified names.
+// GetModulesAndTryToLoadByWanted returns all installed kernel modules which match any of the specified names.
 // Try to load the required kernel modules if not built in.
-func (kh *LinuxKernelHandler) GetModules(ctx context.Context, wantedModules []string) ([]string, error) {
+func (kh *LinuxKernelHandler) GetModulesAndTryToLoadByWanted(ctx context.Context, wantedModules []string) ([]string, error) {
 	var bmods, lmods []string
 
 	kernelVersionStr, err := kh.DetectKernelVersion(ctx)

@@ -42,7 +42,7 @@ type InstancesManager struct {
 
 	nrsGetterUpdater ipam.NetResourceSetGetterUpdater
 
-	nodeMap map[string]*bceNode
+	bceNetworkResourceSetMap map[string]*bceNetworkResourceSet
 
 	// client to get k8s objects
 	enilister listv2.ENILister
@@ -62,7 +62,7 @@ func newInstancesManager(
 	cepClient *watchers.CCEEndpointUpdaterImpl) *InstancesManager {
 
 	return &InstancesManager{
-		nodeMap: make(map[string]*bceNode),
+		bceNetworkResourceSetMap: make(map[string]*bceNetworkResourceSet),
 
 		enilister: enilister,
 		sbnlister: sbnlister,
@@ -76,12 +76,12 @@ func newInstancesManager(
 // NodeOperations implementation which will render IPAM services to the
 // node context provided.
 func (m *InstancesManager) CreateNetResource(obj *ccev2.NetResourceSet, node *ipam.NetResource) ipam.NetResourceOperations {
-	np := NewNode(node, obj, m)
+	bceNrs := NewBCENetworkResourceSet(node, obj, m)
 
 	m.mutex.Lock()
-	m.nodeMap[np.k8sObj.Name] = np
+	m.bceNetworkResourceSetMap[bceNrs.k8sObj.Name] = bceNrs
 	m.mutex.Unlock()
-	return np
+	return bceNrs
 }
 
 // GetPoolQuota returns the number of available IPs in all IP pools
@@ -141,12 +141,12 @@ func (m *InstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.Direct
 	}
 
 	m.mutex.Lock()
-	node, ok := m.nodeMap[cep.Spec.Network.IPAllocation.NodeIP]
+	bceNrs, ok := m.bceNetworkResourceSetMap[cep.Spec.Network.IPAllocation.NodeIP]
 	m.mutex.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("node %s not found", cep.Spec.Network.IPAllocation.NodeIP)
 	}
-	return node, nil
+	return bceNrs, nil
 }
 
 // ResyncPool implements endpoint.DirectIPAllocator

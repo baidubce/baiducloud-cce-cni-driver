@@ -18,28 +18,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ebc is a wrapper of bcc node, which is used to distinguish ebc node
+// ebcNetworkResourceSet is a wrapper of bceNetworkResourceSet, which is used to distinguish ebc node
 //
 // warning: due to the fact that the EBC primary interface with secondary IP mode does not
 // support extension functions such as PSTS, and its scalability is weak, it is particularly
 // dependent on the number of subnet IPs
-type ebcNode struct {
-	*bccNode
+type ebcNetworkResourceSet struct {
+	*bccNetworkResourceSet
 
 	primaryENISubnetID   string
 	haveCreatePrimaryENI bool
 }
 
-func newEBCNode(super *bccNode) *ebcNode {
-	node := &ebcNode{
-		bccNode: super,
+func newEBCNetworkResourceSet(super *bccNetworkResourceSet) *ebcNetworkResourceSet {
+	node := &ebcNetworkResourceSet{
+		bccNetworkResourceSet: super,
 	}
 	node.instanceType = string(metadata.InstanceTypeExEBC)
 	return node
 }
 
-func (n *ebcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
-	a, err = n.bccNode.prepareIPAllocation(scopedLog)
+func (n *ebcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.AllocationAction, err error) {
+	a, err = n.bccNetworkResourceSet.prepareIPAllocation(scopedLog)
 	if err != nil || n.haveCreatePrimaryENI {
 		return a, err
 	}
@@ -67,7 +67,7 @@ func (n *ebcNode) prepareIPAllocation(scopedLog *logrus.Entry) (a *ipam.Allocati
 	return a, err
 }
 
-func (n *ebcNode) refreshPrimarySubnet() error {
+func (n *ebcNetworkResourceSet) refreshPrimarySubnet() error {
 	if !n.usePrimaryENIWithSecondaryMode {
 		return nil
 	}
@@ -83,7 +83,7 @@ func (n *ebcNode) refreshPrimarySubnet() error {
 }
 
 // CreateInterface create a new ENI
-func (n *ebcNode) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
+func (n *ebcNetworkResourceSet) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	if n.usePrimaryENIWithSecondaryMode {
 		scopedLog.Infof("The maximum number of ENIs is 0, use primary interface with seconary IP mode")
 		err := n.createPrimaryENIOnCluster(ctx, scopedLog, n.k8sObj)
@@ -92,10 +92,10 @@ func (n *ebcNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 		}
 		return 1, "create primary ENI on cluster", nil
 	}
-	return n.bccNode.createInterface(ctx, allocation, scopedLog)
+	return n.bccNetworkResourceSet.createInterface(ctx, allocation, scopedLog)
 }
 
-func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet) error {
+func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet) error {
 	// get customer quota from cloud
 	// TODO: we will use vpc data to set ip quota
 	bccInfo, err := n.refreshBCCInfo()
@@ -160,11 +160,11 @@ func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logr
 
 // AllocateIPs is called after invoking PrepareIPAllocation and needs
 // to perform the actual allocation.
-func (n *ebcNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
+func (n *ebcNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	// case1: use bcc eni with secondary ip mode
 	if !n.usePrimaryENIWithSecondaryMode {
-		return n.bccNode.allocateIPs(ctx, scopedLog, allocation, ipv4ToAllocate, ipv6ToAllocate)
+		return n.bccNetworkResourceSet.allocateIPs(ctx, scopedLog, allocation, ipv4ToAllocate, ipv6ToAllocate)
 	}
 
 	// case2: use primary eni with secondary ip mode
@@ -201,9 +201,9 @@ func (n *ebcNode) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allo
 
 // ReleaseIPs is called after invoking PrepareIPRelease and needs to
 // perform the release of IPs.
-func (n *ebcNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
+func (n *ebcNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if !n.usePrimaryENIWithSecondaryMode {
-		return n.bccNode.releaseIPs(ctx, release, ipv4ToRelease, ipv6ToRelease)
+		return n.bccNetworkResourceSet.releaseIPs(ctx, release, ipv4ToRelease, ipv6ToRelease)
 	}
 	if len(ipv4ToRelease) > 0 {
 		err := n.manager.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
@@ -226,16 +226,16 @@ func (n *ebcNode) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, i
 	return nil
 }
 
-func (n *ebcNode) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
+func (n *ebcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
 	if !n.usePrimaryENIWithSecondaryMode {
-		return n.bccNode.allocateIPCrossSubnet(ctx, sbnID)
+		return n.bccNetworkResourceSet.allocateIPCrossSubnet(ctx, sbnID)
 	}
 	return nil, "", fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
 }
 
-func (n *ebcNode) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+func (n *ebcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
 	if !n.usePrimaryENIWithSecondaryMode {
-		return n.bccNode.reuseIPs(ctx, ips, owner)
+		return n.bccNetworkResourceSet.reuseIPs(ctx, ips, owner)
 	}
 	return "", fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
 }

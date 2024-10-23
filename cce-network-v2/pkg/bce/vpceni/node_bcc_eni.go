@@ -99,16 +99,19 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 		if enis[i].DeletionTimestamp != nil || enis[i].Status.VPCStatus == ccev2.VPCENIStatusDeleted {
 			continue
 		}
-		fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
+		err = fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
 			Resource: (*eniResource)(enis[i]),
 		})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // waitForENISynced wait for eni synced
 // this method should not lock the mutex of bceNode before calling
-func (n *bceNode) waitForENISynced(ctx context.Context) {
+func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
@@ -137,7 +140,7 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 }
 
 // CreateInterface create a new ENI
-func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
+func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	n.mutex.RLock()
 	resource := n.k8sObj
 	n.mutex.RUnlock()
@@ -147,7 +150,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 	}
 
 	var (
-		eniQuota          = n.bceNode.getENIQuota()
+		eniQuota          = n.bceNetworkResourceSet.getENIQuota()
 		availableENICount = 0
 		inuseENICount     = 0
 	)
@@ -224,7 +227,7 @@ func (n *bccNode) createInterface(ctx context.Context, allocation *ipam.Allocati
 // createENIOnCluster The ENI object is created in the cluster and the ENI Synchronizer
 // will automatically create the ENI object from VPC.
 // The ENI object is created successfully and the node will record a status of “creating ENI”.
-func (n *bccNode) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *bcesync.BorrowedSubnet) error {
+func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *bcesync.BorrowedSubnet) error {
 	eniName := CreateNameForENI(option.Config.ClusterID, n.instanceID, resource.Name)
 	newENI := &ccev2.ENI{
 		ObjectMeta: metav1.ObjectMeta{
@@ -314,7 +317,7 @@ func CreateNameForENI(clusterID, instanceID, nodeName string) string {
 }
 
 // createENI create ENI with a given name and param
-func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog *logrus.Entry) (string, error) {
+func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog *logrus.Entry) (string, error) {
 	createENIArgs := &enisdk.CreateEniArgs{
 		Name:                       resource.Spec.ENI.Name,
 		SubnetId:                   resource.Spec.ENI.SubnetID,
@@ -358,7 +361,7 @@ func (n *bceNode) createENI(ctx context.Context, resource *ccev2.ENI, scopedLog 
 	return eniID, nil
 }
 
-func (n *bceNode) deleteENI(ctx context.Context, eniID string, scopedLog *logrus.Entry) {
+func (n *bceNetworkResourceSet) deleteENI(ctx context.Context, eniID string, scopedLog *logrus.Entry) {
 	err := n.manager.bceclient.DeleteENI(ctx, eniID)
 	if err != nil {
 		scopedLog.WithField("eniID", eniID).

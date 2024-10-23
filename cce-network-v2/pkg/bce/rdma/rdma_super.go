@@ -227,10 +227,10 @@ func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.E
 	if rdmaEniQuota.GetMaxENI() == 0 && rdmaEniQuota.GetMaxIP() == 0 {
 		return nil
 	}
-	// 3. Override the CCE Node capacity to the CCE Node object
-	err = n.overrideENICapacityToNode(rdmaEniQuota)
+	// 3. Override the CCE Node capacity to the CCE NetworkResourceSet object
+	err = n.overrideENICapacityToNetworkResourceSet(rdmaEniQuota)
 	if err != nil {
-		scopedLog.Errorf("override ENI capacity to NetResourceSet failed: %v", err)
+		scopedLog.Errorf("override ENI capacity to Node failed: %v", err)
 		return nil
 	}
 
@@ -246,17 +246,17 @@ func (n *bceRDMANetResourceSet) slowCalculateRealENICapacity(scopedLog *logrus.E
 	return n.eniQuota
 }
 
-// overrideENICapacityToNode accoding to the Node.limiter field, override the
+// overrideENICapacityToNetworkResourceSet accoding to the Node.limiter field, override the
 // capacity of ENI to the Node.k8sObj.Spec
-func (n *bceRDMANetResourceSet) overrideENICapacityToNode(rdmaEniQuota RdmaEniQuotaManager) error {
+func (n *bceRDMANetResourceSet) overrideENICapacityToNetworkResourceSet(rdmaEniQuota RdmaEniQuotaManager) error {
 	ctx := logfields.NewContext()
 	// todo move capacity to better place in k8s rest api
 	err := rdmaEniQuota.SyncCapacityToK8s(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to sync rdma eni capacity to k8s node: %v", err)
 	}
-	// update the node until 30s timeout
-	// if update operation return error, we will get the leatest version of node and try again
+	// update the NetworkResourceSet until 30s timeout
+	// if update operation return error, we will get the leatest version of NetworkResourceSet and try again
 	err = wait.PollImmediate(200*time.Millisecond, 30*time.Second, func() (bool, error) {
 		old, err := n.manager.nrsGetterUpdater.Get(n.k8sObj.Name)
 		if err != nil {

@@ -434,7 +434,13 @@ func (n *NetResource) recalculate() {
 	}
 
 	n.available = a
-	n.stats.UsedIPs = len(n.resource.Status.IPAM.Used)
+	n.stats.UsedIPs = 0
+	for ipstr := range n.resource.Status.IPAM.Used {
+		ip := net.ParseIP(ipstr)
+		if ip == nil || ip.To4() != nil {
+			n.stats.UsedIPs++
+		}
+	}
 
 	// Get used IP count with prefixes included
 	usedIPForExcessCalc := n.stats.UsedIPs
@@ -442,30 +448,16 @@ func (n *NetResource) recalculate() {
 		usedIPForExcessCalc = n.ops.GetUsedIPWithPrefixes()
 	}
 
-	var (
-		availableIPv4Count = 0
-		availableIPv6Count = 0
-	)
+	var availableIPv4Count = 0
 
 	for ipstr := range n.available {
 		ip := net.ParseIP(ipstr)
 		if ip == nil || ip.To4() != nil {
 			availableIPv4Count++
-		} else {
-			availableIPv6Count++
 		}
 	}
-	// If both IPv4 and IPv6 are available, we want to keep the number of IPv4
-	if availableIPv6Count != 0 && availableIPv4Count != 0 {
-		ipDiff := availableIPv4Count - availableIPv6Count
-		if ipDiff > 0 {
-			availableIPv4Count -= ipDiff
-		} else {
-			availableIPv6Count += ipDiff
-		}
-	}
+	n.stats.AvailableIPs = availableIPv4Count
 
-	n.stats.AvailableIPs = availableIPv6Count + availableIPv4Count
 	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate(), n.getMaxIPBurstableIPCount())
 	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark(), n.getMaxIPBurstableIPCount())
 
@@ -653,11 +645,9 @@ func (n *NetResource) determineMaintenanceAction() (*maintenanceAction, error) {
 		surgeAllocate = numPendingPods - stats.NeededIPs
 	}
 
-	n.mutex.RLock()
 	// handleIPAllocation() takes a min of MaxIPsToAllocate and IPs available for allocation on the interface.
 	// This makes sure we don't try to allocate more than what's available.
-	a.allocation.MaxIPsToAllocate = stats.NeededIPs + n.getMaxAboveWatermark() + surgeAllocate
-	n.mutex.RUnlock()
+	a.allocation.MaxIPsToAllocate = stats.NeededIPs + surgeAllocate
 
 	if a.allocation != nil {
 		n.mutex.Lock()

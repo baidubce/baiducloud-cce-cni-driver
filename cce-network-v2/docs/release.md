@@ -7,6 +7,12 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.4 [2024/08/12]
+1. [Bug] 修复在 prepareIPs 阶段多余检查 borrowed subnet 是否有可借用 IP，影响正常 IP 地址申请的问题。
+2. [Bug] 修复 VPC-ENI 模式会申请超过 max-pods 个 IP 的问题
+2. [Optimize] 优化 prepareIPs 阶段对子网查询的逻辑，当无法获取子网信息时，不再继续进行后续操作。
+3. [Optimize] 优化 prepareIPs 阶段对子网查询的逻辑，当 BCC 实例的 ENI 处于非 inuse 状态时，拒绝执行 IP 预备任务。
+
 #### 2.12.3 [20240730]
 1. [Bug] 修复cpsts配置namespaceSelector时误判断Selector导致没有配置namespaceSelector时的空指针问题及namespaceSelector在没有配置Selector时无法生效的问题
 2. [Optimize] 优化 psts 在没有填写子网 IP 选择策略时的本地 IP 申请器的默认工作区间，避免没有填写 IP 地址族时无法申请 IP 的问题

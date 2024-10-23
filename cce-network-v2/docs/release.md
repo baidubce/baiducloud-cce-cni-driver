@@ -7,6 +7,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.5 [20240829]
+1. [Bug] 修复在 2.12.4 版本中同步 ENI 状态时丢失 IPv6 地址的问题。
+2. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题
+3. [Bug] 修复重复 update nrs,导致 Operation cannot be fulfilled的问题
+
 #### 2.12.4 [2024/08/12]
 1. [Bug] 修复在 prepareIPs 阶段多余检查 borrowed subnet 是否有可借用 IP，影响正常 IP 地址申请的问题。
 2. [Bug] 修复 VPC-ENI 模式会申请超过 max-pods 个 IP 的问题
@@ -42,6 +47,10 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 ### 2.11 (2024/5/27)
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
+
+#### 2.11.4 [20240827]
+1. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题
+2. [Bug] 修复重复 update nrs,导致 Operation cannot be fulfilled的问题
 
 #### 2.11.3 [20240628]
 1. [Feature] `--endpoint-gc-interval` 增加控制 agent 更新 nrs 的最小间隔时间

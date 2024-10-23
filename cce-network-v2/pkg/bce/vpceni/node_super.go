@@ -316,7 +316,6 @@ func (n *bceNetworkResourceSet) overrideENICapacityToNetworkResourceSet(eniQuota
 
 		now := time.Now().Format(time.RFC3339)
 		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = now
-		n.manager.nrsGetterUpdater.Update(old, k8sObj)
 		updated, err := n.manager.nrsGetterUpdater.Update(old, k8sObj)
 		if err == nil {
 			n.k8sObj = updated
@@ -393,13 +392,15 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 			// It can be deleted from the cache
 			n.creatingEni.removeCreatingENI(e.Name)
 
-			addAllocationIP := func(ips []*models.PrivateIP) {
+			addAllocationIP := func(ips []*models.PrivateIP, isIPv6 bool) {
 				for _, addr := range ips {
 					// Only resolve primary IP addresses while ENI is primary mode
 					if e.Spec.UseMode != ccev2.ENIUseModePrimaryIP && addr.Primary {
 						continue
 					}
-					availableIPsNumber++
+					if !isIPv6 {
+						availableIPsNumber++
+					}
 					// filter cross subnet private ip
 					if addr.SubnetID != eniSubnet &&
 						// only bbc enable cross subnet ip to ippool
@@ -413,7 +414,8 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 				}
 			}
 
-			addAllocationIP(e.Spec.ENI.PrivateIPSet)
+			addAllocationIP(e.Spec.ENI.PrivateIPSet, false)
+			addAllocationIP(e.Spec.ENI.IPV6PrivateIPSet, true)
 
 			return nil
 		})

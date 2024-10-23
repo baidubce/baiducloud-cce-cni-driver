@@ -30,7 +30,6 @@ import (
 	sdklog "github.com/baidubce/bce-sdk-go/util/log"
 	"k8s.io/client-go/kubernetes"
 
-	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 )
 
@@ -105,9 +104,7 @@ func New(
 	}
 
 	// todo iaas sdk 暂未支持过滤 eri 和 eni，暂时自行封装一层支持，待后续 sdk 支持过滤 eri 和 eni 后，去除这部分封装
-	eniClient := &eniExt.Client{
-		Client: &eni.Client{BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx))},
-	}
+	eniClient := &eni.Client{BceClient: bce.NewBceClient(bccClientConfig, auth.GetSigner(ctx))}
 
 	bbcClient := &bbc.Client{
 		BceClient: bce.NewBceClient(bbcClientConfig, auth.GetSigner(ctx)),
@@ -143,39 +140,8 @@ func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, e
 			Marker:     nextMarker,
 		}
 
-		res, err := c.eniClient.ListEnis(listArgs)
+		res, err := c.eniClient.ListEni(listArgs)
 		exportMetric("ListENI", t, err)
-		if err != nil {
-			return nil, err
-		}
-
-		enis = append(enis, res.Eni...)
-
-		nextMarker = res.NextMarker
-		isTruncated = res.IsTruncated
-	}
-
-	return enis, nil
-}
-
-func (c *Client) ListERIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
-	var enis []eni.Eni
-
-	isTruncated := true
-	nextMarker := ""
-
-	for isTruncated {
-		t := time.Now()
-
-		listArgs := &eni.ListEniArgs{
-			VpcId:      args.VpcId,
-			Name:       args.Name,
-			InstanceId: args.InstanceId,
-			Marker:     nextMarker,
-		}
-
-		res, err := c.eniClient.ListEris(listArgs)
-		exportMetric("ListERI", t, err)
 		if err != nil {
 			return nil, err
 		}

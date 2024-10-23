@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -21,7 +21,7 @@ const (
 var log = logging.NewSubysLogger("bce-sync-manager")
 
 // SyncManager synchronize data between k8s and VPC, run in operator
-type SyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet] struct {
+type SyncManager[T enisdk.Eni | vpc.RouteRule | vpc.Subnet] struct {
 	sync.Mutex
 	pool         map[string]T
 	resyncPeriod time.Duration
@@ -31,7 +31,7 @@ type SyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet] struct {
 	mngr *controller.Manager
 }
 
-func NewSyncManager[T eni.Eni | vpc.RouteRule | vpc.Subnet](name string, resyncPeriod time.Duration, resync func(ctx context.Context) ([]T, error)) *SyncManager[T] {
+func NewSyncManager[T enisdk.Eni | vpc.RouteRule | vpc.Subnet](name string, resyncPeriod time.Duration, resync func(ctx context.Context) ([]T, error)) *SyncManager[T] {
 	s := &SyncManager[T]{
 		pool:         make(map[string]T),
 		Name:         name,
@@ -84,8 +84,8 @@ func (s *SyncManager[T]) RunImmediately() {
 // ingestKeywords fetch keywords from generic objects
 func (s *SyncManager[T]) ingestKeywords(data interface{}) string {
 	switch data.(type) {
-	case *eni.Eni:
-		return data.(*eni.Eni).EniId
+	case *enisdk.Eni:
+		return data.(*enisdk.Eni).EniId
 	case *vpc.RouteRule:
 		return data.(*vpc.RouteRule).RouteTableId + "-" + data.(*vpc.RouteRule).RouteRuleId
 	case *vpc.Subnet:

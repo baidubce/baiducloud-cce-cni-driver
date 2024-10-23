@@ -60,21 +60,27 @@ type ListEniResult struct {
 }
 
 type Eni struct {
-	EniId                      string      `json:"eniId"`
-	Name                       string      `json:"name"`
-	ZoneName                   string      `json:"zoneName"`
-	Description                string      `json:"description"`
-	InstanceId                 string      `json:"instanceId"`
-	MacAddress                 string      `json:"macAddress"`
-	VpcId                      string      `json:"vpcId"`
-	SubnetId                   string      `json:"subnetId"`
-	Status                     string      `json:"status"`
-	PrivateIpSet               []PrivateIp `json:"privateIpSet"`
-	Ipv6PrivateIpSet           []PrivateIp `json:"ipv6PrivateIpSet"`
-	SecurityGroupIds           []string    `json:"securityGroupIds"`
-	EnterpriseSecurityGroupIds []string    `json:"enterpriseSecurityGroupIds"`
-	CreatedTime                string      `json:"createdTime"`
+	EniId                       string      `json:"eniId"`
+	Name                        string      `json:"name"`
+	ZoneName                    string      `json:"zoneName"`
+	Description                 string      `json:"description"`
+	InstanceId                  string      `json:"instanceId"`
+	MacAddress                  string      `json:"macAddress"`
+	VpcId                       string      `json:"vpcId"`
+	SubnetId                    string      `json:"subnetId"`
+	Status                      string      `json:"status"`
+	PrivateIpSet                []PrivateIp `json:"privateIpSet"`
+	Ipv6PrivateIpSet            []PrivateIp `json:"ipv6PrivateIpSet"`
+	SecurityGroupIds            []string    `json:"securityGroupIds"`
+	EnterpriseSecurityGroupIds  []string    `json:"enterpriseSecurityGroupIds"`
+	CreatedTime                 string      `json:"createdTime"`
+	NetworkInterfaceTrafficMode string      `json:"networkInterfaceTrafficMode"`
 }
+
+const (
+	EniNetworkInterfaceTrafficModeHighPerformance = "highPerformance"
+	EniNetworkInterfaceTrafficModeStandard        = "standard"
+)
 
 type PrivateIp struct {
 	PublicIpAddress  string `json:"publicIpAddress"`

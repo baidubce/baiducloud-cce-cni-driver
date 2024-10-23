@@ -25,13 +25,11 @@ import (
 	"github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 
-	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 )
 
 type Interface interface {
 	ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
-	ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	AddPrivateIP(ctx context.Context, privateIP string, eniID string, isIpv6 bool) (string, error)
 	DeletePrivateIP(ctx context.Context, privateIP string, eniID string, isIpv6 bool) error
 
@@ -93,7 +91,7 @@ type Interface interface {
 type Client struct {
 	bccClient *bcc.Client
 	eipClient *eip.Client
-	eniClient *eniExt.Client
+	eniClient *eni.Client
 	vpcClient *vpc.Client
 	hpcClient *hpc.Client
 	bbcClient *bbc.Client

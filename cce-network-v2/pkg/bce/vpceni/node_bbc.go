@@ -170,6 +170,15 @@ func (n *bbcNode) createBBCENI(scopedLog *logrus.Entry) error {
 		return err
 	}
 	scopedLog.Debugf("got bbc ENI resource successed")
+
+	if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to update bbc ENI status: %w", err)
+		}
+		scopedLog.Infof("update bbc ENI status to inuse successed")
+	}
 	n.mutex.Lock()
 	n.bbceni = eni
 	n.primaryENISubnetID = bbceni.SubnetId

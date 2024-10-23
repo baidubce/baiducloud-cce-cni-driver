@@ -5,6 +5,13 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
 
+#### 2.11.5 [20240920]
+1. [Optimize] 增加 ENI 同步时不一致信息的差异对比日志，方便出现 ENI 数据不一致时排查问题
+2. [Optimize] 去掉 ERI 的独立同步逻辑，复用 ERI 和 ENI 的同步流程
+3. [Optimize] 去掉 Underlay RDMA 的独立同步逻辑，创建 underlay RDMA 网卡后，状态不再变更
+4. [Optimize] 去掉 BBC/EBC 主网卡状态机同步流程，ENI 状态不再变更
+5. [Optimize] 优化 ENI 同步流程，仅对 ENI 状态变更时同步，减少 IP 地址变更同步的消耗
+
 #### 2.11.4 [20240823]
 1. [Bug] 修复有多个 ENI 都存在待释放 IP 时，多次查询 ENI 顺序不一致影响 IP 标记流程导致无法释放 IP 的问题
 2. [Bug] 修复重复 update nrs 的问题,导致 Operation cannot be fulfilled的问题

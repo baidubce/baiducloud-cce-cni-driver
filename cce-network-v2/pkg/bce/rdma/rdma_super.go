@@ -851,8 +851,6 @@ func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 			return false, fmt.Errorf("get eni %s failed: %v", eni.Name, ierr)
 		}
 		eni = eni.DeepCopy()
-		oldversion = eni.Spec.VPCVersion
-		eni.Spec.VPCVersion = eni.Spec.VPCVersion + 1
 		eni = refresh(eni)
 
 		// update eni
@@ -861,6 +859,13 @@ func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 		if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
 			return false, nil
 		}
+		// we should recorde log with eni attributes and ips if update eni success
+		log.WithFields(logrus.Fields{
+			"eniID":      eni.Name,
+			"instanceID": eni.Spec.InstanceID,
+			"node":       eni.Spec.NodeName,
+			"eni":        logfields.Json(eni.Spec.ENI),
+		}).Infof("update eni success")
 		return true, ierr
 	})
 	if err != nil {

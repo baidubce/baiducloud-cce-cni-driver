@@ -23,7 +23,7 @@ func (c *EriClient) ListEnis(ctx context.Context, vpcID, instanceID string) ([]E
 		InstanceId: instanceID,
 		VpcId:      vpcID,
 	}
-	eriList, listErr := c.cloud.ListERIs(ctx, listArgs)
+	eriList, listErr := c.cloud.ListENIs(ctx, listArgs)
 	if listErr != nil {
 		log.Errorf("failed to get eri: %v", listErr)
 		return nil, listErr
@@ -31,6 +31,9 @@ func (c *EriClient) ListEnis(ctx context.Context, vpcID, instanceID string) ([]E
 
 	resultList := make([]EniResult, 0)
 	for i := range eriList {
+		if eriList[i].NetworkInterfaceTrafficMode != enisdk.EniNetworkInterfaceTrafficModeHighPerformance {
+			continue
+		}
 		eniInfo := eriList[i]
 
 		ips := make([]PrivateIP, 0, len(eniInfo.PrivateIpSet))

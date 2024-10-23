@@ -607,17 +607,6 @@ func (fc *flowControlClient) ListENIs(ctx context.Context, args eni.ListEniArgs)
 	return ret, err
 }
 
-// ListERIs implements Interface
-func (fc *flowControlClient) ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
-	req, err := fc.limiter.Wait(ctx, ListERIs)
-	if err != nil {
-		return nil, err
-	}
-	ret, err := fc.client.ListERIs(ctx, args)
-	req.Error(err)
-	return ret, err
-}
-
 // ListRouteTable implements Interface
 func (fc *flowControlClient) ListRouteTable(ctx context.Context, vpcID string, routeTableID string) ([]vpc.RouteRule, error) {
 	req, err := fc.limiter.Wait(ctx, ListRouteTable)

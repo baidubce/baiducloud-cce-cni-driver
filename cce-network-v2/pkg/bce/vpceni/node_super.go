@@ -347,9 +347,16 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 			// eni is not ready to use
 			eniSubnet := e.Spec.ENI.SubnetID
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-				haveCreatingENI = true
-				n.creatingEni.addCreatingENI(e.Name, e.CreationTimestamp.Time)
-				return nil
+				if e.Spec.Type == ccev2.ENIForBBC || e.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
+					err := n.forceUpdateEniToInuse(ctx, scopedLog, e.Name)
+					if err != nil {
+						return err
+					}
+				} else {
+					haveCreatingENI = true
+					n.creatingEni.addCreatingENI(e.Name, e.CreationTimestamp.Time)
+					return nil
+				}
 			}
 
 			availabelENIsNumber++
@@ -397,6 +404,24 @@ func (n *bceNode) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.
 		}()
 	}
 	return a, nil
+}
+
+func (n *bceNode) forceUpdateEniToInuse(ctx context.Context, scopedLog *logrus.Entry, eniID string) error {
+	eni, err := n.manager.enilister.Get(eniID)
+	if err == nil {
+		scopedLog = scopedLog.WithFields(logrus.Fields{
+			"eniID":     eniID,
+			"oldStatus": eni.Status.VPCStatus,
+		})
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
+		if err != nil {
+			scopedLog.WithError(err).Error("failed to update primary ENI status")
+			return fmt.Errorf("failed to update primary ENI status: %w", err)
+		}
+		scopedLog.Infof("update primary ENI status to inuse successed")
+	}
+	return nil
 }
 
 // CreateInterface create a new ENI
@@ -1014,8 +1039,6 @@ func (n *bceNode) updateENIWithPoll(ctx context.Context, eni *ccev2.ENI, refresh
 			return false, fmt.Errorf("get eni %s failed: %v", eni.Name, ierr)
 		}
 		eni = eni.DeepCopy()
-		oldversion = eni.Spec.VPCVersion
-		eni.Spec.VPCVersion = eni.Spec.VPCVersion + 1
 		eni = refresh(eni)
 
 		// update eni
@@ -1024,6 +1047,13 @@ func (n *bceNode) updateENIWithPoll(ctx context.Context, eni *ccev2.ENI, refresh
 		if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
 			return false, nil
 		}
+		// we should recorde log with eni attributes and ips if update eni success
+		log.WithFields(logrus.Fields{
+			"eniID":      eni.Name,
+			"instanceID": eni.Spec.InstanceID,
+			"node":       eni.Spec.NodeName,
+			"eni":        logfields.Json(eni.Spec.ENI),
+		}).Infof("update eni spec success")
 		return true, ierr
 	})
 	if err != nil {

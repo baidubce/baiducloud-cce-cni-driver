@@ -14,7 +14,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -24,7 +23,7 @@ import (
 type remoteVpcEniSyncher struct {
 	updater     syncer.ENIUpdater
 	bceclient   cloud.Interface
-	syncManager *SyncManager[eni.Eni]
+	syncManager *SyncManager[enisdk.Eni]
 
 	VPCIDs    string
 	ClusterID string
@@ -37,7 +36,7 @@ func (es *remoteVpcEniSyncher) setENIUpdater(updater syncer.ENIUpdater) {
 }
 
 // statENI returns one ENI with the given name from bce cloud
-func (es *remoteVpcEniSyncher) statENI(ctx context.Context, ENIID string) (*eni.Eni, error) {
+func (es *remoteVpcEniSyncher) statENI(ctx context.Context, ENIID string) (*enisdk.Eni, error) {
 	eniCache, err := es.bceclient.StatENI(ctx, ENIID)
 	if err != nil {
 		log.WithField(taskLogField, eniControllerName).
@@ -46,13 +45,13 @@ func (es *remoteVpcEniSyncher) statENI(ctx context.Context, ENIID string) (*eni.
 			WithError(err).Errorf("stat eni failed")
 		return nil, err
 	}
-	result := eni.Eni{Eni: *eniCache}
-	es.syncManager.AddItems([]eni.Eni{result})
+	result := *eniCache
+	es.syncManager.AddItems([]enisdk.Eni{result})
 	return &result, nil
 }
 
 // syncENI Sync eni from BCE Cloud, and all eni data are subject to BCE Cloud
-func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, err error) {
+func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []enisdk.Eni, err error) {
 	listArgs := enisdk.ListEniArgs{
 		VpcId: es.VPCIDs,
 		Name:  fmt.Sprintf("%s/", es.ClusterID),
@@ -66,7 +65,7 @@ func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, e
 	}
 
 	for i := 0; i < len(enis); i++ {
-		result = append(result, eni.Eni{Eni: enis[i]})
+		result = append(result, enis[i])
 		es.createExternalENI(&enis[i])
 	}
 	return
@@ -102,7 +101,10 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) {
 
 	// find node by instanceID
 	nrsList, err := watchers.NetResourceSetClient.GetByInstanceID(eni.InstanceId)
-
+	if err != nil {
+		scopeLog.WithError(err).Errorf("failed to find node by instanceID")
+		return
+	}
 	if len(nrsList) == 0 {
 		return
 	}
@@ -110,6 +112,12 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) {
 	scopeLog = scopeLog.WithField("nodeName", resource.Name)
 	scopeLog.Debugf("find node by instanceID success")
 	scopeLog.Infof("start to create external eni")
+
+	// eni or eri
+	eniType := ccev2.ENIForBCC
+	if eni.NetworkInterfaceTrafficMode == enisdk.EniNetworkInterfaceTrafficModeHighPerformance {
+		eniType = ccev2.ENIForERI
+	}
 
 	newENI := &ccev2.ENI{
 		ObjectMeta: metav1.ObjectMeta{
@@ -141,7 +149,7 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) {
 				SecurityGroupIds:           eni.SecurityGroupIds,
 				EnterpriseSecurityGroupIds: eni.EnterpriseSecurityGroupIds,
 			},
-			Type:                      ccev2.ENIForBCC,
+			Type:                      eniType,
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
 		},

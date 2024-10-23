@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
@@ -109,44 +111,57 @@ func (n *ebcNode) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logr
 
 	// create subnet object
 	zone := api.TransAvailableZoneToZoneName(operatorOption.Config.BCECloudContry, operatorOption.Config.BCECloudRegion, resource.Spec.ENI.AvailabilityZone)
-
-	newENI := &ccev2.ENI{
-		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{
-				k8s.LabelInstanceID: n.instanceID,
-				k8s.LabelNodeName:   resource.Name,
-				k8s.LabelENIType:    resource.Spec.ENI.InstanceType,
-				k8s.LabelENIUseMode: string(ccev2.ENIUseModePrimaryWithSecondaryIP),
+	eni, err := n.manager.enilister.Get(bccInfo.NicInfo.EniId)
+	if kerrors.IsNotFound(err) {
+		eni = &ccev2.ENI{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelNodeName:   resource.Name,
+					k8s.LabelENIType:    resource.Spec.ENI.InstanceType,
+					k8s.LabelENIUseMode: string(ccev2.ENIUseModePrimaryWithSecondaryIP),
+				},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: ccev2.SchemeGroupVersion.String(),
+					Kind:       ccev2.NRSKindDefinition,
+					Name:       resource.Name,
+					UID:        resource.UID,
+				}},
+				Name: bccInfo.NicInfo.EniId,
 			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: ccev2.SchemeGroupVersion.String(),
-				Kind:       ccev2.NRSKindDefinition,
-				Name:       resource.Name,
-				UID:        resource.UID,
-			}},
-			Name: bccInfo.NicInfo.EniId,
-		},
-		Spec: ccev2.ENISpec{
-			NodeName: resource.Name,
-			UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
-			ENI: models.ENI{
-				ID:               bccInfo.NicInfo.EniId,
-				Name:             bccInfo.NicInfo.Name,
-				ZoneName:         zone,
-				InstanceID:       n.instanceID,
-				VpcID:            bccInfo.NicInfo.VpcId,
-				SubnetID:         bccInfo.NicInfo.SubnetId,
-				SecurityGroupIds: bccInfo.NicInfo.SecurityGroups,
+			Spec: ccev2.ENISpec{
+				NodeName: resource.Name,
+				UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
+				ENI: models.ENI{
+					ID:               bccInfo.NicInfo.EniId,
+					Name:             bccInfo.NicInfo.Name,
+					ZoneName:         zone,
+					InstanceID:       n.instanceID,
+					VpcID:            bccInfo.NicInfo.VpcId,
+					SubnetID:         bccInfo.NicInfo.SubnetId,
+					SecurityGroupIds: bccInfo.NicInfo.SecurityGroups,
+				},
+				RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
+				InstallSourceBasedRouting: false,
+				Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
 			},
-			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
-			InstallSourceBasedRouting: false,
-			Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
-		},
+		}
+		eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
+		if err != nil {
+			scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", eni.Name, err)
+			return fmt.Errorf("failed to create primary ENI %s on k8s", eni.Name)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to get primary ENI %s on k8s: %v", bccInfo.NicInfo.EniId, err)
 	}
-	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
-	if err != nil {
-		scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", newENI.Name, err)
-		return fmt.Errorf("failed to create primary ENI %s on k8s", newENI.Name)
+
+	if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to update primary ENI status: %w", err)
+		}
+		scopedLog.Infof("update ebc primary ENI status to inuse successed")
 	}
 	n.haveCreatePrimaryENI = true
 	return nil

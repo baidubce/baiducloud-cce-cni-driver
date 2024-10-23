@@ -88,10 +88,11 @@ func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBCC {
-		return es.eni.Create(resource)
+	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+		return nil
 	}
-	return nil
+
+	return es.eni.Create(resource)
 }
 
 // Delete implements syncer.ENIEventHandler
@@ -107,10 +108,11 @@ func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBCC {
-		return es.eni.Update(resource)
+	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+		return nil
 	}
-	return nil
+
+	return es.eni.Update(resource)
 }
 
 var (

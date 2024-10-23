@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
@@ -89,10 +90,11 @@ func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBCC {
-		return es.eni.Create(resource)
+	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+		return nil
 	}
-	return nil
+
+	return es.eni.Create(resource)
 }
 
 // Delete implements syncer.ENIEventHandler
@@ -108,10 +110,11 @@ func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBCC {
-		return es.eni.Update(resource)
+	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+		return nil
 	}
-	return nil
+
+	return es.eni.Update(resource)
 }
 
 var (
@@ -216,6 +219,7 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 				es:       es,
 				ctx:      ctx,
 				resource: newObj,
+				scopeLog: scopeLog,
 			}
 
 			err = machine.start()
@@ -316,12 +320,39 @@ type eniStateMachine struct {
 	ctx      context.Context
 	resource *ccev2.ENI
 	vpceni   *eni.Eni
+	scopeLog *logrus.Entry
 }
 
 // Start state machine flow
 func (esm *eniStateMachine) start() error {
 	var err error
-	if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusInuse && esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
+	if esm.resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
+		if len(esm.resource.Spec.PrivateIPSet) == 0 {
+			esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
+			if err != nil {
+				return fmt.Errorf("eni state machine failed to get inuse eni(%s): %v", esm.resource.Name, err)
+			}
+			esm.resource.Spec.ENI.ID = esm.vpceni.EniId
+			esm.resource.Spec.ENI.Name = esm.vpceni.Name
+			esm.resource.Spec.ENI.MacAddress = esm.vpceni.MacAddress
+			esm.resource.Spec.ENI.SecurityGroupIds = esm.vpceni.SecurityGroupIds
+			esm.resource.Spec.ENI.EnterpriseSecurityGroupIds = esm.vpceni.EnterpriseSecurityGroupIds
+			esm.resource.Spec.ENI.Description = esm.vpceni.Description
+			esm.resource.Spec.ENI.VpcID = esm.vpceni.VpcId
+			esm.resource.Spec.ENI.ZoneName = esm.vpceni.ZoneName
+			esm.resource.Spec.ENI.SubnetID = esm.vpceni.SubnetId
+			esm.resource.Spec.ENI.PrivateIPSet = toModelPrivateIP(esm.vpceni.PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
+			esm.resource.Spec.ENI.IPV6PrivateIPSet = toModelPrivateIP(esm.vpceni.Ipv6PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
+			ElectENIIPv6PrimaryIP(esm.resource)
+			// update spec
+			_, updateError := esm.es.updater.Update(esm.resource)
+			if updateError != nil {
+				esm.scopeLog.WithError(updateError).Error("update eni spec failed")
+				return updateError
+			}
+			esm.scopeLog.Info("update eni spec success")
+		}
+	} else if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
 		// refresh status of ENI
 		esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
 		if cloud.IsErrorReasonNoSuchObject(err) {
@@ -455,4 +486,19 @@ func ElectENIIPv6PrimaryIP(newObj *ccev2.ENI) {
 			newObj.Annotations[k8s.AnnotationENIIPv6PrimaryIP] = newObj.Spec.ENI.IPV6PrivateIPSet[0].PrivateIPAddress
 		}
 	}
+}
+
+// toModelPrivateIP convert private ip to model
+func toModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*models.PrivateIP {
+	var pIPSet []*models.PrivateIP
+	for _, pip := range ipset {
+		newPIP := &models.PrivateIP{
+			PublicIPAddress:  pip.PublicIpAddress,
+			PrivateIPAddress: pip.PrivateIpAddress,
+			Primary:          pip.Primary,
+		}
+		newPIP.SubnetID = SearchSubnetID(vpcID, subnetID, pip.PrivateIpAddress)
+		pIPSet = append(pIPSet, newPIP)
+	}
+	return pIPSet
 }

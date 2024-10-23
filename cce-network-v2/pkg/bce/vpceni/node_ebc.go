@@ -146,6 +146,17 @@ func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, s
 				Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
 			},
 		}
+
+		// use bcc api to get primary ips of primary ENI
+		for _, nicip := range bccInfo.NicInfo.Ips {
+			eni.Spec.ENI.PrivateIPSet = append(eni.Spec.ENI.PrivateIPSet, &models.PrivateIP{
+				SubnetID:         bccInfo.NicInfo.SubnetId,
+				Primary:          nicip.Primary == "true",
+				PrivateIPAddress: nicip.PrivateIp,
+				PublicIPAddress:  nicip.Eip,
+			})
+		}
+
 		eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
 		if err != nil {
 			scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", eni.Name, err)
@@ -158,12 +169,6 @@ func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, s
 	err = n.tryBorrowIPs(eni)
 	if err != nil {
 		return err
-	}
-
-	_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
-	if err != nil {
-		scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", eni.Name, err)
-		return fmt.Errorf("failed to create primary ENI %s on k8s", eni.Name)
 	}
 
 	if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {

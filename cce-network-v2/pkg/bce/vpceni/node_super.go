@@ -1401,7 +1401,7 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 
 		var (
 			maxAllocateIPs = n.GetMaximumAllocatableIPv4() - n.getAvailableIPv4()
-			quotaIPs       = n.getENIQuota().GetMaxIP()
+			quotaIPs       = n.getENIQuota().GetMaxIP() - len(newENI.Spec.PrivateIPSet)
 			toBorrowIps    = quotaIPs
 		)
 		if maxAllocateIPs < quotaIPs {

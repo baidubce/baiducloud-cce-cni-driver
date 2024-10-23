@@ -451,7 +451,39 @@ func (e *EndpointAllocator) Restore() {
 		for _, ip := range ips {
 			_, err = e.dynamicIPAM.AllocateIPWithoutSyncUpstream(net.ParseIP(ip), ep.Namespace+"/"+ep.Name)
 			if err != nil {
-				epLog.WithError(err).Error("AllocateIPWithoutSyncUpstream error")
+				epLog.WithError(err).Warnf("failed to restore ip %s, strict inspection mode will be activated", ip)
+				pod, err := e.podClient.Get(ep.Namespace, ep.Name)
+				if err == nil {
+					if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+						epLog.Infof("pod is not running or pending, try to delete expired endpoint")
+						e.tryDeleteEndpointAfterPodDeleted(ep, true, epLog)
+						continue
+					}
+					if ep.Spec.ExternalIdentifiers == nil || ep.Spec.ExternalIdentifiers.K8sObjectID != string(pod.UID) {
+						epLog.Infof("externalIdentifiers is not equal to pod uid, try to delete expired endpoint")
+						e.tryDeleteEndpointAfterPodDeleted(ep, true, epLog)
+						continue
+					}
+					err = wait.PollImmediate(time.Millisecond*200, time.Minute, func() (done bool, err error) {
+						_, err = e.dynamicIPAM.AllocateIPWithoutSyncUpstream(net.ParseIP(ip), ep.Namespace+"/"+ep.Name)
+						if err != nil {
+							epLog.WithError(err).Warnf("failed to restore ip %s, will retry later", ip)
+							return false, nil
+						}
+						epLog.Infof("restore ip %s success", ip)
+						return true, nil
+					})
+					if err != nil {
+						epLog.WithError(err).Fatal("failed to restore ip in strict inspection mode after 1 minute")
+					}
+				} else {
+					if kerrors.IsNotFound(err) {
+						epLog.Infof("pod not found, try to delete expired endpoint")
+						e.tryDeleteEndpointAfterPodDeleted(ep, false, epLog)
+						continue
+					}
+					epLog.WithError(err).Fatal("failed to restore ip in strict inspection mode, failed to get pod")
+				}
 			}
 		}
 	}

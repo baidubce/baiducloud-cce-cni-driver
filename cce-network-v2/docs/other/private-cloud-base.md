@@ -103,7 +103,7 @@ ccedConfig:
 #### 下载最新安装包代码库
 ```
 # 下载安装包
-git clone ssh://wangweiwei22@icode.baidu.com:8235/baidu/jpaas/cce-network-plugin baidu/jpaas/cce-network-plugin
+git clone https://github.com/baidubce/baiducloud-cce-cni-driver.git cce-network-plugin
 
 cd cce-network-plugin/cce-ipam-v2
 ```

@@ -7,6 +7,10 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.9 [20241121]
+1. [Bug] 修复 agent 在初始化 ENI 缺少 mac 地址时，会给 lo 网卡重命名的问题
+2. [Optimize] 修复 Node 不存在的异常场景时 operator getEniQuota panic 问题
+
 #### 2.12.8 [20240924]
 1. [Bug] 增加 eni 主 IP 获取流程，避免新节点缺少主 IP 无法就绪的问题
 2. [Bug] 增加 EBC 主网卡 IP 查询流程，避免新节点缺少主 IP 无法就绪的问题

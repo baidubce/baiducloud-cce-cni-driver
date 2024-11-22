@@ -159,6 +159,13 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 		availableENICount = 0
 		inuseENICount     = 0
 	)
+
+	if eniQuota == nil {
+		msg = errUnableToGetEniQuota
+		err = errors.New(msg)
+		return
+	}
+
 	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
@@ -183,7 +190,7 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 
 	if availableENICount >= eniQuota.GetMaxENI() {
 		msg = errUnableToDetermineLimits
-		err = fmt.Errorf(msg)
+		err = errors.New(msg)
 		return
 	}
 

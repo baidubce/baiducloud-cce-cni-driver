@@ -16,6 +16,7 @@ package vpceni
 
 import (
 	"context"
+	goerrors "errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -65,6 +66,7 @@ func init() {
 // usable for metrics accounting purposes.
 const (
 	errUnableToDetermineLimits    = "unable to determine limits"
+	errUnableToGetEniQuota        = "unable to get ENI quota"
 	errUnableToGetSecurityGroups  = "unable to get security groups"
 	errUnableToCreateENI          = "unable to create ENI"
 	errUnableToAttachENI          = "unable to attach ENI"
@@ -445,7 +447,11 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 		availableENIsNumber = 0
 	}
 
-	err := n.getENIQuota().RefreshEniCapacityToK8s(ctx, availableENIsNumber, availableIPsNumber)
+	eniQuota := n.getENIQuota()
+	if eniQuota == nil {
+		return a, goerrors.New(errUnableToGetEniQuota)
+	}
+	err := eniQuota.RefreshEniCapacityToK8s(ctx, availableENIsNumber, availableIPsNumber)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("refresh eni capacity to k8s node error")
 	}
@@ -693,7 +699,7 @@ func (n *bceNetworkResourceSet) refreshAvailableSubnets() error {
 		errStr := fmt.Sprintf("subnets [%v] are not available for node %s", n.k8sObj.Spec.ENI.SubnetIDs, n.k8sObj.Name)
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, ccev2.ErrorCodeNoAvailableSubnet, errStr)
 		metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnet, "NetResourceSet", n.k8sObj.Name).Inc()
-		return fmt.Errorf(errStr)
+		return goerrors.New(errStr)
 	}
 	n.availableSubnets = subnets
 	return nil
@@ -1401,9 +1407,14 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 
 		var (
 			maxAllocateIPs = n.GetMaximumAllocatableIPv4() - n.getAvailableIPv4()
-			quotaIPs       = n.getENIQuota().GetMaxIP() - len(newENI.Spec.PrivateIPSet)
-			toBorrowIps    = quotaIPs
+			eniQuota       = n.getENIQuota()
 		)
+		if eniQuota == nil {
+			return goerrors.New(errUnableToGetEniQuota)
+		}
+		quotaIPs := eniQuota.GetMaxIP() - len(newENI.Spec.PrivateIPSet)
+		toBorrowIps := quotaIPs
+
 		if maxAllocateIPs < quotaIPs {
 			toBorrowIps = maxAllocateIPs + 1
 		}
@@ -1414,7 +1425,7 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, toBorrowIps, newENI.Spec.SubnetID, n.instanceType)
 			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowEniIPs", errMsg)
 			metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "Subnet", newENI.Spec.SubnetID).Inc()
-			return fmt.Errorf(errMsg)
+			return goerrors.New(errMsg)
 		}
 		newENI.Spec.BorrowIPCount = borrowedIPs
 	}

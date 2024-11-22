@@ -70,6 +70,11 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		return nil
 	}
 
+	if resource.Spec.MacAddress == "" {
+		scopedLog.Debug("mac address is empty, skip update ENI")
+		return nil
+	}
+
 	// downward compatibility with BBC models
 	// TODO 2021-03-08: remove this after BBC secondary models are deprecated
 	if resource.Spec.Type == ccev2.ENIForBBC {

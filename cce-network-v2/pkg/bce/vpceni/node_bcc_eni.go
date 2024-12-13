@@ -101,7 +101,12 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 		return enis[i].CreationTimestamp.After(enis[j].CreationTimestamp.Time)
 	})
 	for i := 0; i < len(enis); i++ {
-		if enis[i].DeletionTimestamp != nil || enis[i].Status.VPCStatus == ccev2.VPCENIStatusDeleted {
+		eni := enis[i]
+		vpcStatus := eni.Status.VPCStatus
+		// Do not process the ENI which is being deleted or in attaching/detaching status.
+		// It is not useful to process it, because the IPs are not assigned to the ENI.
+		if eni.DeletionTimestamp != nil || vpcStatus == ccev2.VPCENIStatusAttaching ||
+			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted {
 			continue
 		}
 		fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
@@ -114,8 +119,9 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 // waitForENISynced wait for eni synced
 // this method should not lock the mutex of bceNode before calling
 func (n *bceNode) waitForENISynced(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
 		haveSynced := true
 		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
@@ -138,7 +144,6 @@ func (n *bceNode) waitForENISynced(ctx context.Context) {
 			})
 		return haveSynced, nil
 	})
-
 }
 
 // CreateInterface create a new ENI

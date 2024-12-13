@@ -16,8 +16,12 @@ package vpceni
 
 import (
 	"context"
-	"fmt"
 	"time"
+
+	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
@@ -26,13 +30,10 @@ import (
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	listv1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v1"
 	listv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
-	"github.com/sirupsen/logrus"
-
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 // InstancesManager maintains the list of instances. It must be kept up to date
@@ -135,16 +136,16 @@ func (m *InstancesManager) Resync(ctx context.Context) time.Time {
 // NodeEndpoint implements endpoint.DirectIPAllocator
 func (m *InstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.DirectEndpointOperation, error) {
 	nodeIP := cep.Spec.Network.IPAllocation.NodeIP
-	obj, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeIP)
-	if err != nil || obj == nil {
-		return nil, fmt.Errorf("endpoint nrs %s not found, recommend using IP as the node name", nodeIP)
+	_, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeIP)
+	if err != nil {
+		return nil, err
 	}
 
 	m.mutex.Lock()
-	bceNrs, ok := m.bceNetworkResourceSetMap[cep.Spec.Network.IPAllocation.NodeIP]
+	bceNrs, ok := m.bceNetworkResourceSetMap[nodeIP]
 	m.mutex.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("node %s not found", cep.Spec.Network.IPAllocation.NodeIP)
+		return nil, errors.NewNotFound(v2.Resource("netresourceset"), nodeIP)
 	}
 	return bceNrs, nil
 }

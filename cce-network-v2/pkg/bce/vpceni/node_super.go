@@ -1120,6 +1120,8 @@ func (n *bceNetworkResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 			return false, fmt.Errorf("get eni %s failed: %v", eni.Name, ierr)
 		}
 		eni = eni.DeepCopy()
+		oldversion = eni.Spec.VPCVersion
+		eni.Spec.VPCVersion = eni.Spec.VPCVersion + 1
 		eni = refresh(eni)
 
 		// update eni
@@ -1419,7 +1421,7 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 			toBorrowIps = maxAllocateIPs + 1
 		}
 
-		borrowedIPs = subnet.Borrow(newENI.Spec.SubnetID, toBorrowIps)
+		borrowedIPs = subnet.Borrow(newENI.Spec.ENI.ID, toBorrowIps)
 		if borrowedIPs != toBorrowIps {
 			subnet.Cancel(newENI.Name)
 			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, toBorrowIps, newENI.Spec.SubnetID, n.instanceType)

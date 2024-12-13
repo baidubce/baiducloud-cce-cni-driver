@@ -27,7 +27,7 @@ type ubuntuOS struct {
 }
 
 // DisableDHCPv6 implements HostOS.
-func (*ubuntuOS) DisableDHCPv6(dev string) error {
+func (*ubuntuOS) DisableDHCPv6(udevName, cceName string) error {
 	return nil
 }
 

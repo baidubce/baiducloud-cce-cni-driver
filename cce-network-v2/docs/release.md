@@ -7,6 +7,17 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.10 [20241213]
+1. [Optimize] 优化 VPC-ENI 模式下的 veth 单机路由规则目的地址存在冲突的判断条件，解决残留本地路由规则时创建的 Pod 容器网络不通的问题
+2. [Optimize] 禁用 VPC-ENI 模式下的 IPv6 DHCP 时使用的网卡名修改为udev生成的原始名字，避免生成的网卡配置文件导致虚拟机重启时 network.service 服务启动失败
+3. [Bug] 更新 VPC-ENI 模式下的 ENI 状态机处理逻辑，修复当节点移出集群时，ENI 对象残留的问题
+4. [Bug] 修复 VPC-ENI 模式下的新建 ENI 网卡 borrow IP 地址时，borrow task ENIID 填写错误导致并发创建时可能引起的 borrow IP 计算错误
+5. [Optimize] 优化 VPC-ENI 模式下的 Romote ENI Syncer 逻辑，纳管 CCE 历史创建的 ENI，避免因历史创建的 ENI 无法被使用而占用 Node eniQuota 的问题
+6. [Optimize] 优化 VPC-ENI 模式下的 ENI 状态机处理逻辑，支持非终态 ENI 的处理流程，避免因状态机异常中断、重启丢失内存状态等原因导致的 ENI 状态处于异常的非终态而导致的该 ENI 无法正常使用的问题
+7. [Bug] PSTS 增加对 CEP TTL 未过期时直接移除 Node 或 ENI 导致 CEP 后续 TTL 过期后因无对应的 NetworkResourceSet 或 ENI 而无法正常删除时的清理逻辑
+8. [Bug] 修复 VPC-ENI 模式下 EBC ENI Quota 为 0 时，启用主网卡辅助IP的 ENI 赋值逻辑，避免因主网卡 ENI MacAddress 为空导致 cce-network-agent 无法启动的问题
+9. [Bug] 修改 VPC-ENI 模式下 ENI 对象本地缓存过期状态相关逻辑，解决因 resync nrs timeout 而导致的新增节点初始化慢，大规模集群扩容速度慢的问题
+
 #### 2.12.9 [20241121]
 1. [Bug] 修复 agent 在初始化 ENI 缺少 mac 地址时，会给 lo 网卡重命名的问题
 2. [Optimize] 修复 Node 不存在的异常场景时 operator getEniQuota panic 问题
@@ -19,7 +30,7 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 5. [Bug] 修复 EBC 主网卡重复创建 ENI 的问题
 
 #### 2.12.7 [20240923]
-1. [Optimize] psts 增加对 cep ttl 未过期时直接移除 Node 导致 cep 后续 ttl 过期后因无对应 eni 而无法正常删除时的清理逻辑
+1. [Optimize] PSTS 增加对 CEP TTL 未过期时直接移除 ENI 导致 CEP 后续 TTL 过期后因无对应 ENI 而无法正常删除时的清理逻辑
 2. [Optimize] 增加 ENI 同步时不一致信息的差异对比日志，方便出现 ENI 数据不一致时排查问题
 3. [Optimize] 去掉 ERI 的独立同步逻辑，复用 ERI 和 ENI 的同步流程
 4. [Optimize] 去掉 Underlay RDMA 的独立同步逻辑，创建 underlay RDMA 网卡后，状态不再变更
@@ -43,12 +54,12 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. [Optimize] 优化 prepareIPs 阶段对子网查询的逻辑，当 BCC 实例的 ENI 处于非 inuse 状态时，拒绝执行 IP 预备任务。
 
 #### 2.12.3 [20240730]
-1. [Bug] 修复cpsts配置namespaceSelector时误判断Selector导致没有配置namespaceSelector时的空指针问题及namespaceSelector在没有配置Selector时无法生效的问题
+1. [Bug] 修复 cpsts 配置 namespaceSelector 时误判断 Selector 导致没有配置 namespaceSelector 时的空指针问题及 namespaceSelector 在没有配置 Selector 时无法生效的问题
 2. [Optimize] 优化 psts 在没有填写子网 IP 选择策略时的本地 IP 申请器的默认工作区间，避免没有填写 IP 地址族时无法申请 IP 的问题
 3. [Bug] 修复 cilium ipam 保留 IP 时无法保留首个 IP 的问题
 
 #### 2.12.2 [2024/07/24]
-1. [Feature] 支持borrowed subnet 可观测，新增 cce_subnet_ips_guage 指标代表子网可用 IP 地址数量
+1. [Feature] 支持 borrowed subnet 可观测，新增 cce_subnet_ips_guage 指标代表子网可用 IP 地址数量
 2. [Optimize] borrowed subnet 支持定时同步能力，避免因单次 IP 计算错误，导致错误借用未归还的问题。
 3. [Optimize] 更新子网可用 IP 借用语义，单个 ENI 从子网借用 IP 地址数以最新一次为准
 
@@ -71,6 +82,15 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 ### 2.11 (2024/5/27)
 新特性功能：
 1. 新特性：容器内支持分配 RDMA 子网卡及 RDMA 辅助IP。
+
+#### 2.11.9 [20241213]
+1. [Bug] 修改 VPC-ENI 模式下 ENI 对象本地缓存过期状态相关逻辑，解决因 resync nrs timeout 而导致的新增节点初始化慢，大规模集群扩容速度慢的问题
+
+#### 2.11.8 [20241101]
+1. [Bug] 修复 agent 在初始化 ENI 缺少 mac 地址时，会给 lo 网卡重命名的问题
+
+#### 2.11.7 [20241031]
+1. [Optimize] 增加 ENI 主 IP 获取流程，避免新节点缺少主 IP 无法就绪的问题
 
 #### 2.11.6 [20240924]
 1. [Bug] 修复 ENI 同步不支持 EHC 的问题

@@ -58,7 +58,8 @@ func (eh *eniInitFactory) OnAddENI(node *ccev2.ENI) error {
 	return nil
 }
 
-// OnUpdateENI It will be recalled every 30s
+// OnUpdateENI It will be recalled every 30s before cce-network-v2/2.11.5 and
+// cce-network-v2/2.12.7. But it is not necessary, so remove periodic recalled code.
 func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	var err error
 	resource := newObj.DeepCopy()
@@ -128,8 +129,16 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		return fmt.Errorf("failed to set eni neighbor config: %w", err)
 	}
 
-	// set device and route on the woker machine only when eni bound at bcc
+	isNeedUpdateStatus := false
+	// set device and route on the worker machine only when eni bound at bcc
 	if _, ok := eh.localENIs[resource.Spec.ENI.ID]; !ok {
+		isNeedUpdateStatus = true
+	} else if resource.Status.InterfaceIndex != eniLink.linkIndex ||
+		resource.Status.InterfaceName != eniLink.linkName || resource.Status.ENIIndex != eniLink.eniIndex ||
+		resource.Status.GatewayIPv4 != eniLink.ipv4Gateway || resource.Status.GatewayIPv6 != eniLink.ipv6Gateway {
+		isNeedUpdateStatus = true
+	}
+	if isNeedUpdateStatus {
 		resource.Status.InterfaceIndex = eniLink.linkIndex
 		resource.Status.InterfaceName = eniLink.linkName
 		resource.Status.ENIIndex = eniLink.eniIndex
@@ -139,15 +148,25 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		if eniLink.ipv6Gateway != "" {
 			resource.Status.GatewayIPv6 = eniLink.ipv6Gateway
 		}
+	}
 
-		if !reflect.DeepEqual(&resource.Status, &newObj.Status) {
-			(&resource.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
+	isNeedUpdateToReadyOnNode := false
+	if !reflect.DeepEqual(&resource.Status, &newObj.Status) {
+		isNeedUpdateToReadyOnNode = true
+		isNeedUpdateStatus = true
+	} else if resource.Status.CCEStatus == ccev2.ENIStatusNone && resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
+		isNeedUpdateToReadyOnNode = true
+		isNeedUpdateStatus = true
+	}
+	if isNeedUpdateToReadyOnNode {
+		(&resource.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
+	}
 
-			_, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
-			if err != nil {
-				scopedLog.WithError(err).Error("update eni status")
-				return err
-			}
+	if isNeedUpdateStatus {
+		_, err = eh.eniClient.ENIs().UpdateStatus(context.TODO(), resource, metav1.UpdateOptions{})
+		if err != nil {
+			scopedLog.WithError(err).Error("update eni status")
+			return err
 		}
 	}
 

@@ -101,7 +101,12 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 		return enis[i].CreationTimestamp.After(enis[j].CreationTimestamp.Time)
 	})
 	for i := 0; i < len(enis); i++ {
-		if enis[i].DeletionTimestamp != nil || enis[i].Status.VPCStatus == ccev2.VPCENIStatusDeleted {
+		eni := enis[i]
+		vpcStatus := eni.Status.VPCStatus
+		// Do not process the ENI which is being deleted or in attaching/detaching status.
+		// It is not useful to process it, because the IPs are not assigned to the ENI.
+		if eni.DeletionTimestamp != nil || vpcStatus == ccev2.VPCENIStatusAttaching ||
+			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted {
 			continue
 		}
 		err = fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
@@ -117,8 +122,9 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 // waitForENISynced wait for eni synced
 // this method should not lock the mutex of bceNode before calling
 func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
 		haveSynced := true
 		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
@@ -141,7 +147,6 @@ func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
 			})
 		return haveSynced, nil
 	})
-
 }
 
 // CreateInterface create a new ENI
@@ -276,10 +281,11 @@ func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLo
 	scopedLog = scopedLog.WithField("eniName", eniName).WithField("securityGroupIDs", resource.Spec.ENI.SecurityGroups)
 	eniID, err := n.createENI(ctx, newENI, scopedLog)
 	if err != nil {
-		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "failed to create ENI on nrs %s: %s", resource.Name, err)
+		n.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateENI", "failed to create ENI on node %s: %s", resource.Name, err)
 		return err
 	}
-
+	newENI.Spec.ENI.ID = eniID
+	newENI.Name = eniID
 	err = n.tryBorrowIPs(newENI)
 	if err != nil {
 		n.deleteENI(ctx, eniID, scopedLog)
@@ -288,8 +294,6 @@ func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLo
 
 	n.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateENISuccess", "create new ENI %s on nrs %s success", eniID, resource.Name)
 	scopedLog = scopedLog.WithField("eniID", eniID)
-	newENI.Spec.ENI.ID = eniID
-	newENI.Name = eniID
 
 	n.creatingEni.addCreatingENI(newENI.Name, time.Now())
 

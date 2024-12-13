@@ -140,6 +140,7 @@ func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, s
 					VpcID:            bccInfo.NicInfo.VpcId,
 					SubnetID:         bccInfo.NicInfo.SubnetId,
 					SecurityGroupIds: bccInfo.NicInfo.SecurityGroups,
+					MacAddress:       bccInfo.NicInfo.MacAddress,
 				},
 				RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 				InstallSourceBasedRouting: false,

@@ -128,10 +128,31 @@ func setupHostVeth(host *current.Interface, container *current.Interface, result
 		// dst happens to be the same as IP/net of link veth
 		// the host access container can retain the source IP of the host that
 		// use link scope instead of host scope
-		if err = AddLinkRoute(ipn, nil, veth); err != nil && !os.IsExist(err) {
+		if err = AddLinkRoute(ipn, nil, veth); err != nil {
+			if os.IsExist(err) {
+				isRouteExist := false
+				routeExist, errGetRoute := netlink.RouteGet(ipn.IP)
+				if errGetRoute == nil {
+					for _, route := range routeExist {
+						// Optimize the judgment conditions for the conflict of the destination
+						// address of the routing rules of the veth device, and solve the problem
+						// that the network of the newly created pod container is blocked due to
+						// the different destination veth devices of the routing rules when the
+						// nodes have routing rules of the same destination ip.
+						if route.LinkIndex == veth.Attrs().Index {
+							isRouteExist = true
+							break
+						}
+					}
+				}
+				if isRouteExist {
+					goto nextStep
+				}
+			}
 			return fmt.Errorf("failed to add route on host: %v", err)
 		}
 
+	nextStep:
 		hw, err := net.ParseMAC(container.Mac)
 		if err == nil {
 			// add permanent ARP entry for the gateway on the host veth

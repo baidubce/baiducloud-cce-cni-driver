@@ -337,7 +337,7 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 	}
 
 	operation, err = manager.directIPAllocator.NodeEndpoint(newCEP)
-	if err != nil {
+	if err != nil && !errors.IsNotFound(err) {
 		log.Errorf("failed to get node endpoint %v", err)
 		return err
 	}

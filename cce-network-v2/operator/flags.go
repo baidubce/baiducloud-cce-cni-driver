@@ -259,7 +259,7 @@ func init() {
 	flags.String(operatorOption.CCEK8sNamespace, "kube-system", fmt.Sprintf("Name of the Kubernetes namespace in which CCE is deployed in. Defaults to the same namespace defined in %s", option.K8sNamespaceName))
 	option.BindEnv(operatorOption.CCEK8sNamespace)
 
-	flags.String(operatorOption.CCEPodLabels, "app.cce.baidubce.com=cce-cni-v2-agent", "CCE Pod's labels. Used to detect if a CCE pod is running to remove the node taints where its running and set NetworkUnavailable to false")
+	flags.String(operatorOption.CCEPodLabels, "app.cce.baidubce.com=cce-network-agent", "CCE Pod's labels. Used to detect if a CCE pod is running to remove the node taints where its running and set NetworkUnavailable to false")
 	option.BindEnv(operatorOption.CCEPodLabels)
 
 	flags.Bool(operatorOption.RemoveNetResourceSetTaints, true, fmt.Sprintf("Remove node taint %q from Kubernetes nodes once CCE is up and running", pkgOption.Config.AgentNotReadyNodeTaintValue()))

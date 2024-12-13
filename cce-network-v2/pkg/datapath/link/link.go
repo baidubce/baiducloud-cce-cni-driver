@@ -25,7 +25,7 @@ func DetectDefaultRouteInterface() (netlink.Link, error) {
 	}
 
 	for _, v := range routeToDstIP {
-		if v.Dst == nil {
+		if v.Dst == nil || v.Dst.IP.IsUnspecified() {
 			l, err := netlink.LinkByIndex(v.LinkIndex)
 			if err != nil {
 				return nil, err

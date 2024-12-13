@@ -86,16 +86,17 @@ func (ec *eniLink) rename(isPrimary bool) error {
 		return fmt.Errorf("failed to list links: %v", err)
 	}
 
+	udevName := elink.Attrs().Name
 	// rename link to cce-eni-{index}
-	if !strings.HasPrefix(elink.Attrs().Name, ENINamePrefix) {
-		var eniName = fmt.Sprintf("%s-%d", ENINamePrefix, eniIndex)
+	if !strings.HasPrefix(udevName, ENINamePrefix) {
+		var cceName = fmt.Sprintf("%s-%d", ENINamePrefix, eniIndex)
 		if !isPrimary {
 			// find a free index for eni
 			for i := 0; i < maxENIIndex; i++ {
 				findENI := false
-				eniName = fmt.Sprintf("%s-%d", ENINamePrefix, i)
+				cceName = fmt.Sprintf("%s-%d", ENINamePrefix, i)
 				for _, link := range linkList {
-					if link.Attrs().Name == eniName {
+					if link.Attrs().Name == cceName {
 						findENI = true
 						break
 					}
@@ -107,11 +108,11 @@ func (ec *eniLink) rename(isPrimary bool) error {
 			}
 		}
 
-		err = ec.release.HostOS().DisableDHCPv6(eniName)
+		err = ec.release.HostOS().DisableDHCPv6(udevName, cceName)
 		if err != nil {
 			return err
 		}
-		ec.log.WithField("ifname", eniName).Info("generate ifcfg file")
+		ec.log.WithField("ifname", cceName).Info("generate ifcfg file")
 
 		// Devices can be renamed only when down
 		if err = netlink.LinkSetDown(elink); err != nil {
@@ -119,12 +120,12 @@ func (ec *eniLink) rename(isPrimary bool) error {
 		}
 
 		// Rename container device to respect args.IfName
-		if err := netlink.LinkSetName(elink, eniName); err != nil {
-			return fmt.Errorf("failed to rename device %q to %q: %v", elink.Attrs().Name, eniName, err)
+		if err := netlink.LinkSetName(elink, cceName); err != nil {
+			return fmt.Errorf("failed to rename device %q to %q: %v", elink.Attrs().Name, cceName, err)
 		}
-		elink, err = netlink.LinkByName(eniName)
+		elink, err = netlink.LinkByName(cceName)
 		if err != nil {
-			return fmt.Errorf("failed to find device %q: %v", eniName, err)
+			return fmt.Errorf("failed to find device %q: %v", cceName, err)
 		}
 	}
 

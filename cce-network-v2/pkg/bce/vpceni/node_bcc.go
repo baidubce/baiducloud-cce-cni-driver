@@ -73,13 +73,6 @@ func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) 
 		return n.bccInfo, err
 	}
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
-	// TODO delete this test code block after bcc instance eniQuota is fixed
-	// The tentative plan is for April 15th
-	{
-		if bccInfo.Spec == "ebc.la2.c256m1024.2d" {
-			bccInfo.EniQuota = 0
-		}
-	}
 
 	if bccInfo.EniQuota == 0 {
 		n.usePrimaryENIWithSecondaryMode = true

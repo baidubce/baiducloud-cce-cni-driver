@@ -292,6 +292,10 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		bootstrapStats.k8sInit.End(true)
 	}
 
+	// confugure and start ENIM
+	d.configureENIM()
+	d.startENIM()
+
 	// Configure IPAM without using the configuration yet.
 	d.configureIPAM()
 	d.startIPAM()
@@ -302,10 +306,6 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 	for key, ri := range d.rdmaIpam {
 		debug.RegisterStatusObject("rdmaIpam["+key+"]", ri)
 	}
-
-	// confugure and start ENIM
-	d.configureENIM()
-	d.startENIM()
 
 	// endpoints handler
 	d.startEndpointHanler()

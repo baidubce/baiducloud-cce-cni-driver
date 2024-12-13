@@ -210,27 +210,25 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		return nil
 	}
 
-	skipRefresh := es.mangeFinalizer(newObj)
-	if !skipRefresh {
-		if es.remoteSyncer.useENIMachine() {
-			scopeLog.Debug("start eni machine")
-			// start machine
-			machine := eniStateMachine{
-				es:       es,
-				ctx:      ctx,
-				resource: newObj,
-				scopeLog: scopeLog,
-			}
+	isNeedUpdate := es.mangeFinalizer(newObj)
+	if es.remoteSyncer.useENIMachine() && isNeedUpdate {
+		scopeLog.Debug("start eni machine")
+		// start machine
+		machine := eniStateMachine{
+			es:       es,
+			ctx:      ctx,
+			resource: newObj,
+			scopeLog: scopeLog,
+		}
 
-			err = machine.start()
-			eniStatus = &newObj.Status
-			_, isDelayError := err.(*cm.DelayEvent)
-			if isDelayError {
-				goto updateStatus
-			} else if err != nil {
-				scopeLog.WithError(err).Error("eni machine failed")
-				return err
-			}
+		err = machine.start()
+		eniStatus = &newObj.Status
+		_, isDelayError := err.(*cm.DelayEvent)
+		if isDelayError {
+			goto updateStatus
+		} else if err != nil {
+			scopeLog.WithError(err).Error("eni machine failed")
+			return err
 		}
 	}
 
@@ -254,10 +252,12 @@ updateStatus:
 }
 
 // mangeFinalizer except for node deletion, direct deletion of ENI objects is prohibited
-// return true: should delete this object
-func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) bool {
+// return true: should update this object (*ccev2.ENI)
+func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) (isNeedUpdate bool) {
+	isNeedUpdate = false
 	if newObj.DeletionTimestamp == nil && len(newObj.Finalizers) == 0 {
 		newObj.Finalizers = append(newObj.Finalizers, FinalizerENI)
+		isNeedUpdate = true
 	}
 	var finalizers []string
 
@@ -279,7 +279,7 @@ func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) bool {
 			goto removeFinalizer
 		}
 	}
-	return false
+	return
 
 removeFinalizer:
 	for _, f := range newObj.Finalizers {
@@ -290,7 +290,8 @@ removeFinalizer:
 	}
 	newObj.Finalizers = finalizers
 	log.Infof("remove finalizer from deletable ENI %s on NetResourceSet %s ", newObj.Name, newObj.Spec.NodeName)
-	return true
+	isNeedUpdate = true
+	return
 }
 
 func (es *eniSyncher) Delete(name string) error {
@@ -351,6 +352,20 @@ func (esm *eniStateMachine) start() error {
 				return updateError
 			}
 			esm.scopeLog.Info("update eni spec success")
+		} else {
+			_, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
+			if err != nil {
+				esm.scopeLog.Infof("eni state machine failed to get inuse eni(%s): %v", esm.resource.Name, err)
+				(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatusNone)
+				// update spec
+				_, updateError := esm.es.updater.Update(esm.resource)
+				if updateError != nil {
+					esm.scopeLog.WithError(updateError).Error("update eni spec failed")
+					return updateError
+				}
+				esm.scopeLog.Info("update eni spec success")
+				return nil
+			}
 		}
 	} else if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
 		// refresh status of ENI

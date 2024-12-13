@@ -51,14 +51,14 @@ type centos struct {
 // so we need to disable DHCPv6 for the interface.
 // NetworkManager will use this file to configure the interface in Redhat OS.
 // CentOS / Fedora / RHEL / Rocky Linux
-func (c *centos) DisableDHCPv6(ifname string) error {
+func (c *centos) DisableDHCPv6(udevName, cceName string) error {
 	// maybe not redhat os
 	if _, err := os.ReadDir(networkScriptsPath); err != nil {
 		return nil
 	}
 
-	path := fmt.Sprintf(sysconfigPath, ifname)
-	_, err := os.ReadFile(path)
+	path := fmt.Sprintf(sysconfigPath, udevName)
+	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			goto createNew
@@ -68,7 +68,12 @@ func (c *centos) DisableDHCPv6(ifname string) error {
 	return nil
 
 createNew:
-	newCfg := fmt.Sprintf(ifcfgTemplate, ifname)
+	cceNamePath := fmt.Sprintf(sysconfigPath, cceName)
+	_, err = os.Stat(cceNamePath)
+	if err == nil {
+		os.Remove(cceNamePath)
+	}
+	newCfg := fmt.Sprintf(ifcfgTemplate, udevName)
 	err = os.WriteFile(path, []byte(newCfg), 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write %s: %s", path, err)

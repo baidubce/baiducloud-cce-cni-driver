@@ -197,46 +197,46 @@ func (bs *BorrowedSubnet) update(subnet *ccev1.Subnet) {
 	bs.BorrowedAvailableIPsCount = subnet.Status.AvailableIPNum - bs.BorrowedIPsCount
 }
 
-func (bs *BorrowedSubnet) Borrow(enid string, ipNum int) (borrowedIPNum int) {
+func (bs *BorrowedSubnet) Borrow(eniID string, ipNum int) (borrowedIPNum int) {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 	if bs.BorrowedAvailableIPsCount < ipNum {
 		bs.logger().WithFields(logrus.Fields{
 			"task":      "borrow",
-			"eniID":     enid,
+			"eniID":     eniID,
 			"needIPNum": ipNum,
 			"tasks":     logfields.Json(bs.tasks),
 		}).Warning("subnet not enough available ips to borrow by eni")
 		return
 	}
 
-	return bs._forceBorrowForENI(enid, ipNum)
+	return bs._forceBorrowForENI(eniID, ipNum)
 }
 
 // forceBorrowForENI borrow ip for eni
 // return borrowed ip num
-func (bs *BorrowedSubnet) forceBorrowForENI(enid string, ipNum int) int {
+func (bs *BorrowedSubnet) forceBorrowForENI(eniID string, ipNum int) int {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 
-	return bs._forceBorrowForENI(enid, ipNum)
+	return bs._forceBorrowForENI(eniID, ipNum)
 }
 
-func (bs *BorrowedSubnet) _forceBorrowForENI(enid string, ipNum int) int {
+func (bs *BorrowedSubnet) _forceBorrowForENI(eniID string, ipNum int) int {
 	var (
 		eniBorrowedIPNum int
 		sbnAvailBorrowIP int
 	)
-	if task, ok := bs.tasks[enid]; ok {
+	if task, ok := bs.tasks[eniID]; ok {
 		bs.BorrowedIPsCount -= task.IPNum
 		sbnAvailBorrowIP = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
 		eniBorrowedIPNum = math.IntMin(sbnAvailBorrowIP, ipNum)
 		task.IPNum = eniBorrowedIPNum
-		bs.tasks[enid] = task
+		bs.tasks[eniID] = task
 	} else {
 		sbnAvailBorrowIP = bs.Status.AvailableIPNum - bs.BorrowedIPsCount
 		eniBorrowedIPNum = math.IntMin(sbnAvailBorrowIP, ipNum)
-		bs.tasks[enid] = IPBorrowTask{SubnetId: bs.SubnetId, EniID: enid, IPNum: eniBorrowedIPNum}
+		bs.tasks[eniID] = IPBorrowTask{SubnetId: bs.SubnetId, EniID: eniID, IPNum: eniBorrowedIPNum}
 	}
 
 	bs.BorrowedIPsCount += eniBorrowedIPNum
@@ -245,7 +245,7 @@ func (bs *BorrowedSubnet) _forceBorrowForENI(enid string, ipNum int) int {
 	if eniBorrowedIPNum < ipNum {
 		bs.logger().WithFields(logrus.Fields{
 			"task":                            "forceBorrowForENI",
-			"eniID":                           "enid",
+			"eniID":                           eniID,
 			"sbnID":                           bs.SubnetId,
 			"needIPNum":                       ipNum,
 			"eniBorrowedIPNum":                eniBorrowedIPNum,
@@ -258,10 +258,10 @@ func (bs *BorrowedSubnet) _forceBorrowForENI(enid string, ipNum int) int {
 	return eniBorrowedIPNum
 }
 
-func (bs *BorrowedSubnet) Done(enid string, ipNum int) {
+func (bs *BorrowedSubnet) Done(eniID string, ipNum int) {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
-	if task, ok := bs.tasks[enid]; ok {
+	if task, ok := bs.tasks[eniID]; ok {
 		if task.IPNum < ipNum {
 			ipNum = task.IPNum
 			task.IPNum = 0

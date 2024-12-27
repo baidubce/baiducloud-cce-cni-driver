@@ -76,6 +76,7 @@ const (
 
 	retryDuration = 500 * time.Millisecond
 	retryTimeout  = 15 * time.Second
+	retryDelay    = 15 * time.Second
 
 	vpcENISubsys = "vpc-eni-node-allocator"
 )
@@ -191,10 +192,14 @@ func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
 	n.limiterLock.Unlock()
 
 	ctx := logfields.NewContext()
+	var instanceType string
+	if n.k8sObj.Spec.ENI != nil {
+		instanceType = n.k8sObj.Spec.ENI.InstanceType
+	}
 	scopedLog := n.log.WithFields(logrus.Fields{
 		"nodeName":     n.k8sObj.Name,
 		"method":       "getENIQuota",
-		"instanceType": n.k8sObj.Spec.ENI.InstanceType,
+		"instanceType": instanceType,
 	}).WithContext(ctx)
 
 	// fast path to claculate eni quota when operaor has been restarted
@@ -540,19 +545,26 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 	inums, msg, err := n.real.createInterface(ctx, allocation, scopedLog)
 	n.creatingEni.add(-1)
 
-	preAllocateNum := math.IntMin(eniQuota.GetMaxENI()-1, n.k8sObj.Spec.ENI.PreAllocateENI)
-	preAllocateNum = preAllocateNum - availableENICount - 1
-	for i := 0; i < preAllocateNum; i++ {
+	preAllocateENINum := math.IntMin(eniQuota.GetMaxENI()-1, n.k8sObj.Spec.ENI.PreAllocateENI)
+	preAllocateENINum = preAllocateENINum - availableENICount - 1
+	for i := 0; i < preAllocateENINum; i++ {
 		inums++
 		go func() {
-			n.creatingEni.add(1)
-			_, _, e := n.real.createInterface(ctx, allocation, scopedLog)
-			n.creatingEni.add(-1)
-			if e == nil {
-				scopedLog.Infof("create addition interface success")
-				return
+			retry := 0
+			for retry < preAllocateENINum {
+				n.creatingEni.add(1)
+				_, _, e := n.real.createInterface(ctx, allocation, scopedLog)
+				n.creatingEni.add(-1)
+				if e == nil {
+					scopedLog.Infof("create addition interface success")
+					return
+				}
+				scopedLog.WithError(e).Errorf("create addition interface failed, retry later for %ds(%d/%d)", retryDelay, retry+1, preAllocateENINum)
+				retry++
+				// attaching ENI is need to wait serveral seconds (<15s) for the ENI to be attached,
+				// so we can retry preAllocateENINum times for every retryDelay(15s) seconds later.
+				time.Sleep(retryDelay)
 			}
-			scopedLog.Errorf("create addition interface failed, err: %s", e)
 		}()
 
 	}

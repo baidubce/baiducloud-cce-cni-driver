@@ -521,7 +521,7 @@ func (n *NetResource) createInterface(ctx context.Context, a *AllocationAction) 
 		// not track as interface allocation failure. There is a
 		// separate metric to track nodes running at capacity.
 		n.mutex.Lock()
-		if time.Since(n.lastMaxAdapterWarning) > warningInterval {
+		if !n.lastMaxAdapterWarning.IsZero() && time.Since(n.lastMaxAdapterWarning) > warningInterval {
 			n.loggerLocked().Warning("Instance is out of interfaces")
 			n.lastMaxAdapterWarning = time.Now()
 		}

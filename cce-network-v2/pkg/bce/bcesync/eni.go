@@ -90,7 +90,9 @@ func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+	// Remove "if types == ccev2.ENIForHPC || types == ccev2.ENIForERI return nil",
+	// because we need to support the case of RDMA ENI already have RDMA IPs
+	if types == ccev2.ENIForBBC {
 		return nil
 	}
 
@@ -110,7 +112,9 @@ func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	if types == ccev2.ENIForBBC || types == ccev2.ENIForHPC || types == ccev2.ENIForERI {
+	// Remove "if types == ccev2.ENIForHPC || types == ccev2.ENIForERI return nil",
+	// because we need to support the case of RDMA ENI already have RDMA IPs
+	if types == ccev2.ENIForBBC {
 		return nil
 	}
 
@@ -326,6 +330,13 @@ type eniStateMachine struct {
 
 // Start state machine flow
 func (esm *eniStateMachine) start() error {
+	// ENI for RDMA (ccev2.ENIForHPC or ccev2.ENIForERI) need do nothing, so return nil directly.
+	// esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name) can not stat ENI for RDMA, it will return
+	// error like [Code: EniNotFoundException; Message: eni:eni-tzjatpp7gbh6 resource not exist;
+	// RequestId: 148ca1d1-174f-494a-8192-5bae2a3bf0c7]". So we need to check ENI type first.
+	if esm.resource.Spec.Type == ccev2.ENIForHPC || esm.resource.Spec.Type == ccev2.ENIForERI {
+		return nil
+	}
 	var err error
 	if esm.resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
 		if len(esm.resource.Spec.PrivateIPSet) == 0 {

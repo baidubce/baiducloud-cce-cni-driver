@@ -262,14 +262,14 @@ func (n *NetResourceSetManager) InstancesAPIIsReady() bool {
 }
 
 // GetNames returns the list of all node names
-func (n *NetResourceSetManager) GetNames() (allNodeNames []string) {
+func (n *NetResourceSetManager) GetNames() (allNetResourceSetNames []string) {
 	n.mutex.RLock()
 	defer n.mutex.RUnlock()
 
-	allNodeNames = make([]string, 0, len(n.netResources))
+	allNetResourceSetNames = make([]string, 0, len(n.netResources))
 
 	for name := range n.netResources {
-		allNodeNames = append(allNodeNames, name)
+		allNetResourceSetNames = append(allNetResourceSetNames, name)
 	}
 
 	return
@@ -291,11 +291,12 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 	}()
 	if !ok {
 		netResource = &NetResource{
-			name:                resource.Name,
-			manager:             n,
-			ipsMarkedForRelease: make(map[string]time.Time),
-			ipReleaseStatus:     make(map[string]string),
-			logLimiter:          logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
+			name:                  resource.Name,
+			manager:               n,
+			ipsMarkedForRelease:   make(map[string]time.Time),
+			ipReleaseStatus:       make(map[string]string),
+			logLimiter:            logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
+			lastMaxAdapterWarning: time.Now(),
 		}
 
 		netResource.ops = n.instancesAPI.CreateNetResource(resource, netResource)

@@ -74,7 +74,12 @@ func (m *rdmaInstancesManager) ForeachInstance(instanceID, nodeName string, fn i
 		return fmt.Errorf("list ENIs failed: %w", err)
 	}
 	for i := 0; i < len(enis); i++ {
-		if enis[i].DeletionTimestamp != nil || enis[i].Status.VPCStatus == ccev2.VPCENIStatusDeleted {
+		eni := enis[i]
+		vpcStatus := eni.Status.VPCStatus
+		// Do not process the RDMA ENI which is being deleted or in attaching/detaching status.
+		// It is not useful to process it, because the IPs are not assigned to the RDMA ENI.
+		if enis[i].DeletionTimestamp != nil || vpcStatus == ccev2.VPCENIStatusAttaching ||
+			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted {
 			continue
 		}
 		fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
@@ -87,8 +92,9 @@ func (m *rdmaInstancesManager) ForeachInstance(instanceID, nodeName string, fn i
 // waitForENISynced wait for eni synced
 // this method should not lock the mutex of bceNode before calling
 func (n *bceRDMANetResourceSet) waitForENISynced(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
 		haveSynced := true
 		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
@@ -111,5 +117,4 @@ func (n *bceRDMANetResourceSet) waitForENISynced(ctx context.Context) {
 			})
 		return haveSynced, nil
 	})
-
 }

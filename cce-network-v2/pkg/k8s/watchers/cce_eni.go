@@ -60,9 +60,12 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 	// Select only the ENI of the local node,
 	// contains Ethernet NetResourceSet and RDMA NetResourceSet objects
 	values := []string{nodeTypes.GetName()}
-	rii, _ := bceutils.GetRdmaIFsInfo(nodeTypes.GetName(), nil)
+	rii, err := bceutils.GetRdmaIFsInfo(nodeTypes.GetName(), nil)
+	if err != nil {
+		panic(fmt.Errorf("failed to get rdma ifs info: %v", err))
+	}
 	for _, v := range rii {
-		values = append(values, v.NetResourceSetName)
+		values = append(values, v.LabelSelectorValue)
 	}
 	requirement := metav1.LabelSelectorRequirement{
 		Key:      k8s.LabelNodeName,
@@ -73,7 +76,10 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},
 	}
 	// Select only the ENI of the local node
-	selector, _ := metav1.LabelSelectorAsSelector(labelSelector)
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
 	optionsModifier := func(options *metav1.ListOptions) {
 		options.LabelSelector = selector.String()
 	}

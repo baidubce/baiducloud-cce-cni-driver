@@ -31,6 +31,11 @@ const (
 	OverlayRDMA                 string = string(ccev2.ENIForERI) // Overlay RDMA (ERI)
 	PodResourceName             string = "rdma"
 	rdmaEndpointMiddleSeparator string = "-rdma-"
+	// a name's max length is 253 and a labelSelectorValue's max length is 63 in kubernetes
+	// nameValueMaxLength is a name's max length
+	nameValueMaxLength int = 253
+	// labelValueMaxLength is a label's max length
+	labelValueMaxLength int = 63
 )
 
 var (
@@ -40,21 +45,63 @@ var (
 		OverlayRDMA:  {},
 		UnderlayRDMA: {},
 	}
+
+	defaultMetaClient = metadata.NewClient()
 )
 
 type RdmaIfInfo struct {
 	MacAddress         string
 	NetResourceSetName string
+	LabelSelectorValue string
 	VifFeatures        string
 }
 
-func generateNetResourceSetName(nodeName, macAddress, vifFeatures string) (netResourceSetName string) {
+func generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeatures string) (netResourceSetName string) {
+	// a name's max length is 253 in kubernetes, so if nodeName's length is more than the max length like this: 253 - len(string("-fa2700078302-elasticrdma")),
+	// we need to use node's InstanceID as node's identification to generate NetResourceSetName
+	var nodeIdentification string
+	lengthLimit := nameValueMaxLength - len(string("-fa2700078302-elasticrdma"))
+	// NetResourceSetName use nodeName for nodeIdentification if lengthLimit < nameValueMaxLength
+	// if lengthLimit >= nameValueMaxLength, use node's InstanceID for nodeIdentification
+	if len(nodeName) > lengthLimit {
+		// cce-ujgjc8tg-lca6hnyh-fa2700078302-rdmaroce for HPC or cce-ujgjc8tg-lca6hnyh-fa2700078302-elasticrdma for ERI
+		nodeIdentification = nodeInstanceID
+	} else {
+		// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+		nodeIdentification = nodeName
+	}
+
 	macStr1 := strings.Replace(macAddress, ":", "", -1)
 	macStr2 := strings.Replace(macStr1, "-", "", -1)
 	vifFeaturesStr := strings.Replace(vifFeatures, "_", "", -1)
-	netResourceSetName = fmt.Sprintf("%s-%s-%s", nodeName, macStr2, vifFeaturesStr)
-	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	netResourceSetName = fmt.Sprintf("%s-%s-%s", nodeIdentification, macStr2, vifFeaturesStr)
+	// cce-ujgjc8tg-lca6hnyh-fa2700078302-rdmaroce for HPC or cce-ujgjc8tg-lca6hnyh-fa2700078302-elasticrdma for ERI
+	// or 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
 	return netResourceSetName
+}
+
+func generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
+	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
+	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
+	var labelSelectorIdentification string
+	lengthLimit := labelValueMaxLength - len(string("-fa2700078302-elasticrdma"))
+	// LabelSelectorValue use nodeName for nodeIdentification if lengthLimit < labelValueMaxLength
+	// if lengthLimit >= labelValueMaxLength, use node's InstanceID for nodeIdentification
+	if len(nodeName) > lengthLimit {
+		// cce-ujgjc8tg-lca6hnyh-fa2700078302-rdmaroce for HPC or cce-ujgjc8tg-lca6hnyh-fa2700078302-elasticrdma for ERI
+		labelSelectorIdentification = nodeInstanceID
+	} else {
+		// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+		labelSelectorIdentification = nodeName
+	}
+
+	macStr1 := strings.Replace(macAddress, ":", "", -1)
+	macStr2 := strings.Replace(macStr1, "-", "", -1)
+	vifFeaturesStr := strings.Replace(vifFeatures, "_", "", -1)
+	labelSelectorValue = fmt.Sprintf("%s-%s-%s", labelSelectorIdentification, macStr2, vifFeaturesStr)
+	// cce-ujgjc8tg-lca6hnyh-fa2700078302-rdmaroce for HPC or cce-ujgjc8tg-lca6hnyh-fa2700078302-elasticrdma for ERI
+	// or 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	return labelSelectorValue
 }
 
 func getNodeNameFromRdmaNetResourceSetName(netResourceSetName, rdmaTag string) (nodeName string) {
@@ -66,19 +113,31 @@ func getNodeNameFromRdmaNetResourceSetName(netResourceSetName, rdmaTag string) (
 	return nodeName
 }
 
-func GetNodeNameFromNetResourceSetName(netResourceSetName string) (nodeName string) {
+func GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID string) (nodeName string) {
 	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	var nodeIdentification string
 	underlayRDMA := strings.Replace(string(ccev2.ENIForHPC), "_", "", -1)
 	overlayRDMA := strings.Replace(string(ccev2.ENIForERI), "_", "", -1)
 	if strings.Contains(netResourceSetName, underlayRDMA) {
-		nodeName = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, underlayRDMA)
+		nodeIdentification = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, underlayRDMA)
 	} else if strings.Contains(netResourceSetName, overlayRDMA) {
-		nodeName = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, overlayRDMA)
+		nodeIdentification = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, overlayRDMA)
 	} else {
-		nodeName = netResourceSetName
+		nodeIdentification = netResourceSetName
+	}
+	if nodeIdentification == nodeInstanceID {
+		nodeName = ownerReferenceNodeName
+	} else {
+		nodeName = nodeIdentification
 	}
 
 	return nodeName
+}
+
+func GetLabelSelectorValueFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
+	nodeName := GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID)
+	labelSelectorValue = generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
+	return labelSelectorValue
 }
 
 func generateCCERdmaEndpointName(podName, macAddress string) (endpointName string) {
@@ -99,13 +158,14 @@ func getPrimaryMacFromCCERdmaEndpointName(cepName string) (macAddress string, er
 
 func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIfInfo, error) {
 	var ris = map[string]RdmaIfInfo{}
-	var defaultMetaClient = metadata.NewClient()
 
 	// list network interface macs
 	macList, macErr := defaultMetaClient.ListMacs()
 	if macErr != nil {
 		if scopedLog != nil {
 			scopedLog.WithError(macErr).Errorf("list mac failed")
+		} else {
+			log.WithError(macErr).Errorf("list mac failed")
 		}
 		return ris, macErr
 	}
@@ -116,13 +176,27 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 		if vifErr != nil {
 			if scopedLog != nil {
 				scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
+			} else {
+				log.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
 			}
 			continue
 		}
 		if _, ok := roceVFs[vifFeatures]; ok {
 			var rdmaIfInfo RdmaIfInfo
+			nodeInstanceID, metaAPIErr := defaultMetaClient.GetInstanceID()
+			if metaAPIErr != nil {
+				if scopedLog != nil {
+					scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
+				} else {
+					log.WithError(macErr).Errorf("get node InstanceID from meta-data api failed")
+				}
+				return ris, metaAPIErr
+			}
+			netResourceSetName := generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeatures)
+			labelSelectorValue := generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
 			rdmaIfInfo.MacAddress = macAddress
-			rdmaIfInfo.NetResourceSetName = generateNetResourceSetName(nodeName, macAddress, vifFeatures)
+			rdmaIfInfo.NetResourceSetName = netResourceSetName
+			rdmaIfInfo.LabelSelectorValue = labelSelectorValue
 			rdmaIfInfo.VifFeatures = vifFeatures
 			ris[macAddress] = rdmaIfInfo
 		}
@@ -133,6 +207,12 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 
 func IsCCERdmaEndpointName(cepName string) bool {
 	return strings.Contains(cepName, rdmaEndpointMiddleSeparator)
+}
+
+func IsCCERdmaNetRourceSetName(netResourceSetName string) bool {
+	underlayRDMA := strings.Replace(string(ccev2.ENIForHPC), "_", "", -1)
+	overlayRDMA := strings.Replace(string(ccev2.ENIForERI), "_", "", -1)
+	return strings.Contains(netResourceSetName, underlayRDMA) || strings.Contains(netResourceSetName, overlayRDMA)
 }
 
 func IsThisMasterMacCCERdmaEndpointName(cepName, masterMac string) bool {

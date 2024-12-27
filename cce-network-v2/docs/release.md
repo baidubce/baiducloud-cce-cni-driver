@@ -7,6 +7,15 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 
+#### 2.12.11 [20241227]
+1. [Bug] 修复 VPC-ENI 模式下，弹性网卡预挂载 eni-pre-allocate-num 配置不生效的问题
+2. [Bug] 修改开启 RDMA 场景下 RDMA ENI 对象本地缓存过期状态相关逻辑，解决因 resync nrs timeout 而导致的新增 RDMA 节点初始化慢，大规模集群扩容速度慢的问题
+3. [Optimize] 修改开启 RDMA 场景下 RDMA NetResourceSet 对象拼装规则，以及 ENI 对象的 LabelSelectorValue 的拼装规则，防止 RDMA NetResourceSet 名字超过限定值 253，防止 ENI 对象的 LabelSelectorValue 超过限定值 63，解决因 Node Name 超长而导致的 cce-network-agent panic 问题
+4. [Optimize] 修改 RDMA ENI 对象更新逻辑，解决因 NodeName 变更时 ENI 对象未正常销毁而导致的 RDMA ENI 对象无法被更新而导致的节点无法就绪的问题
+5. [Optimize] 优化开启 RDMA 模式时的 RDMA ENI 状态机处理逻辑，支持非终态 RDMA ENI 的处理流程，避免非终态状态 RDMA ENI 卡住节点NotReady 无法恢复的问题
+6. [Optimize] 优化开启 RDMA 模式时，对 HPC OpenAPI 的请求逻辑，大幅降低请求频率，降低大规模集群下的 OpenAPI 请求压力
+7. [Bug] 修复创建 Node Interface 对象时因初始值未判断而导致的出现 Instance is out of interfaces 导致节点就绪慢的问题
+
 #### 2.12.10 [20241213]
 1. [Optimize] 优化 VPC-ENI 模式下的 veth 单机路由规则目的地址存在冲突的判断条件，解决残留本地路由规则时创建的 Pod 容器网络不通的问题
 2. [Optimize] 禁用 VPC-ENI 模式下的 IPv6 DHCP 时使用的网卡名修改为udev生成的原始名字，避免生成的网卡配置文件导致虚拟机重启时 network.service 服务启动失败

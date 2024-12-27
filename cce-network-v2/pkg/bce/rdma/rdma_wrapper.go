@@ -47,7 +47,7 @@ type rdmaNetResourceSetWrapper struct {
 	*bceRDMANetResourceSet
 
 	// rdmaeni is the eni of the node
-	rdmaeniName string
+	rdmaENIName string
 }
 
 func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResourceSetWrapper {
@@ -86,42 +86,96 @@ func (n *rdmaNetResourceSetWrapper) findMatchedEniByMac(ctx context.Context, iaa
 // ensureRdmaENI means create a eni object for rdma interface
 // rdma interface has only one eni, so we use rdma interface id as eni name
 func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
-	if n.rdmaeniName != "" {
-		eni, err := n.manager.eniLister.Get(n.rdmaeniName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get rdma eni %s from lister", n.rdmaeniName)
+	if n.rdmaENIName != "" {
+		eni, err := n.manager.eniLister.Get(n.rdmaENIName)
+		if errors.IsNotFound(err) {
+			goto forceGetFromIaaS
 		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get rdma eni %s from lister", n.rdmaENIName)
+		}
+
+		isNeedUpdate := false
 		if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-			_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(context.TODO(), eni, metav1.UpdateOptions{})
-			if err != nil {
-				return nil, fmt.Errorf("failed to update %s ENI status: %w", n.rdmaeniName, err)
+			isNeedUpdate = true
+		}
+		if bceutils.IsCCERdmaNetRourceSetName(eni.Labels[k8s.LabelNodeName]) &&
+			eni.Labels[k8s.LabelNodeName] != n.k8sObj.Name {
+			var ownerReferenceNodeName string
+			or := n.k8sObj.GetOwnerReferences()
+			for _, ref := range or {
+				if ref.Kind == "Node" {
+					ownerReferenceNodeName = ref.Name
+					break
+				}
 			}
-			n.log.Infof("update %s ENI status successed", n.rdmaeniName)
+			labelSelectorValue := bceutils.GetLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
+				ownerReferenceNodeName, n.k8sObj.Spec.InstanceID, eni.Spec.MacAddress, string(eni.Spec.Type))
+			eni.Labels[k8s.LabelNodeName] = labelSelectorValue
+			isNeedUpdate = true
+		}
+
+		if isNeedUpdate {
+			err = n.updateENIWithPoll(context.TODO(), eni, func(eni *ccev2.ENI) *ccev2.ENI {
+				// do nothing
+				return eni
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to update %s ENI %s status: %w", eni.Spec.Type, eni.Name, err)
+			}
+			n.log.Infof("update %s ENI %s status successed", eni.Spec.Type, eni.Name)
 		}
 		return eni, nil
 	}
 
+forceGetFromIaaS:
 	// the hpc or eri api do not use vpcID, subnetID and zoneName
 	vpcID := n.k8sObj.Spec.ENI.VpcID
 	// the macAddress and vifFeatures is decided by the NetResourceSet's annotation
 	macAddress := n.bceRDMANetResourceSet.k8sObj.Annotations[k8s.AnnotationRDMAInfoMacAddress]
 	vifFeatures := n.bceRDMANetResourceSet.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
 
-	iaasClient := n.manager.getIaaSClient(vifFeatures)
-	rdmaEni, err := n.findMatchedEniByMac(context.Background(), iaasClient, vpcID, n.instanceID, vifFeatures, macAddress)
-	if err != nil {
-		n.log.WithError(err).Errorf("failed to get instance %s eni", vifFeatures)
-		return nil, err
+	var rdmaEniId string
+	requirement := metav1.LabelSelectorRequirement{
+		Key:      k8s.LabelNodeName,
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   []string{n.k8sObj.Name},
 	}
-	n.log.WithField("rdmaeni", logfields.Repr(rdmaEni)).Debugf("get instance %s eni success", vifFeatures)
+	labelSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},
+	}
+	// Select only the ENI of the local node
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
+	k8sRdmaEnis, err := n.manager.eniLister.List(selector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list enis: %w", err)
+	}
+	for _, rdmaEni := range k8sRdmaEnis {
+		// only one RDMA ENI per RDMA NetworkResourceSet
+		rdmaEniId = rdmaEni.Spec.ID
+	}
+	var rdmaEni *client.EniResult
+	iaasClient := n.manager.getIaaSClient(vifFeatures)
+	if rdmaEniId == "" {
+		rdmaEni, err = n.findMatchedEniByMac(context.Background(), iaasClient, vpcID, n.instanceID, vifFeatures, macAddress)
+		if err != nil {
+			n.log.WithError(err).Errorf("failed to get instance %s eni", vifFeatures)
+			return nil, err
+		}
+		n.log.WithField("rdmaeni", logfields.Repr(rdmaEni)).Debugf("get instance %s eni success", vifFeatures)
+		rdmaEniId = rdmaEni.Id
+	}
 
-	eni, err := n.manager.eniLister.Get(rdmaEni.Id)
+	var ctx = context.Background()
+	eni, err := n.manager.eniLister.Get(rdmaEniId)
 	if errors.IsNotFound(err) {
 		// the hpc or eri do not use ensure subnet object
 
 		var (
 			ipv4IPSet, ipv6IPSet []*models.PrivateIP
-			ctx                  = context.Background()
 		)
 
 		for _, v := range rdmaEni.PrivateIpSet {
@@ -164,7 +218,7 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 					InstanceID:       n.instanceID,
 					PrivateIPSet:     ipv4IPSet,
 					IPV6PrivateIPSet: ipv6IPSet,
-					MacAddress:       rdmaEni.MacAddress,
+					MacAddress:       macAddress,
 				},
 			},
 			Status: ccev2.ENIStatus{},
@@ -173,19 +227,28 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create %s ENI: %w", vifFeatures, err)
 		}
-		n.log.Infof("create %s ENI resource successed", vifFeatures)
+		n.log.Infof("create %s ENI %s resource successed", vifFeatures, eni.Name)
 		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
 		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to update %s ENI status: %w", vifFeatures, err)
+			return nil, fmt.Errorf("failed to update %s ENI %s status: %w", vifFeatures, eni.Name, err)
 		}
-		n.log.Infof("update %s ENI status successed", vifFeatures)
+		n.log.Infof("update %s ENI %s status successed", vifFeatures, eni.Name)
 	} else if err != nil {
-		n.log.Errorf("failed to get %s ENI resource: %v", vifFeatures, err)
+		n.log.Errorf("failed to get %s ENI %s resource: %v", vifFeatures, eni.Name, err)
 		return nil, err
+	} else {
+		err = n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
+			// do nothing
+			return eni
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to update %s ENI %s status: %w", vifFeatures, eni.Name, err)
+		}
+		n.log.Infof("update %s ENI %s status successed", vifFeatures, eni.Name)
 	}
-	n.log.Debugf("got %s ENI resource successed", vifFeatures)
-	n.rdmaeniName = eni.Name
+	n.log.Debugf("got %s ENI %s resource successed", vifFeatures, eni.Name)
+	n.rdmaENIName = eni.Name
 	return eni, err
 }
 
@@ -217,7 +280,16 @@ func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (Rdm
 	if client == nil {
 		scopeLog.Fatal("K8s client is nil")
 	}
-	nodeName := bceutils.GetNodeNameFromNetResourceSetName(n.k8sObj.Name)
+
+	var ownerReferenceNodeName string
+	or := n.k8sObj.GetOwnerReferences()
+	for _, ref := range or {
+		if ref.Kind == "Node" {
+			ownerReferenceNodeName = ref.Name
+			break
+		}
+	}
+	nodeName := bceutils.GetNodeNameFromNetResourceSetName(n.k8sObj.Name, ownerReferenceNodeName, n.k8sObj.InstanceID())
 	k8sNode, err := client.Informers.Core().V1().Nodes().Lister().Get(nodeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get k8s node %s: %v", n.k8sObj.Name, err)

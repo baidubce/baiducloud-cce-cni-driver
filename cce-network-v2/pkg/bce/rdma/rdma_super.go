@@ -849,6 +849,8 @@ func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 			return false, fmt.Errorf("get eni %s failed: %v", eni.Name, ierr)
 		}
 		eni = eni.DeepCopy()
+		oldversion = eni.Spec.VPCVersion
+		eni.Spec.VPCVersion = eni.Spec.VPCVersion + 1
 		eni = refresh(eni)
 
 		// update eni

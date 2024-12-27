@@ -554,12 +554,12 @@ func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResour
 	// update old nrs
 	if nodeResource.Spec.ENI.UseMode != string(ccev2.ENIUseModePrimaryIP) {
 		nodeResource.Spec.ENI.BurstableMehrfachENI = burstableMehrfachENI
-		nodeResource.Spec.IPAM.PreAllocate = preAllocate
+		nodeResource.Spec.ENI.PreAllocateENI = preAllocateENI
 
 		if burstableMehrfachENI == 0 {
 			nodeResource.Spec.IPAM.MinAllocate = minAllocate
+			nodeResource.Spec.IPAM.PreAllocate = preAllocate
 			nodeResource.Spec.IPAM.MaxAboveWatermark = maxAboveWatermark
-			nodeResource.Spec.ENI.PreAllocateENI = preAllocateENI
 		}
 
 		podsNum := k8sNode.Status.Capacity[k8sTypes.ResourcePods]

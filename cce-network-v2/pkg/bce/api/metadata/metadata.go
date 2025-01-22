@@ -42,6 +42,7 @@ var (
 	InstanceTypeExBCC     InstanceTypeEx = "bcc"
 	InstanceTypeExEBC     InstanceTypeEx = "ebc"
 	InstanceTypeExEHC     InstanceTypeEx = "ehc"
+	InstanceTypeExHPAS    InstanceTypeEx = "hpas"
 	InstanceTypeExUnknown InstanceTypeEx = "unknown"
 
 	IPTypePrimary   = "primary"
@@ -61,6 +62,7 @@ type Interface interface {
 	GetAvailabilityZone() (string, error)
 	GetRegion() (string, error)
 	GetVPCID() (string, error)
+	GetSourceType() (string, error)
 	GetSubnetID() (string, error)
 	GetLinkGateway(string, string) (string, error)
 	GetLinkMask(string, string) (string, error)
@@ -203,6 +205,15 @@ func (c *Client) GetVPCID() (string, error) {
 	}
 	VPCID := strings.TrimSpace(string(body))
 	return VPCID, nil
+}
+
+func (c *Client) GetSourceType() (string, error) {
+	body, err := c.sendRequest(metadataBasePath + "source")
+	if err != nil {
+		return "", err
+	}
+	source := strings.TrimSpace(string(body))
+	return source, nil
 }
 
 func (c *Client) GetSubnetID() (string, error) {

@@ -708,4 +708,8 @@ func (fc *flowControlClient) GetENIQuota(ctx context.Context, instanceID string)
 	return ret, err
 }
 
+func (fc *flowControlClient) HPASWrapper(ctx context.Context) error {
+	return fc.client.HPASWrapper(ctx)
+}
+
 var _ Interface = &flowControlClient{}

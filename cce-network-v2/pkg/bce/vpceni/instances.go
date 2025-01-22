@@ -72,6 +72,10 @@ func newInstancesManager(
 	}
 }
 
+func (m *InstancesManager) HPASWrapper() error {
+	return m.bceclient.HPASWrapper(context.Background())
+}
+
 // CreateNetResource is called when the IPAM layer has learned about a new
 // node which requires IPAM services. This function must return a
 // NodeOperations implementation which will render IPAM services to the

@@ -33,6 +33,7 @@ import (
 
 	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/hpas"
 )
 
 const (
@@ -600,4 +601,11 @@ func (c *Client) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCMod
 		return nil, err
 	}
 	return &resp.VPC, nil
+}
+
+func (c *Client) HPASWrapper(ctx context.Context) error {
+	//c.eniClient.WithHeader
+	c.bccClient.Signer = hpas.NewHPASSignWrapper(c.bbcClient.Signer)
+	c.eniClient.Signer = hpas.NewHPASSignWrapper(c.eniClient.Signer)
+	return nil
 }

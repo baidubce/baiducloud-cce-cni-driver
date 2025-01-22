@@ -174,6 +174,9 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 			bceNrs.real = newBBCNetworkResourceSet(bceNrs)
 		case string(metadata.InstanceTypeExEBC), string(metadata.InstanceTypeExEHC):
 			bceNrs.real = newEBCNetworkResourceSet(newBCCNetworkResourceSet(bceNrs))
+		case string(metadata.InstanceTypeExHPAS):
+			manager.HPASWrapper()
+			bceNrs.real = newHPASNetworkResourceSet(newBCCNetworkResourceSet(bceNrs))
 		default:
 			bceNrs.real = newBCCNetworkResourceSet(bceNrs)
 		}

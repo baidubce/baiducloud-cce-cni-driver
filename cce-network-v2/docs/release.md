@@ -6,6 +6,11 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 1. 支持 Burstable ENI 池，有效避免子网 IP 资源紧张时，节点 ENI 池资源不足的问题。
 2. 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步。
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
+4. 增加对 HPAS 实例的支持
+
+#### 2.12.12 [20250121]
+1. [Bug] 修复 NetResourceConfigSet 对应的 ExtCniPlugins 字段修改不生效问题，支持节点维度的自定义自定义插件 ExtCniPlugins 字段配置
+2. [Feature] 增加对 HPAS 实例的支持
 
 #### 2.12.11 [20241227]
 1. [Bug] 修复 VPC-ENI 模式下，弹性网卡预挂载 eni-pre-allocate-num 配置不生效的问题

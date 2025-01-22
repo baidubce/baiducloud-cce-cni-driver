@@ -59,573 +59,587 @@ func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 }
 
 // AddPrivateIP mocks base method.
-func (m *MockInterface) AddPrivateIP(arg0 context.Context, arg1, arg2 string, arg3 bool) (string, error) {
+func (m *MockInterface) AddPrivateIP(ctx context.Context, privateIP, eniID string, isIpv6 bool) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddPrivateIP", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "AddPrivateIP", ctx, privateIP, eniID, isIpv6)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // AddPrivateIP indicates an expected call of AddPrivateIP.
-func (mr *MockInterfaceMockRecorder) AddPrivateIP(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) AddPrivateIP(ctx, privateIP, eniID, isIpv6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddPrivateIP", reflect.TypeOf((*MockInterface)(nil).AddPrivateIP), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddPrivateIP", reflect.TypeOf((*MockInterface)(nil).AddPrivateIP), ctx, privateIP, eniID, isIpv6)
 }
 
 // AttachENI mocks base method.
-func (m *MockInterface) AttachENI(arg0 context.Context, arg1 *eni.EniInstance) error {
+func (m *MockInterface) AttachENI(ctx context.Context, args *eni.EniInstance) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AttachENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "AttachENI", ctx, args)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // AttachENI indicates an expected call of AttachENI.
-func (mr *MockInterfaceMockRecorder) AttachENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) AttachENI(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachENI", reflect.TypeOf((*MockInterface)(nil).AttachENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachENI", reflect.TypeOf((*MockInterface)(nil).AttachENI), ctx, args)
 }
 
 // BBCBatchAddIP mocks base method.
-func (m *MockInterface) BBCBatchAddIP(arg0 context.Context, arg1 *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error) {
+func (m *MockInterface) BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BBCBatchAddIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BBCBatchAddIP", ctx, args)
 	ret0, _ := ret[0].(*bbc.BatchAddIpResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BBCBatchAddIP indicates an expected call of BBCBatchAddIP.
-func (mr *MockInterfaceMockRecorder) BBCBatchAddIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BBCBatchAddIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIP), ctx, args)
 }
 
 // BBCBatchAddIPCrossSubnet mocks base method.
-func (m *MockInterface) BBCBatchAddIPCrossSubnet(arg0 context.Context, arg1 *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
+func (m *MockInterface) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BBCBatchAddIPCrossSubnet", arg0, arg1)
+	ret := m.ctrl.Call(m, "BBCBatchAddIPCrossSubnet", ctx, args)
 	ret0, _ := ret[0].(*bbc.BatchAddIpResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BBCBatchAddIPCrossSubnet indicates an expected call of BBCBatchAddIPCrossSubnet.
-func (mr *MockInterfaceMockRecorder) BBCBatchAddIPCrossSubnet(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BBCBatchAddIPCrossSubnet(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIPCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIPCrossSubnet), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchAddIPCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BBCBatchAddIPCrossSubnet), ctx, args)
 }
 
 // BBCBatchDelIP mocks base method.
-func (m *MockInterface) BBCBatchDelIP(arg0 context.Context, arg1 *bbc.BatchDelIpArgs) error {
+func (m *MockInterface) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BBCBatchDelIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BBCBatchDelIP", ctx, args)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // BBCBatchDelIP indicates an expected call of BBCBatchDelIP.
-func (mr *MockInterfaceMockRecorder) BBCBatchDelIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BBCBatchDelIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchDelIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BBCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BBCBatchDelIP), ctx, args)
 }
 
 // BCCBatchAddIP mocks base method.
-func (m *MockInterface) BCCBatchAddIP(arg0 context.Context, arg1 *api.BatchAddIpArgs) (*api.BatchAddIpResponse, error) {
+func (m *MockInterface) BCCBatchAddIP(ctx context.Context, args *api.BatchAddIpArgs) (*api.BatchAddIpResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BCCBatchAddIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BCCBatchAddIP", ctx, args)
 	ret0, _ := ret[0].(*api.BatchAddIpResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BCCBatchAddIP indicates an expected call of BCCBatchAddIP.
-func (mr *MockInterfaceMockRecorder) BCCBatchAddIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BCCBatchAddIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchAddIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchAddIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchAddIP), ctx, args)
 }
 
 // BCCBatchDelIP mocks base method.
-func (m *MockInterface) BCCBatchDelIP(arg0 context.Context, arg1 *api.BatchDelIpArgs) error {
+func (m *MockInterface) BCCBatchDelIP(ctx context.Context, args *api.BatchDelIpArgs) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BCCBatchDelIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BCCBatchDelIP", ctx, args)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // BCCBatchDelIP indicates an expected call of BCCBatchDelIP.
-func (mr *MockInterfaceMockRecorder) BCCBatchDelIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BCCBatchDelIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchDelIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BCCBatchDelIP", reflect.TypeOf((*MockInterface)(nil).BCCBatchDelIP), ctx, args)
 }
 
 // BatchAddHpcEniPrivateIP mocks base method.
-func (m *MockInterface) BatchAddHpcEniPrivateIP(arg0 context.Context, arg1 *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
+func (m *MockInterface) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchAddHpcEniPrivateIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BatchAddHpcEniPrivateIP", ctx, args)
 	ret0, _ := ret[0].(*hpc.BatchAddPrivateIPResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BatchAddHpcEniPrivateIP indicates an expected call of BatchAddHpcEniPrivateIP.
-func (mr *MockInterfaceMockRecorder) BatchAddHpcEniPrivateIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BatchAddHpcEniPrivateIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddHpcEniPrivateIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddHpcEniPrivateIP), ctx, args)
 }
 
 // BatchAddPrivateIP mocks base method.
-func (m *MockInterface) BatchAddPrivateIP(arg0 context.Context, arg1 []string, arg2 int, arg3 string, arg4 bool) ([]string, error) {
+func (m *MockInterface) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchAddPrivateIP", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "BatchAddPrivateIP", ctx, privateIPs, count, eniID, isIpv6)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BatchAddPrivateIP indicates an expected call of BatchAddPrivateIP.
-func (mr *MockInterfaceMockRecorder) BatchAddPrivateIP(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BatchAddPrivateIP(ctx, privateIPs, count, eniID, isIpv6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIP), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIP), ctx, privateIPs, count, eniID, isIpv6)
 }
 
 // BatchAddPrivateIpCrossSubnet mocks base method.
-func (m *MockInterface) BatchAddPrivateIpCrossSubnet(arg0 context.Context, arg1, arg2 string, arg3 []string, arg4 int, arg5 bool) ([]string, error) {
+func (m *MockInterface) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchAddPrivateIpCrossSubnet", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret := m.ctrl.Call(m, "BatchAddPrivateIpCrossSubnet", ctx, eniID, subnetID, privateIPs, count, isIpv6)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BatchAddPrivateIpCrossSubnet indicates an expected call of BatchAddPrivateIpCrossSubnet.
-func (mr *MockInterfaceMockRecorder) BatchAddPrivateIpCrossSubnet(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BatchAddPrivateIpCrossSubnet(ctx, eniID, subnetID, privateIPs, count, isIpv6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIpCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIpCrossSubnet), arg0, arg1, arg2, arg3, arg4, arg5)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIpCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIpCrossSubnet), ctx, eniID, subnetID, privateIPs, count, isIpv6)
 }
 
 // BatchDeleteHpcEniPrivateIP mocks base method.
-func (m *MockInterface) BatchDeleteHpcEniPrivateIP(arg0 context.Context, arg1 *hpc.EniBatchDeleteIPArgs) error {
+func (m *MockInterface) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchDeleteHpcEniPrivateIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "BatchDeleteHpcEniPrivateIP", ctx, args)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // BatchDeleteHpcEniPrivateIP indicates an expected call of BatchDeleteHpcEniPrivateIP.
-func (mr *MockInterfaceMockRecorder) BatchDeleteHpcEniPrivateIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BatchDeleteHpcEniPrivateIP(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchDeleteHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchDeleteHpcEniPrivateIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchDeleteHpcEniPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchDeleteHpcEniPrivateIP), ctx, args)
 }
 
 // BatchDeletePrivateIP mocks base method.
-func (m *MockInterface) BatchDeletePrivateIP(arg0 context.Context, arg1 []string, arg2 string, arg3 bool) error {
+func (m *MockInterface) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string, isIpv6 bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchDeletePrivateIP", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "BatchDeletePrivateIP", ctx, privateIPs, eniID, isIpv6)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // BatchDeletePrivateIP indicates an expected call of BatchDeletePrivateIP.
-func (mr *MockInterfaceMockRecorder) BatchDeletePrivateIP(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BatchDeletePrivateIP(ctx, privateIPs, eniID, isIpv6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchDeletePrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchDeletePrivateIP), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchDeletePrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchDeletePrivateIP), ctx, privateIPs, eniID, isIpv6)
 }
 
 // BindENIPublicIP mocks base method.
-func (m *MockInterface) BindENIPublicIP(arg0 context.Context, arg1, arg2, arg3 string) error {
+func (m *MockInterface) BindENIPublicIP(ctx context.Context, privateIP, publicIP, eniID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BindENIPublicIP", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "BindENIPublicIP", ctx, privateIP, publicIP, eniID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // BindENIPublicIP indicates an expected call of BindENIPublicIP.
-func (mr *MockInterfaceMockRecorder) BindENIPublicIP(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) BindENIPublicIP(ctx, privateIP, publicIP, eniID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BindENIPublicIP", reflect.TypeOf((*MockInterface)(nil).BindENIPublicIP), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BindENIPublicIP", reflect.TypeOf((*MockInterface)(nil).BindENIPublicIP), ctx, privateIP, publicIP, eniID)
 }
 
 // CreateENI mocks base method.
-func (m *MockInterface) CreateENI(arg0 context.Context, arg1 *eni.CreateEniArgs) (string, error) {
+func (m *MockInterface) CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "CreateENI", ctx, args)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateENI indicates an expected call of CreateENI.
-func (mr *MockInterfaceMockRecorder) CreateENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) CreateENI(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateENI", reflect.TypeOf((*MockInterface)(nil).CreateENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateENI", reflect.TypeOf((*MockInterface)(nil).CreateENI), ctx, args)
 }
 
 // CreateRouteRule mocks base method.
-func (m *MockInterface) CreateRouteRule(arg0 context.Context, arg1 *vpc.CreateRouteRuleArgs) (string, error) {
+func (m *MockInterface) CreateRouteRule(ctx context.Context, args *vpc.CreateRouteRuleArgs) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateRouteRule", arg0, arg1)
+	ret := m.ctrl.Call(m, "CreateRouteRule", ctx, args)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateRouteRule indicates an expected call of CreateRouteRule.
-func (mr *MockInterfaceMockRecorder) CreateRouteRule(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) CreateRouteRule(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateRouteRule", reflect.TypeOf((*MockInterface)(nil).CreateRouteRule), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateRouteRule", reflect.TypeOf((*MockInterface)(nil).CreateRouteRule), ctx, args)
 }
 
 // DeleteENI mocks base method.
-func (m *MockInterface) DeleteENI(arg0 context.Context, arg1 string) error {
+func (m *MockInterface) DeleteENI(ctx context.Context, eniID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "DeleteENI", ctx, eniID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteENI indicates an expected call of DeleteENI.
-func (mr *MockInterfaceMockRecorder) DeleteENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DeleteENI(ctx, eniID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteENI", reflect.TypeOf((*MockInterface)(nil).DeleteENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteENI", reflect.TypeOf((*MockInterface)(nil).DeleteENI), ctx, eniID)
 }
 
 // DeletePrivateIP mocks base method.
-func (m *MockInterface) DeletePrivateIP(arg0 context.Context, arg1, arg2 string, arg3 bool) error {
+func (m *MockInterface) DeletePrivateIP(ctx context.Context, privateIP, eniID string, isIpv6 bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeletePrivateIP", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "DeletePrivateIP", ctx, privateIP, eniID, isIpv6)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeletePrivateIP indicates an expected call of DeletePrivateIP.
-func (mr *MockInterfaceMockRecorder) DeletePrivateIP(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DeletePrivateIP(ctx, privateIP, eniID, isIpv6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePrivateIP", reflect.TypeOf((*MockInterface)(nil).DeletePrivateIP), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePrivateIP", reflect.TypeOf((*MockInterface)(nil).DeletePrivateIP), ctx, privateIP, eniID, isIpv6)
 }
 
 // DeleteRouteRule mocks base method.
-func (m *MockInterface) DeleteRouteRule(arg0 context.Context, arg1 string) error {
+func (m *MockInterface) DeleteRouteRule(ctx context.Context, routeID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteRouteRule", arg0, arg1)
+	ret := m.ctrl.Call(m, "DeleteRouteRule", ctx, routeID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteRouteRule indicates an expected call of DeleteRouteRule.
-func (mr *MockInterfaceMockRecorder) DeleteRouteRule(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DeleteRouteRule(ctx, routeID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteRouteRule", reflect.TypeOf((*MockInterface)(nil).DeleteRouteRule), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteRouteRule", reflect.TypeOf((*MockInterface)(nil).DeleteRouteRule), ctx, routeID)
 }
 
 // DescribeSubnet mocks base method.
-func (m *MockInterface) DescribeSubnet(arg0 context.Context, arg1 string) (*vpc.Subnet, error) {
+func (m *MockInterface) DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeSubnet", arg0, arg1)
+	ret := m.ctrl.Call(m, "DescribeSubnet", ctx, subnetID)
 	ret0, _ := ret[0].(*vpc.Subnet)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeSubnet indicates an expected call of DescribeSubnet.
-func (mr *MockInterfaceMockRecorder) DescribeSubnet(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DescribeSubnet(ctx, subnetID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnet", reflect.TypeOf((*MockInterface)(nil).DescribeSubnet), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnet", reflect.TypeOf((*MockInterface)(nil).DescribeSubnet), ctx, subnetID)
 }
 
 // DescribeVPC mocks base method.
-func (m *MockInterface) DescribeVPC(arg0 context.Context, arg1 string) (*vpc.ShowVPCModel, error) {
+func (m *MockInterface) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCModel, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeVPC", arg0, arg1)
+	ret := m.ctrl.Call(m, "DescribeVPC", ctx, vpcID)
 	ret0, _ := ret[0].(*vpc.ShowVPCModel)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeVPC indicates an expected call of DescribeVPC.
-func (mr *MockInterfaceMockRecorder) DescribeVPC(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DescribeVPC(ctx, vpcID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeVPC", reflect.TypeOf((*MockInterface)(nil).DescribeVPC), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeVPC", reflect.TypeOf((*MockInterface)(nil).DescribeVPC), ctx, vpcID)
 }
 
 // DetachENI mocks base method.
-func (m *MockInterface) DetachENI(arg0 context.Context, arg1 *eni.EniInstance) error {
+func (m *MockInterface) DetachENI(ctx context.Context, args *eni.EniInstance) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DetachENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "DetachENI", ctx, args)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DetachENI indicates an expected call of DetachENI.
-func (mr *MockInterfaceMockRecorder) DetachENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DetachENI(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachENI", reflect.TypeOf((*MockInterface)(nil).DetachENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachENI", reflect.TypeOf((*MockInterface)(nil).DetachENI), ctx, args)
 }
 
 // DirectEIP mocks base method.
-func (m *MockInterface) DirectEIP(arg0 context.Context, arg1 string) error {
+func (m *MockInterface) DirectEIP(ctx context.Context, eip string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DirectEIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "DirectEIP", ctx, eip)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DirectEIP indicates an expected call of DirectEIP.
-func (mr *MockInterfaceMockRecorder) DirectEIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) DirectEIP(ctx, eip interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DirectEIP", reflect.TypeOf((*MockInterface)(nil).DirectEIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DirectEIP", reflect.TypeOf((*MockInterface)(nil).DirectEIP), ctx, eip)
 }
 
 // GetBBCInstanceDetail mocks base method.
-func (m *MockInterface) GetBBCInstanceDetail(arg0 context.Context, arg1 string) (*bbc.InstanceModel, error) {
+func (m *MockInterface) GetBBCInstanceDetail(ctx context.Context, instanceID string) (*bbc.InstanceModel, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBBCInstanceDetail", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetBBCInstanceDetail", ctx, instanceID)
 	ret0, _ := ret[0].(*bbc.InstanceModel)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetBBCInstanceDetail indicates an expected call of GetBBCInstanceDetail.
-func (mr *MockInterfaceMockRecorder) GetBBCInstanceDetail(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) GetBBCInstanceDetail(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBBCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBBCInstanceDetail), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBBCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBBCInstanceDetail), ctx, instanceID)
 }
 
 // GetBBCInstanceENI mocks base method.
-func (m *MockInterface) GetBBCInstanceENI(arg0 context.Context, arg1 string) (*bbc.GetInstanceEniResult, error) {
+func (m *MockInterface) GetBBCInstanceENI(ctx context.Context, instanceID string) (*bbc.GetInstanceEniResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBBCInstanceENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetBBCInstanceENI", ctx, instanceID)
 	ret0, _ := ret[0].(*bbc.GetInstanceEniResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetBBCInstanceENI indicates an expected call of GetBBCInstanceENI.
-func (mr *MockInterfaceMockRecorder) GetBBCInstanceENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) GetBBCInstanceENI(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBBCInstanceENI", reflect.TypeOf((*MockInterface)(nil).GetBBCInstanceENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBBCInstanceENI", reflect.TypeOf((*MockInterface)(nil).GetBBCInstanceENI), ctx, instanceID)
 }
 
 // GetBCCInstanceDetail mocks base method.
-func (m *MockInterface) GetBCCInstanceDetail(arg0 context.Context, arg1 string) (*api.InstanceModel, error) {
+func (m *MockInterface) GetBCCInstanceDetail(ctx context.Context, instanceID string) (*api.InstanceModel, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBCCInstanceDetail", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetBCCInstanceDetail", ctx, instanceID)
 	ret0, _ := ret[0].(*api.InstanceModel)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetBCCInstanceDetail indicates an expected call of GetBCCInstanceDetail.
-func (mr *MockInterfaceMockRecorder) GetBCCInstanceDetail(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) GetBCCInstanceDetail(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBCCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBCCInstanceDetail), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBCCInstanceDetail", reflect.TypeOf((*MockInterface)(nil).GetBCCInstanceDetail), ctx, instanceID)
 }
 
 // GetENIQuota mocks base method.
-func (m *MockInterface) GetENIQuota(arg0 context.Context, arg1 string) (*eni.EniQuoteInfo, error) {
+func (m *MockInterface) GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQuoteInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetENIQuota", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetENIQuota", ctx, instanceID)
 	ret0, _ := ret[0].(*eni.EniQuoteInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetENIQuota indicates an expected call of GetENIQuota.
-func (mr *MockInterfaceMockRecorder) GetENIQuota(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) GetENIQuota(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIQuota", reflect.TypeOf((*MockInterface)(nil).GetENIQuota), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIQuota", reflect.TypeOf((*MockInterface)(nil).GetENIQuota), ctx, instanceID)
 }
 
 // GetHPCEniID mocks base method.
-func (m *MockInterface) GetHPCEniID(arg0 context.Context, arg1 string) (*hpc.EniList, error) {
+func (m *MockInterface) GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHPCEniID", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetHPCEniID", ctx, instanceID)
 	ret0, _ := ret[0].(*hpc.EniList)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetHPCEniID indicates an expected call of GetHPCEniID.
-func (mr *MockInterfaceMockRecorder) GetHPCEniID(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) GetHPCEniID(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHPCEniID", reflect.TypeOf((*MockInterface)(nil).GetHPCEniID), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHPCEniID", reflect.TypeOf((*MockInterface)(nil).GetHPCEniID), ctx, instanceID)
+}
+
+// HPASWrapper mocks base method.
+func (m *MockInterface) HPASWrapper(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HPASWrapper", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// HPASWrapper indicates an expected call of HPASWrapper.
+func (mr *MockInterfaceMockRecorder) HPASWrapper(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HPASWrapper", reflect.TypeOf((*MockInterface)(nil).HPASWrapper), ctx)
 }
 
 // ListAclEntrys mocks base method.
-func (m *MockInterface) ListAclEntrys(arg0 context.Context, arg1 string) ([]vpc.AclEntry, error) {
+func (m *MockInterface) ListAclEntrys(ctx context.Context, vpcID string) ([]vpc.AclEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAclEntrys", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListAclEntrys", ctx, vpcID)
 	ret0, _ := ret[0].([]vpc.AclEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAclEntrys indicates an expected call of ListAclEntrys.
-func (mr *MockInterfaceMockRecorder) ListAclEntrys(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListAclEntrys(ctx, vpcID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAclEntrys", reflect.TypeOf((*MockInterface)(nil).ListAclEntrys), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAclEntrys", reflect.TypeOf((*MockInterface)(nil).ListAclEntrys), ctx, vpcID)
 }
 
 // ListBCCInstanceEni mocks base method.
-func (m *MockInterface) ListBCCInstanceEni(arg0 context.Context, arg1 string) ([]api.Eni, error) {
+func (m *MockInterface) ListBCCInstanceEni(ctx context.Context, instanceID string) ([]api.Eni, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListBCCInstanceEni", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListBCCInstanceEni", ctx, instanceID)
 	ret0, _ := ret[0].([]api.Eni)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListBCCInstanceEni indicates an expected call of ListBCCInstanceEni.
-func (mr *MockInterfaceMockRecorder) ListBCCInstanceEni(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListBCCInstanceEni(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListBCCInstanceEni", reflect.TypeOf((*MockInterface)(nil).ListBCCInstanceEni), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListBCCInstanceEni", reflect.TypeOf((*MockInterface)(nil).ListBCCInstanceEni), ctx, instanceID)
 }
 
 // ListEIPs mocks base method.
-func (m *MockInterface) ListEIPs(arg0 context.Context, arg1 eip.ListEipArgs) ([]eip.EipModel, error) {
+func (m *MockInterface) ListEIPs(ctx context.Context, args eip.ListEipArgs) ([]eip.EipModel, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEIPs", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListEIPs", ctx, args)
 	ret0, _ := ret[0].([]eip.EipModel)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListEIPs indicates an expected call of ListEIPs.
-func (mr *MockInterfaceMockRecorder) ListEIPs(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListEIPs(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEIPs", reflect.TypeOf((*MockInterface)(nil).ListEIPs), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEIPs", reflect.TypeOf((*MockInterface)(nil).ListEIPs), ctx, args)
 }
 
 // ListENIs mocks base method.
-func (m *MockInterface) ListENIs(arg0 context.Context, arg1 eni.ListEniArgs) ([]eni.Eni, error) {
+func (m *MockInterface) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListENIs", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListENIs", ctx, args)
 	ret0, _ := ret[0].([]eni.Eni)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListENIs indicates an expected call of ListENIs.
-func (mr *MockInterfaceMockRecorder) ListENIs(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListENIs(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListENIs", reflect.TypeOf((*MockInterface)(nil).ListENIs), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListENIs", reflect.TypeOf((*MockInterface)(nil).ListENIs), ctx, args)
 }
 
 // ListERIs mocks base method.
-func (m *MockInterface) ListERIs(arg0 context.Context, arg1 eni.ListEniArgs) ([]eni.Eni, error) {
+func (m *MockInterface) ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListERIs", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListERIs", ctx, args)
 	ret0, _ := ret[0].([]eni.Eni)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListERIs indicates an expected call of ListERIs.
-func (mr *MockInterfaceMockRecorder) ListERIs(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListERIs(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListERIs", reflect.TypeOf((*MockInterface)(nil).ListERIs), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListERIs", reflect.TypeOf((*MockInterface)(nil).ListERIs), ctx, args)
 }
 
 // ListEsg mocks base method.
-func (m *MockInterface) ListEsg(arg0 context.Context, arg1 string) ([]esg.EnterpriseSecurityGroup, error) {
+func (m *MockInterface) ListEsg(ctx context.Context, instanceID string) ([]esg.EnterpriseSecurityGroup, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEsg", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListEsg", ctx, instanceID)
 	ret0, _ := ret[0].([]esg.EnterpriseSecurityGroup)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListEsg indicates an expected call of ListEsg.
-func (mr *MockInterfaceMockRecorder) ListEsg(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListEsg(ctx, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEsg", reflect.TypeOf((*MockInterface)(nil).ListEsg), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEsg", reflect.TypeOf((*MockInterface)(nil).ListEsg), ctx, instanceID)
 }
 
 // ListRouteTable mocks base method.
-func (m *MockInterface) ListRouteTable(arg0 context.Context, arg1, arg2 string) ([]vpc.RouteRule, error) {
+func (m *MockInterface) ListRouteTable(ctx context.Context, vpcID, routeTableID string) ([]vpc.RouteRule, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListRouteTable", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "ListRouteTable", ctx, vpcID, routeTableID)
 	ret0, _ := ret[0].([]vpc.RouteRule)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListRouteTable indicates an expected call of ListRouteTable.
-func (mr *MockInterfaceMockRecorder) ListRouteTable(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListRouteTable(ctx, vpcID, routeTableID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRouteTable", reflect.TypeOf((*MockInterface)(nil).ListRouteTable), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRouteTable", reflect.TypeOf((*MockInterface)(nil).ListRouteTable), ctx, vpcID, routeTableID)
 }
 
 // ListSecurityGroup mocks base method.
-func (m *MockInterface) ListSecurityGroup(arg0 context.Context, arg1, arg2 string) ([]api.SecurityGroupModel, error) {
+func (m *MockInterface) ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]api.SecurityGroupModel, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListSecurityGroup", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "ListSecurityGroup", ctx, vpcID, instanceID)
 	ret0, _ := ret[0].([]api.SecurityGroupModel)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListSecurityGroup indicates an expected call of ListSecurityGroup.
-func (mr *MockInterfaceMockRecorder) ListSecurityGroup(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListSecurityGroup(ctx, vpcID, instanceID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSecurityGroup", reflect.TypeOf((*MockInterface)(nil).ListSecurityGroup), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSecurityGroup", reflect.TypeOf((*MockInterface)(nil).ListSecurityGroup), ctx, vpcID, instanceID)
 }
 
 // ListSubnets mocks base method.
-func (m *MockInterface) ListSubnets(arg0 context.Context, arg1 *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
+func (m *MockInterface) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListSubnets", arg0, arg1)
+	ret := m.ctrl.Call(m, "ListSubnets", ctx, args)
 	ret0, _ := ret[0].([]vpc.Subnet)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListSubnets indicates an expected call of ListSubnets.
-func (mr *MockInterfaceMockRecorder) ListSubnets(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) ListSubnets(ctx, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSubnets", reflect.TypeOf((*MockInterface)(nil).ListSubnets), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSubnets", reflect.TypeOf((*MockInterface)(nil).ListSubnets), ctx, args)
 }
 
 // StatENI mocks base method.
-func (m *MockInterface) StatENI(arg0 context.Context, arg1 string) (*eni.Eni, error) {
+func (m *MockInterface) StatENI(ctx context.Context, eniID string) (*eni.Eni, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "StatENI", arg0, arg1)
+	ret := m.ctrl.Call(m, "StatENI", ctx, eniID)
 	ret0, _ := ret[0].(*eni.Eni)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // StatENI indicates an expected call of StatENI.
-func (mr *MockInterfaceMockRecorder) StatENI(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) StatENI(ctx, eniID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatENI", reflect.TypeOf((*MockInterface)(nil).StatENI), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatENI", reflect.TypeOf((*MockInterface)(nil).StatENI), ctx, eniID)
 }
 
 // UnBindENIPublicIP mocks base method.
-func (m *MockInterface) UnBindENIPublicIP(arg0 context.Context, arg1, arg2 string) error {
+func (m *MockInterface) UnBindENIPublicIP(ctx context.Context, publicIP, eniID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnBindENIPublicIP", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "UnBindENIPublicIP", ctx, publicIP, eniID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UnBindENIPublicIP indicates an expected call of UnBindENIPublicIP.
-func (mr *MockInterfaceMockRecorder) UnBindENIPublicIP(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) UnBindENIPublicIP(ctx, publicIP, eniID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnBindENIPublicIP", reflect.TypeOf((*MockInterface)(nil).UnBindENIPublicIP), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnBindENIPublicIP", reflect.TypeOf((*MockInterface)(nil).UnBindENIPublicIP), ctx, publicIP, eniID)
 }
 
 // UnDirectEIP mocks base method.
-func (m *MockInterface) UnDirectEIP(arg0 context.Context, arg1 string) error {
+func (m *MockInterface) UnDirectEIP(ctx context.Context, eip string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnDirectEIP", arg0, arg1)
+	ret := m.ctrl.Call(m, "UnDirectEIP", ctx, eip)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UnDirectEIP indicates an expected call of UnDirectEIP.
-func (mr *MockInterfaceMockRecorder) UnDirectEIP(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) UnDirectEIP(ctx, eip interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnDirectEIP", reflect.TypeOf((*MockInterface)(nil).UnDirectEIP), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnDirectEIP", reflect.TypeOf((*MockInterface)(nil).UnDirectEIP), ctx, eip)
 }

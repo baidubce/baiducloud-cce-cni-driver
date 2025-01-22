@@ -93,6 +93,7 @@ type Interface interface {
 	GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error)
 	BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error
 	BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchPrivateIPArgs) (*hpc.BatchAddPrivateIPResult, error)
+	HPASWrapper(ctx context.Context) error
 }
 
 type Client struct {

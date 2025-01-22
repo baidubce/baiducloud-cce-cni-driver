@@ -515,6 +515,9 @@ func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResour
 		if nrcs.Spec.AgentConfig.EniUseMode != nil {
 			eniUseMode = *nrcs.Spec.AgentConfig.EniUseMode
 		}
+		if nrcs.Spec.AgentConfig.ExtCniPlugins != nil {
+			option.Config.ExtCNIPluginsList = nrcs.Spec.AgentConfig.ExtCniPlugins
+		}
 
 		if len(nrcs.Spec.AgentConfig.EniSubnetIDs) > 0 {
 			subnetIDs = nrcs.Spec.AgentConfig.EniSubnetIDs

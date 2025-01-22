@@ -11,6 +11,7 @@ import (
 
 var defaultMetaClient = metadata.NewClient()
 
+// TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
 // GetInstanceMetadata get basic metadata information
 func GetInstanceMetadata() (vpcID, instanceType, instanceSpecType, availabilityZone string, err error) {
 	vpcID, err = defaultMetaClient.GetVPCID()
@@ -23,6 +24,11 @@ func GetInstanceMetadata() (vpcID, instanceType, instanceSpecType, availabilityZ
 		return
 	}
 	instanceType = string(instanceTypeEX)
+
+	sourceType, err := defaultMetaClient.GetSourceType()
+	if strings.EqualFold(sourceType, string(metadata.InstanceTypeExHPAS)) {
+		instanceType = string(metadata.InstanceTypeExHPAS)
+	}
 
 	specType, err := defaultMetaClient.GetInstanceType()
 	if err != nil {
@@ -54,6 +60,7 @@ func GetInstanceID() (string, error) {
 	return defaultMetaClient.GetInstanceID()
 }
 
+// TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
 func GenerateENISpec() (eni *api.ENISpec, err error) {
 	vpcID, instanceType, instanceSpecType, availabilityZone, err := GetInstanceMetadata()
 	if err != nil {
@@ -74,7 +81,7 @@ func GenerateENISpec() (eni *api.ENISpec, err error) {
 	// instanceType == "bbc" && instanceSpecType is in the same format as "ebc.l5c.c128m256.1d"
 	// or "ehc.lgn5.c128m1024.8a100.8re.4d", set it to true to support ENI
 	typeExStr := strings.TrimSpace(instanceType)
-	if typeExStr == string(metadata.InstanceTypeExBBC) {
+	if typeExStr == string(metadata.InstanceTypeExBBC) || strings.EqualFold(typeExStr, string(metadata.InstanceTypeExHPAS)) {
 		typeStr := strings.TrimSpace(instanceSpecType)
 		if strings.HasPrefix(typeStr, string(metadata.InstanceTypeExEBC)) {
 			eni.InstanceType = string(metadata.InstanceTypeExEBC)

@@ -44,6 +44,8 @@ func (provider *reuseIPAllocatorProvider) AllocateIP(ctx context.Context, log *l
 	if len(newStatus.Networking.Addressing) > 0 {
 		// reuse IP
 		allocation.Addressing = newStatus.Networking.Addressing
+		allocation.SubnetID = newStatus.Networking.Addressing[0].Subnet
+		allocation.Interface = newStatus.Networking.Addressing[0].Interface
 	}
 	err = operation.AllocateIP(ctx, allocation)
 	if err != nil {

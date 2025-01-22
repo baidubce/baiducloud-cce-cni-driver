@@ -23,7 +23,7 @@ var localOS *OSRelease
 type HostOS interface {
 	// DisableDHCPv6
 	DisableDHCPv6(udevName, cceName string) error
-	DisableMacPersistant() error
+	DisableAndMonitorMacPersistant() error
 }
 
 type OSRelease struct {

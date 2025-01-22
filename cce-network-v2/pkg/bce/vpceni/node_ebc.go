@@ -259,9 +259,9 @@ func (n *ebcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 	return nil, "", fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
 }
 
-func (n *ebcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+func (n *ebcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
 	if !n.usePrimaryENIWithSecondaryMode {
 		return n.bccNetworkResourceSet.reuseIPs(ctx, ips, owner)
 	}
-	return "", fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
+	return "", false, ipsReleased, fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
 }

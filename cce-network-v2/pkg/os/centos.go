@@ -89,6 +89,6 @@ createNew:
 	return nil
 }
 
-func (c *centos) DisableMacPersistant() error {
+func (c *centos) DisableAndMonitorMacPersistant() error {
 	return nil
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -98,7 +99,7 @@ type realNodeInf interface {
 	// direct ip allocation
 	allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error)
 	// ReuseIPs is called to reuse the IPs that are not used by any pods
-	reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (string, error)
+	reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error)
 }
 
 // bceNetworkResourceSet represents a Kubernetes node running CCE with an associated
@@ -1075,7 +1076,7 @@ func (n *bceNetworkResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 			} else {
 				err = n.real.releaseIPs(ctx, release, ipToRelease, []string{})
 			}
-			if err != nil {
+			if err != nil && !strings.Contains(err.Error(), "PrivateIpInvalid") {
 				err = fmt.Errorf("release ip %s failed: %v", ipToRelease, err)
 				n.appendAllocatedIPError(release.InterfaceID, ccev2.NewErrorStatusChange(err.Error()))
 				if !isPartialSuccess {
@@ -1276,11 +1277,13 @@ func searchMaxAvailableSubnet(subnets []*bcesync.BorrowedSubnet) *bcesync.Borrow
 // AllocateIP implements endpoint.DirectEndpointOperation
 func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint.DirectIPAction) error {
 	var (
-		ipset []*models.PrivateIP
-		err   error
+		ipset       []*models.PrivateIP
+		ipsReleased []string
+		err         error
 
 		// interfaceID is the ENI ID or bbc instance ID
-		interfaceID string
+		interfaceID         string
+		ipDeletedFromoldEni bool = false
 	)
 
 	if action.SubnetID == "" {
@@ -1294,6 +1297,9 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 
 	if len(action.Addressing) == 0 {
 		ipset, interfaceID, err = n.real.allocateIPCrossSubnet(ctx, action.SubnetID)
+		if err != nil {
+			return err
+		}
 	} else {
 		// convert AddressPair to PrivateIP
 		for _, addressPair := range action.Addressing {
@@ -1303,10 +1309,50 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 				SubnetID:         action.SubnetID,
 			})
 		}
-		interfaceID, err = n.real.reuseIPs(ctx, ipset, action.Owner)
-	}
-	if err != nil {
-		return err
+		interfaceID, ipDeletedFromoldEni, ipsReleased, err = n.real.reuseIPs(ctx, ipset, action.Owner)
+		if ipDeletedFromoldEni && (interfaceID != action.Interface) {
+			oldEniID := action.Interface
+			oldEni, err := n.manager.enilister.Get(oldEniID)
+			// if eni not found, ignore it, maybe it has been deleted
+			if err != nil && !kerrors.IsNotFound(err) {
+				return fmt.Errorf("get eni %s failed: %v", oldEniID, err)
+			}
+			if oldEni != nil {
+				// update old eni status
+
+				releaseIPMap := make(map[string]bool)
+				// update releaseIPMap
+				for _, ipstr := range ipsReleased {
+					releaseIPMap[ipstr] = true
+				}
+				// update old eni for release IPs
+				n.updateENIWithPoll(ctx, oldEni, func(eni *ccev2.ENI) *ccev2.ENI {
+					var (
+						ipv4Addrs []*models.PrivateIP
+						ipv6Addrs []*models.PrivateIP
+					)
+					for _, addr := range eni.Spec.ENI.PrivateIPSet {
+						if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
+							ipv4Addrs = append(ipv4Addrs, addr)
+						}
+					}
+					for _, addr := range eni.Spec.ENI.IPV6PrivateIPSet {
+						if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
+							ipv6Addrs = append(ipv6Addrs, addr)
+						}
+					}
+					eni.Spec.ENI.PrivateIPSet = ipv4Addrs
+					eni.Spec.ENI.IPV6PrivateIPSet = ipv6Addrs
+					return eni
+				})
+			} else {
+				n.log.Warnf("the old eni %s of the cep reused ip %s is not found, ignore it", oldEniID, ipset[0].PrivateIPAddress)
+			}
+		}
+
+		if err != nil {
+			return err
+		}
 	}
 
 	var resultAddressPairList ccev2.AddressPairList
@@ -1454,13 +1500,13 @@ type fnReleaseIPsFromCLoud func(ctx context.Context, scopedLog *logrus.Entry, en
 // rleaseOldIP release old ip if it is not used by other endpoint
 // return true: ip is used by current endpoint, do not need to release
 // return false: ip is used by other endpoint, need to release
-func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string, releaseIPsFromCLoud fnReleaseIPsFromCLoud) (bool, error) {
+func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logrus.Entry, ips []*models.PrivateIP, namespace string, name string, releaseIPsFromCLoud fnReleaseIPsFromCLoud) (isLocalIP bool, ipsReleased []string, err error) {
 	for _, privateIP := range ips {
 		ceps, err := n.manager.cepClient.GetByIP(privateIP.PrivateIPAddress)
 		if err == nil && len(ceps) > 0 {
 			for _, cep := range ceps {
 				if cep.Namespace != namespace || cep.Name != name {
-					return false, fmt.Errorf("ip %s has been used by other endpoint %s/%s", privateIP.PrivateIPAddress, cep.Namespace, cep.Name)
+					return false, ipsReleased, fmt.Errorf("ip %s has been used by other endpoint %s/%s", privateIP.PrivateIPAddress, cep.Namespace, cep.Name)
 				}
 			}
 		}
@@ -1482,7 +1528,7 @@ func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logr
 				} else {
 					// do not release ip which use same subnet with eni
 					if eni.Spec.SubnetID == privateIP.SubnetID {
-						return false, fmt.Errorf("ip %s has been used by other eni %s for cached ip", privateIP.PrivateIPAddress, eni.Name)
+						return false, ipsReleased, fmt.Errorf("ip %s has been used by other eni %s for cached ip", privateIP.PrivateIPAddress, eni.Name)
 					}
 					toReleaseEniIPs[eni.Name] = append(toReleaseEniIPs[eni.Name], privateIP.PrivateIPAddress)
 					isLocalENI = false
@@ -1492,29 +1538,28 @@ func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logr
 		}
 	}
 	if isLocalENI {
-		return true, nil
+		return true, ipsReleased, nil
 	}
 
 	cep, err := n.manager.cepClient.Lister().CCEEndpoints(namespace).Get(name)
 	if err != nil {
-		return false, fmt.Errorf("get endpoint %s/%s failed: %v", namespace, name, err)
+		return false, ipsReleased, fmt.Errorf("get endpoint %s/%s failed: %v", namespace, name, err)
 	}
-	if cep.Status.Networking == nil || cep.Status.Networking.NodeIP != n.k8sObj.Name {
+	if cep.Status.Networking != nil && cep.Status.Networking.NodeIP != n.k8sObj.Name && len(toReleaseEniIPs) > 0 {
 		scopedLog.WithField("namespace", namespace).WithField("name", name).Debug("try to clean ip from old eni")
 
-		if cep.Status.Networking != nil {
-			for _, addr := range cep.Status.Networking.Addressing {
-				toReleaseEniIPs[addr.Interface] = append(toReleaseEniIPs[addr.Interface], addr.IP)
-			}
-		}
-		for eniid := range toReleaseEniIPs {
-			toReleaseIPs := toReleaseEniIPs[eniid]
+		for eniID := range toReleaseEniIPs {
+			toReleaseIPs := toReleaseEniIPs[eniID]
 			if len(toReleaseIPs) > 0 {
-				err = releaseIPsFromCLoud(ctx, scopedLog, eniid, toReleaseIPs)
+				err = releaseIPsFromCLoud(ctx, scopedLog, eniID, toReleaseIPs)
+				if err != nil {
+					return false, ipsReleased, fmt.Errorf("release ip %v from eni %s failed: %v", toReleaseIPs, eniID, err)
+				}
+				ipsReleased = append(ipsReleased, toReleaseIPs...)
 			}
 		}
 	}
-	return false, err
+	return false, ipsReleased, err
 }
 
 var (

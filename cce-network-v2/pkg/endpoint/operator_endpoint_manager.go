@@ -197,6 +197,7 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 	}
 
 	newStatus.Networking.IPs = newStatus.Networking.Addressing.ToIPsString()
+	newStatus.Networking.NodeIP = newNodeName
 	newStatus.ExternalIdentifiers = resource.Spec.ExternalIdentifiers
 	newObj.Status = *newStatus
 

@@ -227,7 +227,7 @@ func (n *NodeDiscovery) updateLocalNode() {
 	if err != nil {
 		log.WithError(err).Fatal("Unable to detect OS distribution")
 	}
-	err = release.HostOS().DisableMacPersistant()
+	err = release.HostOS().DisableAndMonitorMacPersistant()
 	if err != nil {
 		log.WithError(err).Fatal("Unable to disable mac persist")
 	}

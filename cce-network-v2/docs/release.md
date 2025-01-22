@@ -8,6 +8,12 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
+#### 2.12.13 [20250122]
+1. [Bug] 修复 ReuseIP CEP 跨 ENI 重用时， ENI 对象未更新导致 ReuseIP 在 ENI对象上残留的问题，解决使用固定 IP 的 Pod IP 非预期变更的问题
+2. [Optimize] 优化 ubuntu22.04 中的 /lib/systemd/network/99-default.link 为 none，解决该参数被意外修改后导致 veth 的 mac 地址被非预期变更的问题
+3. [Bug] 修复 RDMA 场景下，请求 HPC 接口返回结果为 nil 时的空指针问题
+4. [Bug] 修复 VPC-ENI 模式下开启 RDMA 时的 Romote ENI Syncer 逻辑，纳管 CCE 历史创建的 ENI 时避免将 ENI 网卡错误识别为 RDMA ENI 导致 RDMA 网卡无法正常使用的问题
+
 #### 2.12.12 [20250121]
 1. [Bug] 修复 NetResourceConfigSet 对应的 ExtCniPlugins 字段修改不生效问题，支持节点维度的自定义自定义插件 ExtCniPlugins 字段配置
 2. [Feature] 增加对 HPAS 实例的支持
@@ -17,7 +23,7 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 2. [Bug] 修改开启 RDMA 场景下 RDMA ENI 对象本地缓存过期状态相关逻辑，解决因 resync nrs timeout 而导致的新增 RDMA 节点初始化慢，大规模集群扩容速度慢的问题
 3. [Optimize] 修改开启 RDMA 场景下 RDMA NetResourceSet 对象拼装规则，以及 ENI 对象的 LabelSelectorValue 的拼装规则，防止 RDMA NetResourceSet 名字超过限定值 253，防止 ENI 对象的 LabelSelectorValue 超过限定值 63，解决因 Node Name 超长而导致的 cce-network-agent panic 问题
 4. [Optimize] 修改 RDMA ENI 对象更新逻辑，解决因 NodeName 变更时 ENI 对象未正常销毁而导致的 RDMA ENI 对象无法被更新而导致的节点无法就绪的问题
-5. [Optimize] 优化开启 RDMA 模式时的 RDMA ENI 状态机处理逻辑，支持非终态 RDMA ENI 的处理流程，避免非终态状态 RDMA ENI 卡住节点NotReady 无法恢复的问题
+5. [Optimize] 优化开启 RDMA 模式时的 RDMA ENI 状态机处理逻辑，支持非终态 RDMA ENI 的处理流程，避免非终态状态 RDMA ENI 卡住节点 NotReady 无法恢复的问题
 6. [Optimize] 优化开启 RDMA 模式时，对 HPC OpenAPI 的请求逻辑，大幅降低请求频率，降低大规模集群下的 OpenAPI 请求压力
 7. [Bug] 修复创建 Node Interface 对象时因初始值未判断而导致的出现 Instance is out of interfaces 导致节点就绪慢的问题
 
@@ -87,7 +93,7 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. [Feature] 增加 eni 安全组同步功能， 保持CCE ENI 和节点安全组同步
 4. [Feature] 优化Pod调度算法，增加节点 ip capacity 自动适配，避免节点 IP 地址资源浪费
 5. [Feature] 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源
-6. [Optimize] 修复 psts 对象在使用enableReuseIPAddress时可能更新 cep 时Addressing为空，不能记录错误信息的问题
+6. [Optimize] 修复 psts 对象在使用 enableReuseIPAddress时可能更新 cep 时 Addressing 为空，不能记录错误信息的问题
 7. [Optimize] 优化 operator 事件积压问题，避免事件长期超时积压
 8. [Optimize] agent 优化 IP 地址 gc 算法，在达到 gc 周期后，支持按照 IP 地址清理已变更 cep 遗留地址的能力
 9. [Optimize] 将动态 cep 与 nrs 生命周期绑定，减少 agent 被杀死的缩容时，遗留的 cep 对象数

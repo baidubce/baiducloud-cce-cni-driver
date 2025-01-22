@@ -281,7 +281,16 @@ func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Ent
 	// warning: old wep use node selector,
 	// So here oldWEP from the cache may not exist,
 	// we need to retrieve it from the api-server
-	oldEP, err := GetEndpointCrossCache(ctx, e.cceEndpointClient, pod.Namespace, epName)
+	oldEP, err := e.cceEndpointClient.Get(pod.Namespace, epName)
+	if kerrors.IsNotFound(err) {
+		// fall back to get object from kube-apiserver
+		oldEP, err = e.cceEndpointClient.CCEEndpoints(pod.Namespace).Get(context.TODO(), epName, metav1.GetOptions{})
+		if kerrors.IsNotFound(err) {
+			logEntry.Debug("endpoint object not found")
+			err = nil
+			oldEP = nil
+		}
+	}
 	if err != nil {
 		return
 	}
@@ -334,7 +343,6 @@ func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Ent
 			return
 		}
 		logEntry.Info("create psts endpoint success")
-
 	}
 
 	ipv4Result, ipv6Result, err = e.waitEndpointIPAllocated(ctx, newEP)
@@ -587,6 +595,12 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 		}
 		return e.createReuseIPEndpoint(ctx, newEP, oldEP)
 	} else {
+		// not reuse ip psts or old endpoint is not found, the oldEP maybe is nil, the old cep name is logged by the new cep name
+		allocatorLog.WithField("namespace", psts.Namespace).
+			WithField("pstsName", psts.Name).
+			WithField("oldCceendpoint", oldEP).
+			WithField("cceendpointName", newEP.Name).
+			Info("can not reuse ip for this psts or cceendpoint")
 		// cross subnet, delete old endpoint
 		err = DeleteEndpointAndWait(ctx, e.cceEndpointClient, oldEP)
 		if err != nil {

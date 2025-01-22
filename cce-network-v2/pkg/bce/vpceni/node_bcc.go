@@ -435,13 +435,13 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
-		return "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
+		return "", false, ipsReleased, fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
 	scopedLog := n.log.WithField("action", "reuseIPs")
 	if len(ips) == 0 {
-		return "", fmt.Errorf("no ip to reuse")
+		return "", false, ipsReleased, fmt.Errorf("no ip to reuse")
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
@@ -478,21 +478,22 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 	}
 	if action.AvailableForAllocationIPv4 == 0 && action.AvailableForAllocationIPv6 == 0 {
 		if action.AvailableInterfaces == 0 {
-			return "", fmt.Errorf("no available ip for allocation on node %s", n.k8sObj.Name)
+			return "", false, ipsReleased, fmt.Errorf("no available ip for allocation on node %s", n.k8sObj.Name)
 		}
 		_, eniID, err = n.CreateInterface(ctx, action, scopedLog)
 		if err != nil {
-			return "", fmt.Errorf("create interface failed: %v", err)
+			return "", false, ipsReleased, fmt.Errorf("create interface failed: %v", err)
 		}
-		return "", fmt.Errorf("no available eni for allocation on node %s, try to create new eni %s", n.k8sObj.Name, eniID)
+		return "", false, ipsReleased, fmt.Errorf("no available eni for allocation on node %s, try to create new eni %s", n.k8sObj.Name, eniID)
 	}
 	eniID = action.InterfaceID
 	scopedLog = scopedLog.WithField("eni", eniID)
 	scopedLog.Debug("prepare allocate ip cross subnet for eni")
 
+	// release ip from old bcc/ebc/bbc eni before reuse ip if necessary
 	// check ip conflict
 	// should to delete ip from the old eni
-	isLocalIP, err := n.rleaseOldIP(ctx, scopedLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+	isLocalIP, ipsReleased, err := n.rleaseOldIP(ctx, scopedLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
 		scopedLog.WithField("oldENI", eniID).WithField("toReleaseIPs", toReleaseIPs)
 		err = n.manager.bceclient.BatchDeletePrivateIP(ctx, toReleaseIPs, eniID, false)
 		if err != nil {
@@ -510,6 +511,16 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		eniID = enis[0].Name
 		scopedLog.Infof("ip %s is local ip, directly reusable", ips[0].PrivateIPAddress)
 		return
+	} else {
+		if len(ipsReleased) > 0 {
+			scopedLog.WithField("ipsReleased", ipsReleased).Debugf("ips %v is not local ip, release from old eni success", ips)
+			ipDeletedFromoldEni = true
+		}
+	}
+	// check if all ips are released from old bcc/ebc/bbc eni before reuse ip
+	if ipDeletedFromoldEni && (len(ips) != len(ipsReleased)) {
+		scopedLog.Warnf("ip is not local, but only some ips (%v) are released from bcc/ebc eni", ipsReleased)
+		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("ip is not local, but only some ips (%v) are released from bcc/ebc eni", ipsReleased)
 	}
 
 	defer func() {

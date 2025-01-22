@@ -104,9 +104,11 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 
 			action.Addressing = append(action.Addressing, ipv4Address)
 			action.SubnetID = ipv4Address.Subnet
+			action.Interface = ipv4Address.Interface
 			if ipv6Address != nil {
 				action.Addressing = append(action.Addressing, ipv6Address)
 				action.SubnetID = ipv6Address.Subnet
+				action.Interface = ipv6Address.Interface
 			}
 		} else {
 			action.SubnetID = subnets[0].Name
@@ -115,6 +117,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		// reuse ip
 		action.Addressing = status.Networking.Addressing
 		action.SubnetID = status.Networking.Addressing[0].Subnet
+		action.Interface = status.Networking.Addressing[0].Interface
 	}
 	defer func() {
 		if err != nil && len(releaseIPFuncs) > 0 {

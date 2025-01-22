@@ -329,14 +329,14 @@ func (n *bbcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (string, error) {
+func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
 	if n.tryRefreshBBCENI() == nil {
-		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
+		return "", false, ipsReleased, fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
-		return "", fmt.Errorf("invalid owner %s: %v", owner, err)
+		return "", false, ipsReleased, fmt.Errorf("invalid owner %s: %v", owner, err)
 	}
 
 	scopeLog := n.log.WithFields(logrus.Fields{
@@ -346,9 +346,10 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		"ips":       logfields.Repr(ips),
 	})
 
+	// release ip from old bcc/ebc/bbc eni before reuse ip if necessary
 	// check ip conflict
 	// should to delete ip from the old eni
-	isLocalIP, err := n.rleaseOldIP(ctx, scopeLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+	isLocalIP, ipsReleased, err := n.rleaseOldIP(ctx, scopeLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
 		eni, err := n.manager.enilister.Get(eniID)
 		if err != nil {
 			return fmt.Errorf("fail to release old ip. get eni %s failed: %v", eniID, err)
@@ -371,14 +372,22 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		return err
 	})
 	if err != nil {
-		return "", err
+		return "", false, ipsReleased, err
 	}
 	if isLocalIP {
 		scopeLog.Info("ip is local, no need to release ip from bbc eni")
-		return n.bbceni.Name, nil
+		return n.bbceni.Name, false, ipsReleased, nil
+	} else {
+		if len(ipsReleased) > 0 {
+			scopeLog.Info("ip is not local, need to release ip from bbc eni")
+			ipDeletedFromoldEni = true
+		}
 	}
-
-	// TODO: release ip from bbc/ebc/vpc eni before reuse ip
+	// check if all ips are released from old bcc/ebc/bbc eni before reuse ip
+	if ipDeletedFromoldEni && (len(ips) != len(ipsReleased)) {
+		scopeLog.Warnf("ip is not local, but only some ips (%v) are released from bbc eni", ipsReleased)
+		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("ip is not local, but only some ips (%v) are released from bbc eni", ipsReleased)
+	}
 	var ipAndSubnets []bbc.IpAndSubnet
 	for _, pip := range ips {
 		ipAndSubnets = append(ipAndSubnets, bbc.IpAndSubnet{
@@ -398,14 +407,14 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 
 	if err != nil {
 		scopeLog.WithError(err).Error("failed to reuse ip cross subnet")
-		return "", err
+		return "", ipDeletedFromoldEni, ipsReleased, err
 	} else if len(resp.PrivateIps) == 0 {
 		scopeLog.Error("failed to reuse ip cross subnet without any error")
-		return "", fmt.Errorf("failed to reuse ip cross subnet without any error")
+		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("failed to reuse ip cross subnet without any error")
 	}
 	scopeLog.WithField("ips", logfields.Repr(ips)).Info("failed to reuse ip cross subnet")
 
-	return n.bbceni.Name, nil
+	return n.bbceni.Name, ipDeletedFromoldEni, ipsReleased, nil
 }
 
 var _ realNodeInf = &bbcNetworkResourceSet{}

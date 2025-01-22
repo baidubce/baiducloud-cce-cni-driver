@@ -15,6 +15,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -60,6 +61,9 @@ func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, e
 	}
 	scopedLog := log.WithField(taskLogField, eniControllerName).
 		WithField("request", logfields.Json(listArgs))
+	// list eni from bce cloud, do not contain the eni which is underlay RDMA (HPC) or overlay RDMA (ERI)
+	// the underlay RDMA can be get by GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error)
+	// the overlay RDMA can be get by ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
 	enis, err := es.bceclient.ListENIs(context.TODO(), listArgs)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("sync eni failed")
@@ -120,8 +124,16 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 	if err != nil || len(nrsList) == 0 {
 		return
 	}
+	var resource *ccev2.NetResourceSet
+	for _, nrs := range nrsList {
+		// es.bceclient.ListENIs(context.TODO(), listArgs) only return the eni which is not RDMA ENI(HPC underlay RDMA/ERI overlay RDMA),
+		// so we need to check the instance type of nrs.Spec.ENI.InstanceType to ensure the eni is not RDMA ENI.
+		if nrs.Spec.ENI.InstanceType != bceutils.UnderlayRDMA && nrs.Spec.ENI.InstanceType != bceutils.OverlayRDMA {
+			resource = nrs
+			break
+		}
+	}
 
-	resource := nrsList[0]
 	scopeLog = scopeLog.WithField("nodeName", resource.Name)
 	scopeLog.Debugf("find node by instanceID success")
 	scopeLog.Infof("start to create external eni")

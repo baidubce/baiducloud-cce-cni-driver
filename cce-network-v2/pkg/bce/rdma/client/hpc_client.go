@@ -87,15 +87,17 @@ func (c *HpcClient) BatchAddPrivateIP(ctx context.Context, eniID string, private
 		PrivateIPAddressCount: count,
 	}
 	hpcEni, err := c.cloud.BatchAddHpcEniPrivateIP(ctx, args)
-	if err != nil {
-		return hpcEni.PrivateIPAddresses, err
+	if hpcEni == nil || len(hpcEni.PrivateIPAddresses) == 0 {
+		log.WithError(err).WithField("hpcENI", eniID).Warnf("failed to batch add private ips in hpc ENI")
+		if err == nil {
+			err = fmt.Errorf("failed to batch add private ips in hpc ENI %s", eniID)
+		}
+		return []string{}, err
 	}
-	if len(hpcEni.PrivateIPAddresses) == 0 {
-		return hpcEni.PrivateIPAddresses, fmt.Errorf("failed to batch add private ips in %s hpcEni", eniID)
-	}
-	log.Infof("batch add HpcEni private ips are %v", hpcEni.PrivateIPAddresses)
 
-	return hpcEni.PrivateIPAddresses, nil
+	log.Infof("batch add HpcEni private ips are %v in hpcENI %s", hpcEni.PrivateIPAddresses, eniID)
+
+	return hpcEni.PrivateIPAddresses, err
 }
 
 func (c *HpcClient) BatchDeletePrivateIP(ctx context.Context, eniID string, privateIPs []string) error {

@@ -348,9 +348,10 @@ func (r *EIPReconciler) initBCEClient() error {
 		r.CCEClusterID, /*CCE Cluseter ID*/
 		"",             /*BCE Access Key*/
 		"",             /*BCE Secure Key*/
+		false,
 		k8s.Client(),
 		false,
-		30 * time.Second, /*DefaultAPIRequestTimeout*/
+		30*time.Second, /*DefaultAPIRequestTimeout*/
 	)
 	if err != nil {
 		return err

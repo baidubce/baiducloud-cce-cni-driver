@@ -88,10 +88,13 @@ func (eni *eniResource) ForeachAddress(instanceID string, fn ipamTypes.AddressIt
 // `fn`. This function is read-locked for the entire execution.
 func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
 	// Select only the ENI of the local node
-	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
+	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelInstanceID: instanceID,
 		k8s.LabelNodeName:   nodeName,
 	}))
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
 	enis, err := m.enilister.List(selector)
 	if err != nil {
 		return fmt.Errorf("list ENIs failed: %w", err)

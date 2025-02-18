@@ -581,10 +581,13 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 	eniStatusMap := make(map[string]ccev2.SimpleENIStatus)
 	crossSubnetUsed := make(ipamTypes.AllocationMap, 0)
 	// Select only the ENI of the local node
-	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
+	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelInstanceID: n.instanceID,
 		k8s.LabelNodeName:   n.k8sObj.Name,
 	}))
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
 	enis, err := n.manager.enilister.List(selector)
 	if err != nil {
 		return

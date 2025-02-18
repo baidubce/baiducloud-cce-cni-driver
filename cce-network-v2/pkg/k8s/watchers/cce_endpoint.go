@@ -49,9 +49,12 @@ func (k *K8sWatcher) cceEndpointInit(cceClient *k8s.K8sCCEClient, asyncControlle
 	var once sync.Once
 	apiGroup := k8sAPIGroupCCEEndpointV2
 
-	selector, _ := meta_v1.LabelSelectorAsSelector(meta_v1.SetAsLabelSelector(labels.Set{
+	selector, err := meta_v1.LabelSelectorAsSelector(meta_v1.SetAsLabelSelector(labels.Set{
 		k8s.LabelNodeName: nodeTypes.GetName(),
 	}))
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
 	optionsModifier := func(options *meta_v1.ListOptions) {
 		options.LabelSelector = selector.String()
 	}

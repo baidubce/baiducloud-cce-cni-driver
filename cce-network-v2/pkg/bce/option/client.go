@@ -45,14 +45,21 @@ func BCEClient() cloud.Interface {
 		os.Setenv(ccegateway.EndpointOverrideEnv, endpoint)
 	}
 
-	if operatorOption.Config.CCEClusterID == "" || operatorOption.Config.BCECloudRegion == "" {
-		log.Fatal("[InitBCEClient] ClusterID or Region is nil")
+	if operatorOption.Config.BCECloudRegion == "" {
+		log.Fatal("[InitBCEClient] Region is nil")
+	}
+
+	if operatorOption.Config.BCECloudAccessKey == "" && operatorOption.Config.BCECloudSecureKey == "" {
+		if operatorOption.Config.CCEClusterID == "" {
+			log.Fatalf("[InitBCEClient] ClusterID is required when ak/sk are not set")
+		}
 	}
 
 	c, err := cloud.New(operatorOption.Config.BCECloudRegion,
 		operatorOption.Config.CCEClusterID,
 		operatorOption.Config.BCECloudAccessKey,
 		operatorOption.Config.BCECloudSecureKey,
+		operatorOption.Config.BCEForceViaCCEGateway,
 		k8s.Client(),
 		option.Config.Debug, operatorOption.Config.DefaultAPITimeoutLimit)
 	if err != nil {

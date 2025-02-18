@@ -80,7 +80,7 @@ func generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeature
 	return netResourceSetName
 }
 
-func generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
+func generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
 	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
 	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
 	var labelSelectorIdentification string
@@ -134,9 +134,9 @@ func GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeNam
 	return nodeName
 }
 
-func GetLabelSelectorValueFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
+func GetRdmaNrsLabelSelectorValueFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
 	nodeName := GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID)
-	labelSelectorValue = generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
+	labelSelectorValue = generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
 	return labelSelectorValue
 }
 
@@ -193,7 +193,7 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 				return ris, metaAPIErr
 			}
 			netResourceSetName := generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeatures)
-			labelSelectorValue := generateLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
+			labelSelectorValue := generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
 			rdmaIfInfo.MacAddress = macAddress
 			rdmaIfInfo.NetResourceSetName = netResourceSetName
 			rdmaIfInfo.LabelSelectorValue = labelSelectorValue

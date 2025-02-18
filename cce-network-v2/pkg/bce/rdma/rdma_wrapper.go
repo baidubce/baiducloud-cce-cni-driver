@@ -86,11 +86,22 @@ func (n *rdmaNetResourceSetWrapper) findMatchedEniByMac(ctx context.Context, iaa
 // ensureRdmaENI means create a eni object for rdma interface
 // rdma interface has only one eni, so we use rdma interface id as eni name
 func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
+	getOwnerReference := func() string {
+		or := n.k8sObj.GetOwnerReferences()
+		for _, ref := range or {
+			if ref.Kind == "Node" {
+				return ref.Name
+			}
+		}
+		return ""
+	}
+
 	if n.rdmaENIName != "" {
 		eni, err := n.manager.eniLister.Get(n.rdmaENIName)
 		if errors.IsNotFound(err) {
 			goto forceGetFromIaaS
 		}
+		eni = eni.DeepCopy()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rdma eni %s from lister", n.rdmaENIName)
 		}
@@ -101,16 +112,10 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		}
 		if bceutils.IsCCERdmaNetRourceSetName(eni.Labels[k8s.LabelNodeName]) &&
 			eni.Labels[k8s.LabelNodeName] != n.k8sObj.Name {
-			var ownerReferenceNodeName string
-			or := n.k8sObj.GetOwnerReferences()
-			for _, ref := range or {
-				if ref.Kind == "Node" {
-					ownerReferenceNodeName = ref.Name
-					break
-				}
-			}
-			labelSelectorValue := bceutils.GetLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
-				ownerReferenceNodeName, n.k8sObj.Spec.InstanceID, eni.Spec.MacAddress, string(eni.Spec.Type))
+			// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
+			// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
+			labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
+				getOwnerReference(), n.k8sObj.Spec.InstanceID, eni.Spec.MacAddress, string(eni.Spec.Type))
 			eni.Labels[k8s.LabelNodeName] = labelSelectorValue
 			isNeedUpdate = true
 		}
@@ -136,10 +141,14 @@ forceGetFromIaaS:
 	vifFeatures := n.bceRDMANetResourceSet.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
 
 	var rdmaEniId string
+	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
+	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
+	labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
+		getOwnerReference(), n.k8sObj.Spec.InstanceID, macAddress, vifFeatures)
 	requirement := metav1.LabelSelectorRequirement{
 		Key:      k8s.LabelNodeName,
 		Operator: metav1.LabelSelectorOpIn,
-		Values:   []string{n.k8sObj.Name},
+		Values:   []string{labelSelectorValue},
 	}
 	labelSelector := &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},

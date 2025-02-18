@@ -70,6 +70,7 @@ func New(
 	clusterID string,
 	accessKeyID string,
 	secretAccessKey string,
+	forceViaGateway bool,
 	kubeClient kubernetes.Interface,
 	debug bool,
 	timeout time.Duration,
@@ -81,7 +82,11 @@ func New(
 	var auth Auth
 	var err error
 	if accessKeyID != "" && secretAccessKey != "" {
-		auth, err = NewAccessKeyPairAuth(accessKeyID, secretAccessKey, "")
+		if forceViaGateway {
+			auth, err = NewAccessKeyPairViaCCEGatewayAuth(accessKeyID, secretAccessKey, "")
+		} else {
+			auth, err = NewAccessKeyPairAuth(accessKeyID, secretAccessKey, "")
+		}
 	} else {
 		auth, err = NewCCEGatewayAuth(region, clusterID, kubeClient)
 	}

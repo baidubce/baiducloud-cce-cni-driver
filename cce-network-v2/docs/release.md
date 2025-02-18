@@ -8,6 +8,14 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
+#### 2.12.14 [20250213]
+1. [Bug] 修复 VPC-ENI 模式下的 remove ENI finalizer 更新逻辑，解决因节点删除时 ENI finalizer 未清理导致 ENI 对象残留的问题
+2. [Bug] 修复 VPC-ENI 模式下，因启动时序导致在 cce-network-operator 启动过程中， PSTS 固定 IP 跨节点分配时可能导致的 panic 问题
+3. [Bug] 修改开启 RDMA 场景下 List RDMA ENI 对象的 LabelSelectorValue 的拼装规则，解决当 Node Name 超长时因找不到对应的 RDMA ENI 对象而导致节点无法就绪的问题
+4. [Bug] 修复开启 RDMA 场景下，操作 RDMA ENI 对象偶发 fatal error: concurrent map read and map write 问题
+5. [Bug] 修复 VPC-ENI 模式下，在大量并发场景下偶发部分 ENI 的 MacAddress 为空，导致节点不 Ready 的情况
+6. [Bug] 修复 VPC-ENI 模式下，PSTS 自定义 TTL 参数无法生效，一直为默认值 168h0m0s 的问题
+
 #### 2.12.13 [20250122]
 1. [Bug] 修复 ReuseIP CEP 跨 ENI 重用时， ENI 对象未更新导致 ReuseIP 在 ENI对象上残留的问题，解决使用固定 IP 的 Pod IP 非预期变更的问题
 2. [Optimize] 优化 ubuntu22.04 中的 /lib/systemd/network/99-default.link 为 none，解决该参数被意外修改后导致 veth 的 mac 地址被非预期变更的问题

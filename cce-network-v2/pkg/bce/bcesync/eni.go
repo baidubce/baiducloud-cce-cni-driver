@@ -197,11 +197,11 @@ func (es *eniSyncher) Update(resource *ccev2.ENI) error {
 
 func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entry) error {
 	var (
-		newObj      = resource.DeepCopy()
-		err         error
-		ctx         = logfields.NewContext()
-		eniStatus   *ccev2.ENIStatus
-		updateError error
+		newObj            = resource.DeepCopy()
+		err               error
+		ctx               = logfields.NewContext()
+		eniStatus         *ccev2.ENIStatus
+		updateStatusError error
 	)
 	defer func() {
 		if err == nil {
@@ -214,8 +214,9 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		return nil
 	}
 
-	isNeedUpdate := es.mangeFinalizer(newObj)
-	if es.remoteSyncer.useENIMachine() && isNeedUpdate {
+	isNeedPatch := es.mangeFinalizer(newObj)
+
+	if es.remoteSyncer.useENIMachine() {
 		scopeLog.Debug("start eni machine")
 		// start machine
 		machine := eniStateMachine{
@@ -229,39 +230,54 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		eniStatus = &newObj.Status
 		_, isDelayError := err.(*cm.DelayEvent)
 		if isDelayError {
-			goto updateStatus
+			goto patchAndupdateStatus
 		} else if err != nil {
 			scopeLog.WithError(err).Error("eni machine failed")
 			return err
 		}
 	}
 
-updateStatus:
+	//When the Finalizer is null, only patching is allowed, updates will ignore changes.
+patchAndupdateStatus:
+	if isNeedPatch {
+		scopeLog.WithContext(ctx).WithField("eni %s should remove finalizers", newObj.Name).Infoln("patch eni")
+		///TODO: patch eni here
+	}
+
+	obj, err := es.updater.Lister().Get(newObj.Name)
+	if err != nil || obj == nil {
+		scopeLog.WithError(err).Error("get eni failed")
+		return err
+	}
+	objEniToUpdateStatus := obj.DeepCopy()
 	if logfields.Json(eniStatus) != logfields.Json(&resource.Status) &&
 		eniStatus != nil {
-		newObj.Status = *eniStatus
+		objEniToUpdateStatus.Status = *eniStatus
 		scopeLog = scopeLog.WithFields(logrus.Fields{
-			"vpcStatus": newObj.Status.VPCStatus,
+			"vpcStatus": objEniToUpdateStatus.Status.VPCStatus,
 			"oldStatus": resource.Status.VPCStatus,
-			"cceStatus": newObj.Status.CCEStatus,
+			"cceStatus": objEniToUpdateStatus.Status.CCEStatus,
 		})
-		_, updateError = es.updater.UpdateStatus(newObj)
-		if updateError != nil {
-			scopeLog.WithError(updateError).Error("update eni status failed")
-			return updateError
+
+		_, updateStatusError = es.updater.UpdateStatus(objEniToUpdateStatus)
+		if updateStatusError != nil {
+			scopeLog.WithError(updateStatusError).WithField("eni", objEniToUpdateStatus.Name).Error("update eni status failed")
+			return updateStatusError
 		}
 		scopeLog.Info("update eni status success")
 	}
 	return err
 }
 
+// When the Finalizer is null, only patching is allowed, updates will ignore changes.
 // mangeFinalizer except for node deletion, direct deletion of ENI objects is prohibited
-// return true: should update this object (*ccev2.ENI)
-func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) (isNeedUpdate bool) {
-	isNeedUpdate = false
+// Only when the ENI is not in use, the finalizer will be removed. Then, return true.
+// return true: should patch this object (*ccev2.ENI)
+func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) (isNeedPatch bool) {
+	isNeedPatch = false
 	if newObj.DeletionTimestamp == nil && len(newObj.Finalizers) == 0 {
 		newObj.Finalizers = append(newObj.Finalizers, FinalizerENI)
-		isNeedUpdate = true
+		isNeedPatch = false
 	}
 	var finalizers []string
 
@@ -294,7 +310,10 @@ removeFinalizer:
 	}
 	newObj.Finalizers = finalizers
 	log.Infof("remove finalizer from deletable ENI %s on NetResourceSet %s ", newObj.Name, newObj.Spec.NodeName)
-	isNeedUpdate = true
+	if len(newObj.Finalizers) == 0 {
+		newObj.Finalizers = nil
+		isNeedPatch = true
+	}
 	return
 }
 
@@ -339,7 +358,7 @@ func (esm *eniStateMachine) start() error {
 	}
 	var err error
 	if esm.resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
-		if len(esm.resource.Spec.PrivateIPSet) == 0 {
+		if esm.resource.Spec.ENI.MacAddress == "" || len(esm.resource.Spec.PrivateIPSet) == 0 {
 			esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
 			if err != nil {
 				return fmt.Errorf("eni state machine failed to get inuse eni(%s): %v", esm.resource.Name, err)

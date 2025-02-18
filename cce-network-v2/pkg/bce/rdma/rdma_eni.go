@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -64,11 +65,33 @@ func (eni *eniResource) ForeachAddress(instanceID string, fn ipamTypes.AddressIt
 // ForeachInstance will iterate over each instance inside `instances`, and call
 // `fn`. This function is read-locked for the entire execution.
 func (m *rdmaInstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+	m.mutex.Lock()
+	n := m.nodeMap[nodeName]
+	m.mutex.Unlock()
+	getOwnerReference := func() string {
+		or := n.k8sObj.GetOwnerReferences()
+		for _, ref := range or {
+			if ref.Kind == "Node" {
+				return ref.Name
+			}
+		}
+		return ""
+	}
+	// the macAddress and vifFeatures is decided by the NetResourceSet's annotation
+	macAddress := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoMacAddress]
+	vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
+	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
+	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
+	labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
+		getOwnerReference(), n.k8sObj.Spec.InstanceID, macAddress, vifFeatures)
 	// Select only the ENI of the local node's rdma interface
-	selector, _ := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
+	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelInstanceID: instanceID,
-		k8s.LabelNodeName:   nodeName,
+		k8s.LabelNodeName:   labelSelectorValue,
 	}))
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
 	enis, err := m.eniLister.List(selector)
 	if err != nil {
 		return fmt.Errorf("list ENIs failed: %w", err)

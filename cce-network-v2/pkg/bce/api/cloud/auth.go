@@ -128,3 +128,38 @@ func (gateway *cceGateway) GetSignOptions(ctx context.Context) *auth.SignOptions
 		ExpireSeconds: auth.DEFAULT_EXPIRE_SECONDS,
 	}
 }
+
+type accessKeyPairViaCCEGateway struct {
+	accessKeyPair
+}
+
+func NewAccessKeyPairViaCCEGatewayAuth(ak, sk, token string) (Auth, error) {
+	if ak == "" {
+		return nil, fmt.Errorf("empty ak")
+	}
+	if sk == "" {
+		return nil, fmt.Errorf("empty sk")
+	}
+	return &accessKeyPairViaCCEGateway{
+		accessKeyPair: accessKeyPair{
+			ak:    ak,
+			sk:    sk,
+			token: token,
+		},
+	}, nil
+}
+
+func (keyPair *accessKeyPairViaCCEGateway) GetSigner(ctx context.Context) auth.Signer {
+	return ccegateway.NewAccessKeyViaGatewaySigner(&auth.BceV1Signer{})
+}
+
+func (keyPair *accessKeyPairViaCCEGateway) GetCredentials(ctx context.Context) *auth.BceCredentials {
+	return keyPair.accessKeyPair.GetCredentials(ctx)
+}
+
+func (keyPair *accessKeyPairViaCCEGateway) GetSignOptions(ctx context.Context) *auth.SignOptions {
+	return &auth.SignOptions{
+		HeadersToSign: auth.DEFAULT_HEADERS_TO_SIGN,
+		ExpireSeconds: auth.DEFAULT_EXPIRE_SECONDS,
+	}
+}

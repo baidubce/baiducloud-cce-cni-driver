@@ -39,15 +39,24 @@ func (es *remoteVpcEniSyncher) setENIUpdater(updater syncer.ENIUpdater) {
 }
 
 // statENI returns one ENI with the given name from bce cloud
-func (es *remoteVpcEniSyncher) statENI(ctx context.Context, ENIID string) (*eni.Eni, error) {
-	eniCache, err := es.bceclient.StatENI(ctx, ENIID)
+func (es *remoteVpcEniSyncher) statENI(ctx context.Context, eniID string) (*eni.Eni, error) {
+	eniCache, err := es.bceclient.StatENI(ctx, eniID)
 	if err != nil {
 		log.WithField(taskLogField, eniControllerName).
-			WithField("ENIID", ENIID).
+			WithField("eniID", eniID).
 			WithContext(ctx).
 			WithError(err).Errorf("stat eni failed")
 		return nil, err
 	}
+	scopeLog := eniLog.WithFields(logrus.Fields{
+		taskLogField: eniControllerName,
+		eniID:        eniID,
+	})
+	if eniCache == nil {
+		scopeLog.Debug("stat eni not found")
+		return nil, fmt.Errorf("%s not found", eniID)
+	}
+	scopeLog.Debug("stat eni success")
 	result := eni.Eni{Eni: *eniCache}
 	es.syncManager.AddItems([]eni.Eni{result})
 	return &result, nil

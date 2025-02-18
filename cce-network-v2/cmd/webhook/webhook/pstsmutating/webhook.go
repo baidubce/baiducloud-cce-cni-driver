@@ -100,7 +100,9 @@ func (h *MutatingPSTSHandler) defaultPstsSpec(spec *ccev2.PodSubnetTopologySprea
 		}
 	}
 	if spec.Strategy.ReleaseStrategy == ccev2.ReleaseStrategyTTL {
-		spec.Strategy.TTL = &metav1.Duration{Duration: time.Hour * 24 * 7}
+		if spec.Strategy.TTL == nil || spec.Strategy.TTL.Seconds() <= 0 {
+			spec.Strategy.TTL = &metav1.Duration{Duration: time.Hour * 24 * 7}
+		}
 	}
 }
 
@@ -181,7 +183,8 @@ func (h *MutatingPSTSHandler) validateSubnet(
 			allErrs = h.validateReuseSubnet(sbn, sbnSpec, fldPath.Child(sbnID), allErrs)
 		} else {
 			if len(sbnSpec) != 0 {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child(sbnID), sbnID, "subnet allocation is not empty"))
+				allErrs = append(allErrs, field.Invalid(fldPath.Child(sbnID), sbnID,
+					"subnet allocation must be empty when strategy enableReuseIPAddress is false"))
 				continue
 			}
 		}

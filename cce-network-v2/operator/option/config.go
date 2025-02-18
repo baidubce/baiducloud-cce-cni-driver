@@ -156,11 +156,12 @@ const (
 	// BCECloudVPCID allows user to specific vpc
 	BCECloudVPCID = "bce-cloud-vpc-id"
 	// BCECloudHost host of iaas api
-	BCECloudHost      = "bce-cloud-host"
-	BCECloudRegion    = "bce-cloud-region"
-	BCECloudContry    = "bce-cloud-country"
-	BCECloudAccessKey = "bce-cloud-access-key"
-	BCECloudSecureKey = "bce-cloud-secure-key"
+	BCECloudHost               = "bce-cloud-host"
+	BCECloudRegion             = "bce-cloud-region"
+	BCECloudContry             = "bce-cloud-country"
+	BCECloudAccessKey          = "bce-cloud-access-key"
+	BCECloudSecureKey          = "bce-cloud-secure-key"
+	BCECloudForceViaCCEGateway = "bce-cloud-force-via-cce-gateway"
 
 	ResourceENIResyncInterval   = "resource-eni-resync-interval"
 	ResourceHPCResyncInterval   = "resource-hpc-resync-interval"
@@ -329,10 +330,11 @@ type OperatorConfig struct {
 
 	// BCE options
 
-	// AlibabaCloudVPCID allow user to specific vpc
-	BCECloudVPCID     string
-	BCECloudAccessKey string
-	BCECloudSecureKey string
+	// BceCloudVPCID allow user to specific vpc
+	BCECloudVPCID         string
+	BCECloudAccessKey     string
+	BCECloudSecureKey     string
+	BCEForceViaCCEGateway bool
 
 	// ResourceResyncInterval is the interval between attempts of the sync between Cloud and k8s
 	// like ENIs,Subnets
@@ -471,6 +473,7 @@ func (c *OperatorConfig) Populate() {
 	c.BCECloudContry = viper.GetString(BCECloudContry)
 	c.BCECloudAccessKey = viper.GetString(BCECloudAccessKey)
 	c.BCECloudSecureKey = viper.GetString(BCECloudSecureKey)
+	c.BCEForceViaCCEGateway = viper.GetBool(BCECloudForceViaCCEGateway)
 	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
 	c.ResourceHPCResyncInterval = viper.GetDuration(ResourceHPCResyncInterval)

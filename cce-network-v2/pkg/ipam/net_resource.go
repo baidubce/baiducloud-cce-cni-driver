@@ -249,7 +249,7 @@ func (n *NetResource) getMaxAllocate() int {
 	instanceMax := n.ops.GetMaximumAllocatableIPv4()
 	if n.resource.Spec.IPAM.MaxAllocate > 0 {
 		if n.resource.Spec.IPAM.MaxAllocate > instanceMax {
-			n.loggerLocked().Warningf("max-allocate (%d) is higher than the instance type limits (%d)", n.resource.Spec.IPAM.MaxAllocate, instanceMax)
+			n.loggerLocked().Debugf("max-allocate (%d) is higher than the instance type limits (%d)", n.resource.Spec.IPAM.MaxAllocate, instanceMax)
 			return instanceMax
 		}
 		return n.resource.Spec.IPAM.MaxAllocate

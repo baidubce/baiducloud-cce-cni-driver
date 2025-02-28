@@ -384,7 +384,7 @@ func (esm *eniStateMachine) start() error {
 			esm.scopeLog.Info("update eni spec success")
 		} else {
 			_, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
-			if err != nil {
+			if cloud.IsErrorReasonNoSuchObject(err) {
 				esm.scopeLog.Infof("eni state machine failed to get inuse eni(%s): %v", esm.resource.Name, err)
 				(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatusNone)
 				// update spec
@@ -395,6 +395,8 @@ func (esm *eniStateMachine) start() error {
 				}
 				esm.scopeLog.Info("update eni spec success")
 				return nil
+			} else if err != nil {
+				return fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
 			}
 		}
 	} else if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
@@ -404,7 +406,6 @@ func (esm *eniStateMachine) start() error {
 			// eni not found, will delete it which not inuse
 			log.WithField("eniID", esm.resource.Name).Error("not inuse eni not found in vpc, will delete it")
 			return esm.deleteENI()
-
 		} else if err != nil {
 			return fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
 		}

@@ -3,6 +3,7 @@ package os
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 
@@ -11,19 +12,19 @@ import (
 
 const (
 	usrPath                   = "/usr-host"
-	defaultLinkPath           = usrPath + "/lib/systemd/network/99-default.link"
+	defaultLinkPath           = usrPath + "/lib/systemd/network/98-default.link"
 	macAddressPolicyKey       = "MACAddressPolicy"
 	macAddressPolicyValueNone = "none"
 
 	defaultLinkTemplate = `
-	[Match]
-	OriginalName=*
+[Match]
+OriginalName=*
 
-	[Link]
-	NamePolicy=keep kernel database onboard slot path
-	AlternativeNamesPolicy=database onboard slot path
-	MACAddressPolicy=none
-	`
+[Link]
+NamePolicy=keep kernel database onboard slot path
+AlternativeNamesPolicy=database onboard slot path
+MACAddressPolicy=none
+`
 )
 
 func UpdateSystemdConfigOption(linkPath, key, value string) error {
@@ -93,4 +94,20 @@ func CheckIfLinkOptionConfigured(linkPath, key, value string) (bool, error) {
 	}
 
 	return false, fmt.Errorf("failed to find %s in %s, the key is missing", key, linkPath)
+}
+
+// PrintFileContent reads the entire content of the specified file into a string, and then prints it
+func PrintFileContent(filename string) error {
+	log.Info(filename, " file content:")
+	// Read the entire file
+	data, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("unable to read file: %v", err)
+	}
+
+	// Convert the data to a string and print it
+	content := string(data)
+	log.Info(content)
+
+	return nil
 }

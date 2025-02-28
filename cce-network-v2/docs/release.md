@@ -8,6 +8,12 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
+#### 2.12.15 [20250227]
+1. [Optimize] 优化 NetworkresourceSet.Spec.Addresses 的添加规则，避免重复添加节点 IP
+2. [Bug] 修复 VPC-ENI 模式下，访问 ENI 接口失败时，误将 ENI 对象的 VPCStatus 标记为 None 的问题
+3. [Optimize] 创建/lib/systemd/network/98-default.link文件，监控并持续维持其macAddressPolicy为None，解决该参数被意外修改后导致 veth 的 mac 地址被非预期变更的问题
+4. [Bug] 修复 VPC-ENI 模式下，弹性网卡预挂载 eni-pre-allocate-num 配置在等于 eniQuota 时数量少一个的问题，增大重试次数避免 ENI 串行创建失败的问题
+
 #### 2.12.14 [20250213]
 1. [Bug] 修复 VPC-ENI 模式下的 remove ENI finalizer 更新逻辑，解决因节点删除时 ENI finalizer 未清理导致 ENI 对象残留的问题
 2. [Bug] 修复 VPC-ENI 模式下，因启动时序导致在 cce-network-operator 启动过程中， PSTS 固定 IP 跨节点分配时可能导致的 panic 问题

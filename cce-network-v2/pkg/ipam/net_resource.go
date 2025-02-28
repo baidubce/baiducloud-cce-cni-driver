@@ -619,6 +619,7 @@ func (n *NetResource) determineMaintenanceAction() (*maintenanceAction, error) {
 	// Validate that the node still requires addresses to be released, the
 	// request may have been resolved in the meantime.
 	// we will disable the release of excess IPs for burstable ENI mode.
+	// getMaxIPBurstableIPCount() == 0 meanes that we are not in burstable ENI mode.
 	if n.manager.releaseExcessIPs && stats.ExcessIPs > 0 && n.getMaxIPBurstableIPCount() == 0 {
 		a.release = n.ops.PrepareIPRelease(stats.ExcessIPs, scopedLog)
 		return a, nil

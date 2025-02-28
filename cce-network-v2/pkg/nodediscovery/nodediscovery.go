@@ -227,10 +227,7 @@ func (n *NodeDiscovery) updateLocalNode() {
 	if err != nil {
 		log.WithError(err).Fatal("Unable to detect OS distribution")
 	}
-	err = release.HostOS().DisableAndMonitorMacPersistant()
-	if err != nil {
-		log.WithError(err).Fatal("Unable to disable mac persist")
-	}
+	_ = release.HostOS().DisableAndMonitorMacPersistant()
 
 	if k8s.IsEnabled() {
 		// CRD IPAM endpoint restoration depends on the completion of this
@@ -322,6 +319,9 @@ func (n *NodeDiscovery) UpdateNetResourceSetResource() {
 }
 
 func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) error {
+	// reset NetworkresourceSet.Spec.Addresses to avoid stale data
+	nodeResource.Spec.Addresses = []ccev2.NodeAddress{}
+
 	// If we are unable to fetch the K8s Node resource and the NetResourceSet does
 	// not have an OwnerReference set, then somehow we are running in an
 	// environment where only the NetResourceSet exists. Do not proceed as this is

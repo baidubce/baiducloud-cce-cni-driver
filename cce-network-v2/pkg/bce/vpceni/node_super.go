@@ -212,6 +212,7 @@ func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
 	if n.k8sObj.Annotations != nil && n.k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] != "" {
 		lastResyncTime := n.k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced]
 		t, err := time.Parse(time.RFC3339, lastResyncTime)
+		// if the last resync time is not set or expired one day ago, go to slow path
 		if err != nil || t.Add(DayDuration).Before(time.Now()) {
 			goto slowPath
 		}
@@ -549,13 +550,14 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 	inums, msg, err := n.real.createInterface(ctx, allocation, scopedLog)
 	n.creatingEni.add(-1)
 
-	preAllocateENINum := math.IntMin(eniQuota.GetMaxENI()-1, n.k8sObj.Spec.ENI.PreAllocateENI)
+	preAllocateENINum := math.IntMin(eniQuota.GetMaxENI(), n.k8sObj.Spec.ENI.PreAllocateENI)
 	preAllocateENINum = preAllocateENINum - availableENICount - 1
+	retryTimes := preAllocateENINum * 2
 	for i := 0; i < preAllocateENINum; i++ {
 		inums++
 		go func() {
 			retry := 0
-			for retry < preAllocateENINum {
+			for retry < retryTimes {
 				n.creatingEni.add(1)
 				_, _, e := n.real.createInterface(ctx, allocation, scopedLog)
 				n.creatingEni.add(-1)
@@ -563,7 +565,7 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 					scopedLog.Infof("create addition interface success")
 					return
 				}
-				scopedLog.WithError(e).Errorf("create addition interface failed, retry later for %ds(%d/%d)", retryDelay, retry+1, preAllocateENINum)
+				scopedLog.WithError(e).Warnf("create addition interface failed, retry later for %ds(%d/%d)", retryDelay, retry+1, retryTimes)
 				retry++
 				// attaching ENI is need to wait serveral seconds (<15s) for the ENI to be attached,
 				// so we can retry preAllocateENINum times for every retryDelay(15s) seconds later.
@@ -824,6 +826,7 @@ func (n *bceNetworkResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 					return err
 				} else {
 					// if partial success, we will continue to allocate
+					// DO NOT EDIT HERE！Because the actual allocation is indeed not this much, but it can guarantee exiting the loop.
 					ipv4ToAllocate -= ipv4PaticalToAllocate
 					ipv6ToAllocate -= ipv6PaticalToAllocate
 					continue

@@ -203,7 +203,7 @@ forceGetFromIaaS:
 				Name: rdmaEni.Id,
 				Labels: map[string]string{
 					k8s.LabelInstanceID: n.instanceID,
-					k8s.LabelNodeName:   n.k8sObj.Name,
+					k8s.LabelNodeName:   labelSelectorValue,
 					k8s.LabelENIType:    iaasClient.GetRDMAIntType(),
 					k8s.VPCIDLabel:      vpcID,
 				},

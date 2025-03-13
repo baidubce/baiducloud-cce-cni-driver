@@ -60,12 +60,14 @@ func NewFilteredSecurityGroupInformer(client versioned.Interface, resyncPeriod t
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2alpha1().SecurityGroups().List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2alpha1().SecurityGroups().Watch(context.TODO(), options)
 			},
 		},

@@ -124,8 +124,8 @@ func (ciq *customerIPQuota) SetMaxENI(max int) {
 
 // SetMaxIP implements IPResourceManager.
 func (ciq *customerIPQuota) SetMaxIP(max int) {
-	if operatorOption.Config.BCECustomerMaxIP != 0 {
-		max = operatorOption.Config.BCECustomerMaxIP
+	if operatorOption.Config.BCECustomerMaxRdmaIP != 0 {
+		max = operatorOption.Config.BCECustomerMaxRdmaIP
 	}
 	ciq.maxIPPerENI = max
 }

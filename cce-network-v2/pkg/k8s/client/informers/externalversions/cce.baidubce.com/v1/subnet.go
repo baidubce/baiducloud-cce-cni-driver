@@ -60,12 +60,14 @@ func NewFilteredSubnetInformer(client versioned.Interface, resyncPeriod time.Dur
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV1().Subnets().List(context.TODO(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV1().Subnets().Watch(context.TODO(), options)
 			},
 		},

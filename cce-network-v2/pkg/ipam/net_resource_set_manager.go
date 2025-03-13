@@ -189,7 +189,7 @@ func NewNetResourceSetManager(instancesAPI AllocationImplementation, k8sAPI NetR
 	resyncName := "ipam-net-resource-set-manager-resync"
 	resyncTrigger, err := trigger.NewTrigger(trigger.Parameters{
 		Name:             resyncName,
-		MinInterval:      10 * time.Millisecond,
+		MinInterval:      10 * time.Microsecond,
 		MetricsObserver:  metrics.ResyncTrigger(),
 		MaxDelayDuration: 600 * time.Second, // 5 minutes
 		Log:              log.WithField("trigger", resyncName),
@@ -304,7 +304,7 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 		maintainerName := fmt.Sprintf("ipam-pool-maintainer-%s", resource.Name)
 		poolMaintainer, err := trigger.NewTrigger(trigger.Parameters{
 			Name:             maintainerName,
-			MinInterval:      10 * time.Millisecond,
+			MinInterval:      10 * time.Microsecond,
 			MetricsObserver:  n.metricsAPI.PoolMaintainerTrigger(),
 			MaxDelayDuration: operatorOption.Config.ResourceResyncInterval, // 5 minutes
 			Log:              netResource.logger().WithField("trigger", maintainerName),
@@ -336,7 +336,7 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 		syncName := fmt.Sprintf("ipam-node-k8s-sync-%s", resource.Name)
 		k8sSync, err := trigger.NewTrigger(trigger.Parameters{
 			Name:             syncName,
-			MinInterval:      10 * time.Millisecond,
+			MinInterval:      10 * time.Microsecond,
 			MetricsObserver:  n.metricsAPI.K8sSyncTrigger(),
 			MaxDelayDuration: 300 * time.Second, // 5 minutes
 			Log:              netResource.logger().WithField("trigger", syncName),

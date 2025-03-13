@@ -325,6 +325,8 @@ func generateRdmaENISpec(vifFeatures string) (eni *api.ENISpec, err error) {
 }
 
 func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourceSet, vifFeatures, macAddress string) error {
+	// reset NetworkresourceSet.Spec.Addresses to avoid stale data
+	rdmaNetResourceSet.Spec.Addresses = []ccev2.NodeAddress{}
 
 	// If we are unable to fetch the K8s Node resource and the NetResourceSet does
 	// not have an OwnerReference set, then somehow we are running in an

@@ -61,12 +61,14 @@ func NewFilteredCCEEndpointInformer(client versioned.Interface, namespace string
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().CCEEndpoints(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().CCEEndpoints(namespace).Watch(context.TODO(), options)
 			},
 		},

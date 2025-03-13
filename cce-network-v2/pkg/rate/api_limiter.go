@@ -242,6 +242,7 @@ func (p APILimiterParameters) MergeUserConfig(config string) (APILimiterParamete
 
 // NewAPILimiter returns a new APILimiter based on the parameters and metrics implementation
 func NewAPILimiter(name string, p APILimiterParameters, metrics MetricsObserver) *APILimiter {
+	key := strings.ToLower(name)
 	if p.MeanOver == 0 {
 		p.MeanOver = defaultMeanOver
 	}
@@ -263,7 +264,7 @@ func NewAPILimiter(name string, p APILimiterParameters, metrics MetricsObserver)
 	}
 
 	l := &APILimiter{
-		name:                  name,
+		name:                  key,
 		params:                p,
 		parallelRequests:      p.ParallelRequests,
 		parallelWaitSemaphore: semaphore.NewWeighted(waitSemaphoreResolution),
@@ -279,13 +280,14 @@ func NewAPILimiter(name string, p APILimiterParameters, metrics MetricsObserver)
 
 // NewAPILimiterFromConfig returns a new APILimiter based on user configuration
 func NewAPILimiterFromConfig(name, config string, metrics MetricsObserver) (*APILimiter, error) {
+	key := strings.ToLower(name)
 	p := &APILimiterParameters{}
 
 	if err := p.mergeUserConfig(config); err != nil {
 		return nil, err
 	}
 
-	return NewAPILimiter(name, *p, metrics), nil
+	return NewAPILimiter(key, *p, metrics), nil
 }
 
 func (p *APILimiterParameters) mergeUserConfigKeyValue(key, value string) error {
@@ -833,8 +835,9 @@ func NewAPILimiterSet(config map[string]string, defaults map[string]APILimiterPa
 	limiters := map[string]*APILimiter{}
 
 	for name, p := range defaults {
+		nameLower := strings.ToLower(name)
 		// Merge user config into defaults when provided
-		if userConfig, ok := config[name]; ok {
+		if userConfig, ok := config[nameLower]; ok {
 			combinedParams, err := p.MergeUserConfig(userConfig)
 			if err != nil {
 				return nil, err
@@ -842,17 +845,18 @@ func NewAPILimiterSet(config map[string]string, defaults map[string]APILimiterPa
 			p = combinedParams
 		}
 
-		limiters[name] = NewAPILimiter(name, p, metrics)
+		limiters[nameLower] = NewAPILimiter(nameLower, p, metrics)
 	}
 
 	for name, c := range config {
-		if _, ok := defaults[name]; !ok {
-			l, err := NewAPILimiterFromConfig(name, c, metrics)
+		nameLower := strings.ToLower(name)
+		if _, ok := defaults[nameLower]; !ok {
+			l, err := NewAPILimiterFromConfig(nameLower, c, metrics)
 			if err != nil {
-				return nil, fmt.Errorf("unable to parse rate limiting configuration %s=%s: %w", name, c, err)
+				return nil, fmt.Errorf("unable to parse rate limiting configuration %s=%s: %w", nameLower, c, err)
 			}
 
-			limiters[name] = l
+			limiters[nameLower] = l
 		}
 	}
 
@@ -864,7 +868,8 @@ func NewAPILimiterSet(config map[string]string, defaults map[string]APILimiterPa
 
 // Limiter returns the APILimiter with a given name
 func (s *APILimiterSet) Limiter(name string) *APILimiter {
-	return s.limiters[name]
+	key := strings.ToLower(name)
+	return s.limiters[key]
 }
 
 type dummyRequest struct{}
@@ -877,7 +882,8 @@ func (d dummyRequest) Error(err error)             {}
 // does not exist, a dummy limiter is used which will not impose any
 // restrictions.
 func (s *APILimiterSet) Wait(ctx context.Context, name string) (LimitedRequest, error) {
-	l := s.Limiter(name)
+	key := strings.ToLower(name)
+	l := s.Limiter(key)
 	if l == nil {
 		return dummyRequest{}, nil
 	}

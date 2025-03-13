@@ -8,6 +8,17 @@ v2 版本新架构，支持VPC-ENI 辅助IP和vpc路由。版本发布历史如�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
+#### 2.12.16 [20250310]
+1. [Optimize] ENI 状态机优化，去掉了所有无效 statENI 解决大规模集群 Ready 慢问题，去掉了状态机中错误的置位解决必须依赖 ReSync 的问题
+2. [Bug] 修改自定义配置 api-rate-limit 限速不生效问题
+3. [Optimize] 减少 Trigger MinInterval 参数，解决大规模集群扩容速度慢的问题
+4. [Optimize] ENI 对象 VPCStatus 状态置位原子化，避免需要二次进状态机处理剩余状态
+5. [Optimize] 新增 enable-api-rate-limit 配置选项，开启或关闭客户端 API 限速功能，默认不开启
+6. [Bug] 修改 ENI 对象处理 finalizer 相关逻辑，解决清理 finalizer 不生效，导致 ENI 对象残留的问题
+7. [Optimize] 所有对象的 ListWatch 新增 options.AllowWatchBookmarks = true 配置，避免因网络抖动导致的全量 List 操作
+8. [Bug] 修复 RDMA 模式下，RDMA NRS 错用 bce-customer-max-ip 参数，导致 bce-customer-max-rdma-ip 参数不生效问题
+9. [Bug] 修复开启 RDMA 场景下，当 Node Name 大于 48 个字符时 RDMA ENI 对象的 LabelSelectorValue 赋值错误，解决当 Node Name 超长时重启 cce-network-operator 和 cce-network-agent 后节点无法就绪的问题
+
 #### 2.12.15 [20250227]
 1. [Optimize] 优化 NetworkresourceSet.Spec.Addresses 的添加规则，避免重复添加节点 IP
 2. [Bug] 修复 VPC-ENI 模式下，访问 ENI 接口失败时，误将 ENI 对象的 VPCStatus 标记为 None 的问题

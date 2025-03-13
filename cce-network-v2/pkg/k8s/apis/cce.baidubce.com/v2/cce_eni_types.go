@@ -190,13 +190,13 @@ const (
  * 独占 ENI 状态机流转：
  *
  *             创建请求成功(ipam写)             attach后进入inuse状态(ipam写)
- *   Pending ----------------------> Created ---------------------------> ReadyInVPC
- * 							            ^                                      |
- * 	           VPC中强制detach后(ipam写)  |                                      |单机check ok(agent写)
- *								         |                                     |
- *                                        ---------------------------------    |
- *                                         |                               |   |
- *                  VPC中强删后(ipam写)      |           pod创建后(agent写)   |   v
+ *   Pending -----------------------> Created ---------------------------> ReadyInVPC
+ *                                       ^                                      |
+ * 	           VPC中强制detach后(ipam写)   |                                      |单机check ok(agent写)
+ *                                        |                                     |
+ *                                         ---------------------------------    |
+ *                                         |                               |    |
+ *                  VPC中强删后(ipam写)      |           pod创建后(agent写)   |    v
  *   DeletedInVPC <--------------------- UsingInPod <-------------------- ReadyOnNode --
  *                              |           |                                  ^        |
  *                              |           |                                  |        |

@@ -96,7 +96,11 @@ const (
 
 	// API Rate Limiting
 
-	// APIRateLimitName enables configuration of the API rate limits
+	// EnableAPIRateLimit enable the API rate limits
+	EnableAPIRateLimit = "enable-api-rate-limit"
+
+	// APIRateLimitName enables configuration of the API rate limits when EnableAPIRateLimitName is true,
+	// if EnableAPIRateLimitName is false, this option is ignored.
 	APIRateLimitName = "api-rate-limit"
 
 	// DefaultAPIBurst is the burst value allowed when accessing external Cloud APIs
@@ -288,6 +292,9 @@ type OperatorConfig struct {
 	// DefaultAPITimeoutLimit is the timeout limit when accessing external Cloud APIs
 	DefaultAPITimeoutLimit time.Duration
 
+	// EnableAPIRateLimit enables APIRateLimit support
+	EnableAPIRateLimit bool
+
 	// APIRateLimitName enables configuration of the API rate limits
 	APIRateLimit map[string]string
 
@@ -460,6 +467,7 @@ func (c *OperatorConfig) Populate() {
 	c.DefaultAPIBurst = viper.GetInt(DefaultAPIBurst)
 	c.DefaultAPIQPSLimit = viper.GetFloat64(DefaultAPIQPSLimit)
 	c.DefaultAPITimeoutLimit = viper.GetDuration(DefaultAPITimeoutLimit)
+	c.EnableAPIRateLimit = viper.GetBool(EnableAPIRateLimit)
 	if m, err := command.GetStringMapStringE(viper.GetViper(), APIRateLimitName); err != nil {
 		log.Fatalf("unable to parse %s: %s", APIRateLimitName, err)
 	} else {

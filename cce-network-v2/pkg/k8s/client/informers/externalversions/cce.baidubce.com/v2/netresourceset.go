@@ -60,12 +60,14 @@ func NewFilteredNetResourceSetInformer(client versioned.Interface, resyncPeriod 
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().NetResourceSets().List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().NetResourceSets().Watch(context.TODO(), options)
 			},
 		},

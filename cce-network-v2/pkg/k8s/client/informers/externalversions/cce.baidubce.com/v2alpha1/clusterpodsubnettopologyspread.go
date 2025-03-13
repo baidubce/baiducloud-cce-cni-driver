@@ -60,12 +60,14 @@ func NewFilteredClusterPodSubnetTopologySpreadInformer(client versioned.Interfac
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2alpha1().ClusterPodSubnetTopologySpreads().List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2alpha1().ClusterPodSubnetTopologySpreads().Watch(context.TODO(), options)
 			},
 		},

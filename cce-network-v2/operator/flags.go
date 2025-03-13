@@ -34,6 +34,9 @@ func init() {
 
 	flags := rootCmd.Flags()
 
+	flags.Bool(operatorOption.EnableAPIRateLimit, false, "Enable API rate limit")
+	option.BindEnv(operatorOption.EnableAPIRateLimit)
+
 	flags.Int(operatorOption.DefaultAPIBurst, defaults.CloudAPIBurst, "Upper burst limit when accessing external APIs")
 	option.BindEnv(operatorOption.DefaultAPIBurst)
 

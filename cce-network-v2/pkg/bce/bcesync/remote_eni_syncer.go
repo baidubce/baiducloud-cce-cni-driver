@@ -16,7 +16,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -82,14 +81,15 @@ func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, e
 	for i := 0; i < len(enis); i++ {
 		result = append(result, eni.Eni{Eni: enis[i]})
 		isExisted, objEni := es.createExternalENI(&enis[i])
-		if isExisted && objEni != nil {
-			if objEni.Status.CCEStatus != ccev2.ENIStatusReadyOnNode && objEni.Status.VPCStatus == ccev2.VPCENIStatusInuse {
-				(&objEni.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
-			}
-			_, err = es.updater.UpdateStatus(objEni)
-			if err != nil {
-				scopedLog.WithError(err).Error("update eni status")
-				return
+		if !isExisted && objEni != nil {
+			// refresh the status of ENI
+			if objEni.Status.VPCStatus != ccev2.VPCENIStatus(enis[i].Status) {
+				(&objEni.Status).AppendVPCStatus(ccev2.VPCENIStatus(enis[i].Status))
+				_, err = es.updater.UpdateStatus(objEni)
+				if err != nil {
+					scopedLog.WithError(err).Error("update eni status")
+					return
+				}
 			}
 		}
 	}
@@ -176,15 +176,17 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 				SubnetID:                   eni.SubnetId,
 				SecurityGroupIds:           eni.SecurityGroupIds,
 				EnterpriseSecurityGroupIds: eni.EnterpriseSecurityGroupIds,
+				MacAddress:                 eni.MacAddress,
+				Description:                eni.Description,
+				PrivateIPSet:               toModelPrivateIP(eni.PrivateIpSet, eni.VpcId, eni.SubnetId),
+				IPV6PrivateIPSet:           toModelPrivateIP(eni.Ipv6PrivateIpSet, eni.VpcId, eni.SubnetId),
 			},
 			Type:                      ccev2.ENIForBCC,
 			RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 			InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
 		},
 	}
-	if eni.Description == defaults.DefaultENIDescription && eni.Status == string(ccev2.VPCENIStatusInuse) {
-		(&newENI.Status).AppendCCEENIStatus(ccev2.ENIStatusReadyOnNode)
-	}
+	ElectENIIPv6PrimaryIP(newENI)
 	result, err = es.updater.Create(newENI)
 	if err != nil {
 		es.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedCreateExternalENI", "failed to create external ENI on nrs %s: %s", resource.Name, err)

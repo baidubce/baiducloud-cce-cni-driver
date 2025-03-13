@@ -175,7 +175,7 @@ func (n *bceRDMANetResourceSet) getRdmaEniQuota() RdmaEniQuotaManager {
 		eniQuota.SetMaxENI(n.k8sObj.Spec.ENI.MaxAllocateENI)
 		eniQuota.SetMaxIP(n.k8sObj.Spec.ENI.MaxIPsPerENI)
 		// use customer max ip nums if defiend
-		if operatorOption.Config.BCECustomerMaxIP != 0 && operatorOption.Config.BCECustomerMaxIP == eniQuota.GetMaxIP() {
+		if operatorOption.Config.BCECustomerMaxRdmaIP != 0 && operatorOption.Config.BCECustomerMaxRdmaIP == eniQuota.GetMaxIP() {
 			goto slowPath
 		}
 

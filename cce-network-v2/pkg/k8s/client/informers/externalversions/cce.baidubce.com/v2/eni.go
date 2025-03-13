@@ -60,12 +60,14 @@ func NewFilteredENIInformer(client versioned.Interface, resyncPeriod time.Durati
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().ENIs().List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
+				options.AllowWatchBookmarks = true
 				return client.CceV2().ENIs().Watch(context.TODO(), options)
 			},
 		},

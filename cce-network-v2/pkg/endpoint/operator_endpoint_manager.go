@@ -144,7 +144,7 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 			"event":     "update",
 		})
 
-		newNodeName = resource.Spec.Network.IPAllocation.NodeIP
+		newNodeName = resource.Spec.Network.IPAllocation.NodeName
 
 		newObj    = resource.DeepCopy()
 		newStatus = &newObj.Status
@@ -269,7 +269,7 @@ func (manager *EndpointManager) handlerUpdateResult(ctx context.Context, start t
 				logEntry.Errorf("can not gc the allocated failture, failed to get node endpoint %v", err)
 			}
 			action := &DirectIPAction{
-				NodeName:   newObj.Spec.Network.IPAllocation.NodeIP,
+				NodeName:   newObj.Spec.Network.IPAllocation.NodeName,
 				Owner:      newObj.Namespace + "/" + newObj.Name,
 				Addressing: newObj.Status.Networking.Addressing,
 			}
@@ -343,7 +343,7 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 		return err
 	}
 	action = &DirectIPAction{
-		NodeName:   newCEP.Spec.Network.IPAllocation.NodeIP,
+		NodeName:   newCEP.Spec.Network.IPAllocation.NodeName,
 		Owner:      namespace + "/" + name,
 		Addressing: newCEP.Status.Networking.Addressing,
 	}

@@ -230,8 +230,9 @@ func OverwriteCNIConfigList(path string) (override bool, err error) {
 // create new cptp plugin template
 func newPtpPlugin() CniPlugin {
 	plugin := NewCNIPlugin(pluginNameCptp, CniPlugin{
-		"ipam": NewCNIPlugin(pluginNameCipam, nil),
-		"mtu":  option.Config.MTU,
+		"ipam":       NewCNIPlugin(pluginNameCipam, nil),
+		"mtu":        option.Config.MTU,
+		"retryTimes": option.Config.PluginIpRequestRetryTimes,
 	})
 	return plugin
 }

@@ -230,7 +230,7 @@ func (t *Trigger) waiter() {
 			select {
 			case <-timerChan:
 				if t.params.Log != nil {
-					t.params.Log.Warnf("TriggerFunc took too long to complete, cancelling")
+					t.params.Log.Warnf("TriggerFunc took too long to complete(MaxDelayDuration %v), cancelling", t.params.MaxDelayDuration)
 				}
 			case <-resultChan:
 			}

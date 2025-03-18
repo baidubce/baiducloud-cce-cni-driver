@@ -110,6 +110,10 @@ type NetResource struct {
 	// instances API is unstable
 	retry *trigger.Trigger
 
+	// retry is the trigger used to retry syncToAPIServer while the
+	// apiserver is unstable
+	retrySyncToAPIServer *trigger.Trigger
+
 	// Excess IPs from a cce node would be marked for release only after a delay configured by excess-ip-release-delay
 	// flag. ipsMarkedForRelease tracks the IP and the timestamp at which it was marked for release.
 	ipsMarkedForRelease map[string]time.Time
@@ -448,7 +452,7 @@ func (n *NetResource) recalculate() {
 		usedIPForExcessCalc = n.ops.GetUsedIPWithPrefixes()
 	}
 
-	var availableIPv4Count = 0
+	availableIPv4Count := 0
 
 	for ipstr := range n.available {
 		ip := net.ParseIP(ipstr)
@@ -515,7 +519,7 @@ func (n *NetResource) ResourceCopy() *v2.NetResourceSet {
 // attaches it to the instance as specified by the NetResourceSet. neededAddresses
 // of secondary IPs are assigned to the interface up to the maximum number of
 // addresses as allowed by the instance.
-func (n *NetResource) createInterface(ctx context.Context, a *AllocationAction) error {
+func (n *NetResource) createInterface(ctx context.Context, a *AllocationAction) (created bool, err error) {
 	if a.AvailableInterfaces == 0 {
 		// This is not a failure scenario, warn once per hour but do
 		// not track as interface allocation failure. There is a
@@ -526,7 +530,7 @@ func (n *NetResource) createInterface(ctx context.Context, a *AllocationAction) 
 			n.lastMaxAdapterWarning = time.Now()
 		}
 		n.mutex.Unlock()
-		return nil
+		return false, nil
 	}
 
 	scopedLog := n.logger()
@@ -534,13 +538,13 @@ func (n *NetResource) createInterface(ctx context.Context, a *AllocationAction) 
 	if err != nil {
 		scopedLog.Warningf("Unable to create interface on instance: %s", err)
 		n.manager.metricsAPI.IncAllocationAttempt(errCondition, string(a.PoolID))
-		return err
+		return false, err
 	}
 
 	n.manager.metricsAPI.IncAllocationAttempt("success", string(a.PoolID))
 	n.manager.metricsAPI.AddIPAllocation(string(a.PoolID), int64(toAllocate))
 
-	return nil
+	return true, nil
 }
 
 // AllocationAction is the action to be taken to resolve allocation deficits
@@ -888,8 +892,7 @@ func (n *NetResource) handleIPAllocation(ctx context.Context, a *maintenanceActi
 
 	// case 1 : create new interface when use ippool mode
 	// case 2 : create new interface and assign IPs when use bursable ENI mode
-	err = n.createInterface(ctx, a.allocation)
-	return err != nil, err
+	return n.createInterface(ctx, a.allocation)
 }
 
 // maintainIPPool attempts to allocate or release all required IPs to fulfill the needed gap.
@@ -921,7 +924,7 @@ func (n *NetResource) maintainIPPool(ctx context.Context) (instanceMutated bool,
 
 func (n *NetResource) requireResync() {
 	n.mutex.Lock()
-	n.resyncNeeded = time.Now().Add(operatorOption.Config.ResourceResyncInterval)
+	n.resyncNeeded = time.Now()
 	n.mutex.Unlock()
 }
 
@@ -1005,6 +1008,13 @@ func (n *NetResource) PopulateIPReleaseStatus(node *v2.NetResourceSet) {
 func (n *NetResource) syncToAPIServer() (err error) {
 	scopedLog := n.logger()
 	scopedLog.Debug("Refreshing node")
+
+	defer func() {
+		if err != nil {
+			n.retrySyncToAPIServer.Trigger()
+			scopedLog.WithError(err).Error("Error syncing NetworkResourceSet to apiserver, triggering retrySyncToAPIServer.Trigger()")
+		}
+	}()
 
 	node := n.ResourceCopy()
 	// n.resource may not have been assigned yet

@@ -3,16 +3,11 @@ package os
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	"gopkg.in/fsnotify.v1"
 )
 
-var (
-	unbuntuReleasePath = etcPath + "/os-release"
-)
-
-// // in ubuntu 22.04, the os-release file is like:
+// in ubuntu 22.04, the os-release file is like:
 // PRETTY_NAME="Ubuntu 22.04 LTS"
 // NAME="Ubuntu"
 // VERSION_ID="22.04"

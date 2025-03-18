@@ -24,7 +24,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -856,7 +855,9 @@ func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 		// update eni
 		_, ierr = k8s.CCEClient().CceV2().ENIs().Update(ctx, eni, metav1.UpdateOptions{})
 		// retry if conflict
-		if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
+		// if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
+		// retry if error to update eni
+		if ierr != nil {
 			return false, nil
 		}
 		// we should recorde log with eni attributes and ips if update eni success

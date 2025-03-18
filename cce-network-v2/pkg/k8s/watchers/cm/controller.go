@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
 	operatorMetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/metrics"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
 )
@@ -32,9 +34,15 @@ type WorkqueueController struct {
 	log         *logrus.Entry
 }
 
-func NewWorkqueueController(name string, workerNum int, reconcile ReconcileFunc) *WorkqueueController {
+func NewWorkqueueController(name string, workerNum int, qpsLimit float32, burstLimit int, reconcile ReconcileFunc) *WorkqueueController {
 	controller := &WorkqueueController{Name: name, WorkerNum: workerNum, Reconcile: reconcile}
-	controller.Queue = workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), name)
+	rlQueue := workqueue.NewNamedRateLimitingQueue(workqueue.NewMaxOfRateLimiter(
+		workqueue.NewItemExponentialFailureRateLimiter(k8s.DefaultSyncBackOff, k8s.MaxSyncBackOff),
+		// 10 qps, 100 bucket size. This is only for retry speed and its
+		// only the overall factor (not per item).
+		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(qpsLimit), burstLimit)},
+	), name)
+	controller.Queue = rlQueue
 	controller.log = log.WithField("controller", name)
 	return controller
 }
@@ -150,9 +158,9 @@ type ResyncController struct {
 
 // NewResyncController Run starts the controller.
 // it can custom the resync period.
-func NewResyncController(name string, workerNum int, informer cache.SharedIndexInformer, reconcile ReconcileFunc) *ResyncController {
+func NewResyncController(name string, workerNum int, qpsLimit float32, burstLimit int, informer cache.SharedIndexInformer, reconcile ReconcileFunc) *ResyncController {
 	controller := &ResyncController{
-		WorkqueueController: NewWorkqueueController(name, workerNum, reconcile),
+		WorkqueueController: NewWorkqueueController(name, workerNum, qpsLimit, burstLimit, reconcile),
 		informer:            informer,
 		ctl:                 controller.NewManager(),
 	}

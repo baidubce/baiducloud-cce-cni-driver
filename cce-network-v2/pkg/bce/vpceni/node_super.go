@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -514,6 +514,158 @@ func (n *bceNetworkResourceSet) forceUpdateEniToInuse(ctx context.Context, scope
 	return nil
 }
 
+func (n *bceNetworkResourceSet) forceGetENIFromInstanceGroup(ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (interfaceNum int, msg string, err error) {
+	startTime := time.Now()
+	scopedLog = scopedLog.WithField("NetworkResourceSet", n.k8sObj.Name)
+	scopedLog.WithField("StartTime", startTime).Infof("Start force get ENI from instance-group")
+	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
+		k8s.LabelInstanceID:           n.instanceID,
+		"cce.baidubce.com/created-by": "instance-controller",
+	}))
+	if err != nil {
+		scopedLog.WithError(err).Errorf("failed to construct selector for eni from instance-group")
+		return 0, "", err
+	}
+	var (
+		eniList []*ccev2.ENI
+		listErr error
+	)
+	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
+		eniListTemp, listErrTemp := n.manager.enilister.List(selector)
+		if listErrTemp != nil {
+			scopedLog.Warningf("failed to get eni from instance-group: %v, retry after %s", listErr, eniSyncPeriod)
+			return false, nil
+		}
+		for _, eni := range eniListTemp {
+			if _, ok := eni.Labels[k8s.LabelNodeName]; ok {
+				continue
+			}
+			eniList = append(eniList, eni)
+		}
+		return true, nil
+	}); err != nil {
+		scopedLog.WithError(err).Errorf("failed to get eni from instance-group")
+		return 0, "", err
+	}
+	scopedLog.WithField("CostTime", time.Since(startTime)).Infof("Force get ENI from instance-group, eniList length: %d", len(eniList))
+
+	if len(eniList) == 0 {
+		return 0, "", fmt.Errorf("no eni found from instance-group")
+	}
+	createExternalENINum := 0
+	for _, eni := range eniList {
+		newENI := eni.DeepCopy()
+		newENI.ObjectMeta.Labels[k8s.LabelInstanceID] = n.instanceID
+		newENI.ObjectMeta.Labels[k8s.LabelNodeName] = n.k8sObj.Name
+		newENI.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: ccev2.SchemeGroupVersion.String(),
+			Kind:       ccev2.NRSKindDefinition,
+			Name:       n.k8sObj.Name,
+			UID:        n.k8sObj.UID,
+		}}
+		newENI.ObjectMeta.Name = eni.Spec.ENI.ID
+		newENI.Spec.UseMode = ccev2.ENIUseMode(n.k8sObj.Spec.ENI.UseMode)
+		newENI.Spec.NodeName = n.k8sObj.Name
+		newENI.Spec.RouteTableOffset = n.k8sObj.Spec.ENI.RouteTableOffset
+		newENI.Spec.InstallSourceBasedRouting = n.k8sObj.Spec.ENI.InstallSourceBasedRouting
+		newENI.Spec.Type = ccev2.ENIType(n.k8sObj.Spec.ENI.InstanceType)
+
+		// bcesync.ElectENIIPv6PrimaryIP(newENI)
+		_, err = k8s.CCEClient().CceV2().ENIs().Update(ctx, newENI, metav1.UpdateOptions{})
+		if err != nil {
+			scopedLog.WithError(err).Errorf("failed to create ENI from instance-group : %v", err)
+			return createExternalENINum, "partial create external ENI from instance-group to k8s error", fmt.Errorf("failed to create ENI: %w", err)
+		}
+		createExternalENINum++
+
+		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "CreateENISuccess", "create external ENI %s from instance-group on NRS %s success", newENI.Name, n.k8sObj.Name)
+		scopedLog = scopedLog.WithField("ENIID", newENI.Name)
+	}
+	return createExternalENINum, "", nil
+}
+
+func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (interfaceNum int, msg string, err error) {
+	startTime := time.Now()
+	scopedLog = scopedLog.WithField("NetworkResourceSet", n.k8sObj.Name)
+	scopedLog.WithField("StartTime", startTime).Infof("Start force get ENI from IaaS")
+
+	args := eni.ListEniArgs{
+		VpcId:      vpcID,
+		InstanceId: instanceID,
+	}
+
+	var (
+		eniList []eni.Eni
+		listErr error
+	)
+	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
+		eniList, listErr = n.manager.bceclient.ListENIs(ctx, args)
+		if listErr != nil {
+			scopedLog.Warningf("failed to get eni: %v, retry after %s", listErr, eniSyncPeriod)
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		scopedLog.WithError(err).Errorf("failed to get eni")
+		return 0, "", err
+	}
+	scopedLog.WithField("CostTime", time.Since(startTime)).Infof("Force get ENI from IaaS, eniList length: %d", len(eniList))
+
+	if len(eniList) == 0 {
+		return 0, "", fmt.Errorf("no eni found")
+	}
+	createExternalENINum := 0
+	for _, eni := range eniList {
+		newENI := &ccev2.ENI{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelNodeName:   n.k8sObj.Name,
+				},
+				Annotations: map[string]string{},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: ccev2.SchemeGroupVersion.String(),
+					Kind:       ccev2.NRSKindDefinition,
+					Name:       n.k8sObj.Name,
+					UID:        n.k8sObj.UID,
+				}},
+				Name: eni.EniId,
+			},
+			Spec: ccev2.ENISpec{
+				NodeName: n.k8sObj.Name,
+				UseMode:  ccev2.ENIUseMode(n.k8sObj.Spec.ENI.UseMode),
+				ENI: models.ENI{
+					ID:                         eni.EniId,
+					Name:                       eni.Name,
+					MacAddress:                 eni.MacAddress,
+					InstanceID:                 eni.InstanceId,
+					SecurityGroupIds:           eni.SecurityGroupIds,
+					EnterpriseSecurityGroupIds: eni.EnterpriseSecurityGroupIds,
+					Description:                eni.Description,
+					VpcID:                      eni.VpcId,
+					ZoneName:                   eni.ZoneName,
+					SubnetID:                   eni.SubnetId,
+					PrivateIPSet:               bcesync.ToModelPrivateIP(eni.PrivateIpSet, eni.VpcId, eni.SubnetId),
+					IPV6PrivateIPSet:           bcesync.ToModelPrivateIP(eni.Ipv6PrivateIpSet, eni.VpcId, eni.SubnetId),
+				},
+				RouteTableOffset:          n.k8sObj.Spec.ENI.RouteTableOffset,
+				InstallSourceBasedRouting: n.k8sObj.Spec.ENI.InstallSourceBasedRouting,
+				Type:                      ccev2.ENIType(n.k8sObj.Spec.ENI.InstanceType),
+			},
+		}
+		bcesync.ElectENIIPv6PrimaryIP(newENI)
+		_, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, newENI, metav1.CreateOptions{})
+		if err != nil {
+			return createExternalENINum, "partial create external ENI from IaaS to k8s error", fmt.Errorf("failed to create ENI: %w", err)
+		}
+		createExternalENINum++
+
+		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "CreateENISuccess", "create external ENI %s from IaaS on NRS %s success", newENI.Name, n.k8sObj.Name)
+		scopedLog = scopedLog.WithField("ENIID", newENI.Name)
+	}
+	return createExternalENINum, "", nil
+}
+
 // CreateInterface create a new ENI
 func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
 	var (
@@ -535,6 +687,18 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 			return nil
 		})
 	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
+
+	if availableENICount == 0 {
+		interfaceNum, msg, err = n.forceGetENIFromInstanceGroup(ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, n.instanceID)
+		if interfaceNum > 0 {
+			return interfaceNum, msg, err
+		}
+
+		interfaceNum, msg, err = n.forceGetENIFromIaaS(ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, n.instanceID)
+		if interfaceNum > 0 {
+			return interfaceNum, msg, err
+		}
+	}
 
 	if n.creatingEni.hasCreatingENI() {
 		scopedLog.Debugf("skip to creating new eni, concurrent eni creating")
@@ -596,9 +760,7 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 	}
 
 	for i := 0; i < len(enis); i++ {
-		var (
-			allocatedCrossSubnetIPNum = 0
-		)
+		allocatedCrossSubnetIPNum := 0
 		// add eni statistics
 		simple := ccev2.SimpleENIStatus{
 			ID:                        enis[i].Spec.ENI.ID,
@@ -609,7 +771,7 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 		}
 		eniStatusMap[enis[i].Name] = simple
 
-		var addCrossSubnetAddr = func(addr *models.PrivateIP) {
+		addCrossSubnetAddr := func(addr *models.PrivateIP) {
 			allocationIP := ipamTypes.AllocationIP{
 				Resource:  enis[i].Name,
 				IsPrimary: addr.Primary,
@@ -1072,7 +1234,7 @@ func (n *bceNetworkResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 
 	// 2. do release IP
 	doRelease := func(toReleaseSet ipToReleaseSet, isIPv6 bool) error {
-		var isPartialSuccess = false
+		isPartialSuccess := false
 		for _, ipToRelease := range toReleaseSet {
 			scopeLog = scopeLog.WithFields(logrus.Fields{
 				"partialToRelease": ipToRelease,
@@ -1149,7 +1311,9 @@ func (n *bceNetworkResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 		// update eni
 		_, ierr = k8s.CCEClient().CceV2().ENIs().Update(ctx, eni, metav1.UpdateOptions{})
 		// retry if conflict
-		if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
+		// if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
+		// retry if error to update eni
+		if ierr != nil {
 			return false, nil
 		}
 		// we should recorde log with eni attributes and ips if update eni success
@@ -1409,11 +1573,9 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 
 // DeleteIP implements endpoint.DirectEndpointOperation
 func (n *bceNetworkResourceSet) DeleteIP(ctx context.Context, allocation *endpoint.DirectIPAction) error {
-	var (
-		action *ipam.ReleaseAction = &ipam.ReleaseAction{
-			PoolID: ipamTypes.PoolID(allocation.SubnetID),
-		}
-	)
+	var action *ipam.ReleaseAction = &ipam.ReleaseAction{
+		PoolID: ipamTypes.PoolID(allocation.SubnetID),
+	}
 
 	for _, addressPair := range allocation.Addressing {
 		if addressPair.Interface != "" {
@@ -1568,9 +1730,7 @@ func (n *bceNetworkResourceSet) rleaseOldIP(ctx context.Context, scopedLog *logr
 	return false, ipsReleased, err
 }
 
-var (
-	_ endpoint.DirectEndpointOperation = &bceNetworkResourceSet{}
-)
+var _ endpoint.DirectEndpointOperation = &bceNetworkResourceSet{}
 
 type creatingEniSet struct {
 	mutex *lock.Mutex

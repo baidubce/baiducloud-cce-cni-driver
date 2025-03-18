@@ -97,9 +97,9 @@ type IPAllocation struct {
 	// This field is only valid in the PSTS mode
 	PSTSName string `json:"pstsName,omitempty"`
 
-	// NodeIP is the IP of the node the endpoint is running on. The IP must
+	// NodeName is the IP of the node the endpoint is running on. The IP must
 	// be reachable between nodes.
-	NodeIP string `json:"node,omitempty"`
+	NodeName string `json:"node,omitempty"`
 
 	UseIPV4 bool `json:"useIPV4,omitempty"`
 	UseIPV6 bool `json:"useIPV6,omitempty"`

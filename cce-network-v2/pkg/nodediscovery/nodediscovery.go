@@ -367,6 +367,8 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 	for key, v := range k8sNodeParsed.Labels {
 		nodeResource.ObjectMeta.Labels[key] = v
 	}
+	nodeResource.ObjectMeta.Labels[k8s.LabelNodeName] = nodeTypes.GetName()
+
 	if nodeResource.ObjectMeta.Annotations == nil {
 		nodeResource.ObjectMeta.Annotations = map[string]string{}
 	}

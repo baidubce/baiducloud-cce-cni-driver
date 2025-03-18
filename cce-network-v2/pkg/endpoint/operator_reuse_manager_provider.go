@@ -31,7 +31,7 @@ func (provider *reuseIPAllocatorProvider) AllocateIP(ctx context.Context, log *l
 		owner      = resource.Namespace + "/" + resource.Name
 		newStatus  = &resource.Status
 		allocation = &DirectIPAction{
-			NodeName: resource.Spec.Network.IPAllocation.NodeIP,
+			NodeName: resource.Spec.Network.IPAllocation.NodeName,
 			Owner:    owner,
 		}
 	)

@@ -377,6 +377,9 @@ func initializeFlags() {
 	flags.Int(option.MTUName, 0, "Overwrite auto-detected MTU of underlying network")
 	option.BindEnv(option.MTUName)
 
+	flags.Int(option.PluginIpRetryTimes, 3, "Number of retries for the plugin to request agent IPAM allocation")
+	option.BindEnv(option.PluginIpRetryTimes)
+
 	flags.String(option.ProcFs, "/proc", "Root's proc filesystem path")
 	option.BindEnv(option.ProcFs)
 

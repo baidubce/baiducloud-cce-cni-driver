@@ -183,6 +183,9 @@ const (
 	// MTUName is the name of the MTU option
 	MTUName = "mtu"
 
+	// PluginIpRetryTimes is Number of retries for the plugin to request agent IPAM allocation
+	PluginIpRetryTimes = "plugin-ip-request-retry-times"
+
 	// HostServicesTCP is the name of EnableHostServicesTCP config
 	HostServicesTCP = "tcp"
 
@@ -554,6 +557,8 @@ type DaemonConfig struct {
 
 	// MTU is the maximum transmission unit of the underlying network
 	MTU int
+
+	PluginIpRequestRetryTimes int
 
 	// EnableMonitor enables the monitor unix domain socket server
 	EnableMonitor bool
@@ -1175,6 +1180,7 @@ func (c *DaemonConfig) Populate() {
 	c.MonitorQueueSize = viper.GetInt(MonitorQueueSizeName)
 	c.SocketPath = viper.GetString(SocketPath)
 	c.MTU = viper.GetInt(MTUName)
+	c.PluginIpRequestRetryTimes = viper.GetInt(PluginIpRetryTimes)
 	c.PProf = viper.GetBool(PProf)
 	c.PProfPort = viper.GetInt(PProfPort)
 	c.ProcFs = viper.GetString(ProcFs)

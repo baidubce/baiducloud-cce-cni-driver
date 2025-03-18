@@ -139,17 +139,17 @@ func (m *InstancesManager) Resync(ctx context.Context) time.Time {
 
 // NodeEndpoint implements endpoint.DirectIPAllocator
 func (m *InstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.DirectEndpointOperation, error) {
-	nodeIP := cep.Spec.Network.IPAllocation.NodeIP
-	_, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeIP)
+	nodeName := cep.Spec.Network.IPAllocation.NodeName
+	_, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeName)
 	if err != nil {
 		return nil, err
 	}
 
 	m.mutex.Lock()
-	bceNrs, ok := m.bceNetworkResourceSetMap[nodeIP]
+	bceNrs, ok := m.bceNetworkResourceSetMap[nodeName]
 	m.mutex.Unlock()
 	if !ok {
-		return nil, errors.NewNotFound(v2.Resource("netresourceset"), nodeIP)
+		return nil, errors.NewNotFound(v2.Resource("netresourceset"), nodeName)
 	}
 	return bceNrs, nil
 }

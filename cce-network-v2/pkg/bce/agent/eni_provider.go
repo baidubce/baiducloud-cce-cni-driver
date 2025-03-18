@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/qos"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/enim/eniprovider"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/health/plugin"
@@ -80,6 +81,11 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	// TODO 2021-03-08: remove this after BBC secondary models are deprecated
 	if resource.Spec.Type == ccev2.ENIForBBC {
 		resource.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
+	}
+
+	if !bceutils.IsAgentMgrENI(resource) {
+		scopedLog.Debugf("secondary eni %s is not created by cce, skip update ENI", resource.Spec.ENI.ID)
+		return nil
 	}
 
 	eniLink, err := newENILink(resource, eh.release)

@@ -22,6 +22,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 )
@@ -243,4 +244,18 @@ func GetPodNameFromCEPName(cepName string) (podName string) {
 		podName = cepName[:index]
 	}
 	return podName
+}
+
+// agent is enable to manager current eni
+func IsAgentMgrENI(eni *ccev2.ENI) (enable bool) {
+	enable = true
+	switch eni.Spec.Type {
+	case ccev2.ENIForBCC, ccev2.ENIForBBC, ccev2.ENIForEBC:
+		if eni.Spec.UseMode == ccev2.ENIUseModeSecondaryIP && eni.Spec.Description != defaults.DefaultENIDescription {
+			enable = false
+		}
+	default:
+		enable = true
+	}
+	return enable
 }

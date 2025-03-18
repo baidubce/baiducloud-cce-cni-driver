@@ -1,15 +1,23 @@
 package watchers
 
 import (
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
+	"golang.org/x/time/rate"
 	typev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	listv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 )
 
 var (
-	nodeQueue = workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "node-queue")
+	// nodeQueue is a workQueue which uses options to configure QPS and burst values.
+	nodeQueue = workqueue.NewNamedRateLimitingQueue(workqueue.NewMaxOfRateLimiter(
+		workqueue.NewItemExponentialFailureRateLimiter(k8s.DefaultSyncBackOff, k8s.MaxSyncBackOff),
+		// 10 qps, 100 bucket size. This is only for retry speed and its
+		// only the overall factor (not per item).
+		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(k8s.GetQPS()), k8s.GetBurst())},
+	), "node-queue")
 
 	NodeClient = &NodeUpdater{}
 )

@@ -18,14 +18,15 @@ package watchers
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
+
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	cce_lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/cm"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
 )
 
 var CCEEndpointClient = &CCEEndpointUpdaterImpl{}
@@ -58,7 +59,7 @@ func StartSynchronizingCCEEndpoint(ctx context.Context, endpointManager Endpoint
 	cceEndpointLister := k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Lister()
 
 	endpointManagerSyncHandler := func(key string) error {
-		log.Debugf("Watching CCEEndpoint %v", key)
+		log.Tracef("Watching CCEEndpoint %v", key)
 		namespace, name, err := cache.SplitMetaNamespaceKey(key)
 		if err != nil {
 			log.WithError(err).Error("Unable to process CCEEndpoint event")
@@ -78,7 +79,8 @@ func StartSynchronizingCCEEndpoint(ctx context.Context, endpointManager Endpoint
 		return endpointManager.Update(obj)
 	}
 
-	controller := cm.NewResyncController("cce-endpoint-watcher", int(operatorOption.Config.ResourceResyncWorkers), k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), endpointManagerSyncHandler)
+	controller := cm.NewResyncController("cce-endpoint-watcher", int(operatorOption.Config.ResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
+		k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), endpointManagerSyncHandler)
 	controller.RunWithResync(operatorOption.Config.ResourceResyncInterval)
 	return nil
 }

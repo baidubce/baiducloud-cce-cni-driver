@@ -71,7 +71,7 @@ func StartSynchronizingNetResourceSets(ctx context.Context, nodeManager NodeEven
 	if nodeManager.ResourceType() == ccev2.NetResourceSetEventHandlerTypeRDMA {
 		worker = operatorOption.Config.RdmaResourceResyncWorkers
 	}
-	controller := cm.NewWorkqueueController(nodeManager.ResourceType()+"-nrs-controller", int(worker), nodeManagerSyncHandler)
+	controller := cm.NewWorkqueueController(nodeManager.ResourceType()+"-nrs-controller", int(worker), k8s.GetQPS(), k8s.GetBurst(), nodeManagerSyncHandler)
 	controller.Run()
 	k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer().AddEventHandler(controller)
 

@@ -16,13 +16,15 @@
 package watchers
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	cce_v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/informer"
@@ -54,9 +56,36 @@ func (k *K8sWatcher) netResourceSetInit(cceNPClient *k8s.K8sCCEClient, asyncCont
 	var once sync.Once
 	apiGroup := k8sAPIGroupNetResourceSetV2
 	swgNodes := lock.NewStoppableWaitGroup()
+	// Select only the NetResourceSet of the local node,
+	// contains Ethernet NetResourceSet and RDMA NetResourceSet objects
+	values := []string{nodeTypes.GetName()}
+	rii, err := bceutils.GetRdmaIFsInfo(nodeTypes.GetName(), nil)
+	if err != nil {
+		panic(fmt.Errorf("failed to get rdma ifs info: %v", err))
+	}
+	for _, v := range rii {
+		values = append(values, v.LabelSelectorValue)
+	}
+	requirement := metav1.LabelSelectorRequirement{
+		Key:      k8s.LabelNodeName,
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   values,
+	}
+	labelSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},
+	}
+	// Select only the NetResourceSet of the local node
+	// contains Ethernet NetResourceSet and RDMA NetResourceSet objects
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
+	optionsModifier := func(options *metav1.ListOptions) {
+		options.LabelSelector = selector.String()
+	}
 	netResourceSetStore, netResourceSetInformer := informer.NewInformer(
-		cache.NewListWatchFromClient(cceNPClient.CceV2().RESTClient(),
-			cce_v2.NRSPluralName, v1.NamespaceAll, fields.Everything()),
+		cache.NewFilteredListWatchFromClient(cceNPClient.CceV2().RESTClient(),
+			cce_v2.NRSPluralName, v1.NamespaceAll, optionsModifier),
 		&cce_v2.NetResourceSet{},
 		10*time.Hour,
 		cache.ResourceEventHandlerFuncs{
@@ -122,5 +151,4 @@ func (k *K8sWatcher) netResourceSetInit(cceNPClient *k8s.K8sCCEClient, asyncCont
 	})
 	k.k8sAPIGroups.AddAPI(apiGroup)
 	netResourceSetInformer.Run(k.stop)
-
 }

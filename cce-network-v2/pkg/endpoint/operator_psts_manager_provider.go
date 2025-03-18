@@ -60,7 +60,7 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 
 		// reuseIPAction is the action to reuse IP
 		action = &DirectIPAction{
-			NodeName: resource.Spec.Network.IPAllocation.NodeIP,
+			NodeName: resource.Spec.Network.IPAllocation.NodeName,
 			Owner:    owner,
 		}
 	)

@@ -68,7 +68,7 @@ func NewEndpointTemplate(containerID, netnsPath string, pod *corev1.Pod) *ccev2.
 						Type:            ccev2.IPAllocTypeElastic,
 						ReleaseStrategy: ccev2.ReleaseStrategyTTL,
 					},
-					NodeIP: nodeTypes.GetName(),
+					NodeName: nodeTypes.GetName(),
 				},
 			},
 		},

@@ -282,13 +282,16 @@ func (n *NetResourceSetManager) Create(resource *v2.NetResourceSet) error {
 // Update is called whenever a NetResourceSet resource has been updated in the
 // Kubernetes apiserver
 func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
+	start := time.Now()
 	n.mutex.Lock()
 	netResource, ok := n.netResources[resource.Name]
 	n.mutex.Unlock()
 
 	defer func() {
 		netResource.UpdatedResource(resource)
+		log.WithField(fieldName, resource.Name).Debugf("NetResourceSetManager.Update since nrs creation %v, current duration %v", time.Since(resource.CreationTimestamp.Time), time.Since(start))
 	}()
+
 	if !ok {
 		netResource = &NetResource{
 			name:                  resource.Name,
@@ -322,7 +325,7 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 		retryName := fmt.Sprintf("ipam-pool-maintainer-%s-retry", resource.Name)
 		retry, err := trigger.NewTrigger(trigger.Parameters{
 			Name:             retryName,
-			MinInterval:      5 * time.Second,                              // large minimal interval to not retry too often
+			MinInterval:      1 * time.Second,                              // large minimal interval to not retry too often
 			MaxDelayDuration: operatorOption.Config.ResourceResyncInterval, // 5 minutes
 			Log:              netResource.logger().WithField("trigger", retryName),
 			TriggerFunc:      func(reasons []string) { poolMaintainer.Trigger() },
@@ -350,6 +353,20 @@ func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 			netResource.logger().WithError(err).Error("Unable to create k8s-sync trigger")
 			return err
 		}
+
+		retrySyncToAPIServerName := fmt.Sprintf("ipam-node-k8s-sync-%s-retry", resource.Name)
+		retrySyncToAPIServer, err := trigger.NewTrigger(trigger.Parameters{
+			Name:             retryName,
+			MinInterval:      1 * time.Second,                              // large minimal interval to not retry too often
+			MaxDelayDuration: operatorOption.Config.ResourceResyncInterval, // 5 minutes
+			Log:              netResource.logger().WithField("trigger", retrySyncToAPIServerName),
+			TriggerFunc:      func(reasons []string) { k8sSync.Trigger() },
+		})
+		if err != nil {
+			netResource.logger().WithError(err).Error("Unable to create k8s-sync-retry trigger")
+			return err
+		}
+		netResource.retrySyncToAPIServer = retrySyncToAPIServer
 
 		netResource.poolMaintainer = poolMaintainer
 		netResource.k8sSync = k8sSync
@@ -394,11 +411,11 @@ func (n *NetResourceSetManager) Get(nodeName string) *NetResource {
 	return node
 }
 
-// GetNodesByIPWatermark returns all nodes that require addresses to be
+// GetNrsListByIPWatermark returns all nodes that require addresses to be
 // allocated or released, sorted by the number of addresses needed to be operated
 // in descending order. Number of addresses to be released is negative value
 // so that nodes with IP deficit are resolved first
-func (n *NetResourceSetManager) GetNodesByIPWatermark() []*NetResource {
+func (n *NetResourceSetManager) GetNrsListByIPWatermark() []*NetResource {
 	n.mutex.RLock()
 	list := make([]*NetResource, len(n.netResources))
 	index := 0
@@ -433,20 +450,20 @@ type resyncStats struct {
 	nodesInDeficit      int
 }
 
-func (n *NetResourceSetManager) resyncNode(ctx context.Context, node *NetResource, stats *resyncStats, syncTime time.Time) {
-	if node == nil {
+func (n *NetResourceSetManager) resyncNode(ctx context.Context, nr *NetResource, stats *resyncStats, syncTime time.Time) {
+	if nr == nil {
 		return
 	}
-	node.SetRunning()
-	node.updateLastResync(syncTime)
-	node.recalculate()
-	allocationNeeded := node.allocationNeeded()
-	releaseNeeded := node.releaseNeeded()
+	nr.SetRunning()
+	nr.updateLastResync(syncTime)
+	nr.recalculate()
+	allocationNeeded := nr.allocationNeeded()
+	releaseNeeded := nr.releaseNeeded()
 	if allocationNeeded || releaseNeeded {
-		node.poolMaintainer.Trigger()
+		nr.poolMaintainer.Trigger()
 	}
 
-	nodeStats := node.Stats()
+	nodeStats := nr.Stats()
 
 	stats.mutex.Lock()
 	stats.totalUsed += nodeStats.UsedIPs
@@ -466,7 +483,7 @@ func (n *NetResourceSetManager) resyncNode(ctx context.Context, node *NetResourc
 
 	stats.mutex.Unlock()
 
-	node.k8sSync.Trigger()
+	nr.k8sSync.Trigger()
 }
 
 // Resync will attend all nodes and resolves IP deficits. The order of
@@ -477,32 +494,43 @@ func (n *NetResourceSetManager) Resync(ctx context.Context, syncTime time.Time) 
 	stats := resyncStats{}
 	sem := semaphore.NewWeighted(n.parallelWorkers)
 
-	for _, node := range n.GetNodesByIPWatermark() {
+	start := time.Now()
+	nrsList := n.GetNrsListByIPWatermark()
+	for _, nrs := range nrsList {
 		err := sem.Acquire(ctx, 1)
 		if err != nil {
 			continue
 		}
 
-		ctx, cancelFn := context.WithTimeout(ctx, operatorOption.Config.ResourceResyncInterval)
+		ctxWithTimeout, cancelFn := context.WithTimeout(ctx, operatorOption.Config.ResourceResyncInterval)
 		resultChan := make(chan struct{})
 
+		go func() {
+			defer func() {
+				sem.Release(1)
+				cancelFn()
+			}()
+
+			s := time.Now()
+			select {
+			case <-ctxWithTimeout.Done():
+				// timeout
+				log.Warningf("NetResourceSetManager.Resync: nrs %s resync timed out after %v", nrs.name, time.Since(s))
+			case <-resultChan:
+				// done
+			}
+		}()
+
 		go func(node *NetResource, stats *resyncStats) {
-			n.resyncNode(ctx, node, stats, syncTime)
+			n.resyncNode(ctxWithTimeout, node, stats, syncTime)
 			resultChan <- struct{}{}
-		}(node, &stats)
-		select {
-		case <-ctx.Done():
-			sem.Release(1)
-			log.Warningf("resync nrs %s timeout", node.name)
-		case <-resultChan:
-			sem.Release(1)
-		}
-		cancelFn()
+		}(nrs, &stats)
 	}
 
 	// Acquire the full semaphore, this requires all go routines to
 	// complete and thus blocks until all nodes are synced
 	sem.Acquire(ctx, n.parallelWorkers)
+	log.Infof("NetResourceSetManager.Resync: %d nrs resync cost %v", len(nrsList), time.Since(start))
 
 	n.metricsAPI.IncResyncCount()
 	n.metricsAPI.SetAllocatedIPs("used", stats.totalUsed)

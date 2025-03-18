@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -40,6 +41,93 @@ import (
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
+// ipRelatedError represents an error related to IP validation
+type ipRelatedError struct {
+	IP     string // The IP address where the error occurred
+	reason string // The error message
+}
+
+// Error implements the error interface for ipRelatedError
+func (e *ipRelatedError) Error() string {
+	return fmt.Sprintf("unavailable IP '%s' reason: %s", e.IP, e.reason)
+}
+
+// NewIPRelatedError creates and returns a new ipRelatedError instance
+func NewIPRelatedError(ip, reason string) error {
+	return &ipRelatedError{
+		IP:     ip,
+		reason: reason,
+	}
+}
+
+func isIPRelatedError(err error) bool {
+	var ipError *ipRelatedError
+	return errors.As(err, &ipError)
+}
+
+type IPAM interface {
+	ExecAdd(ipamType string, stdinData []byte) (types.Result, error)
+	ExecDel(ipamType string, stdinData []byte) error
+	ExecCheck(plugin string, netconf []byte) error
+}
+
+type DefaultIPAM struct{}
+
+func (d *DefaultIPAM) ExecAdd(ipamType string, stdinData []byte) (types.Result, error) {
+	return ipam.ExecAdd(ipamType, stdinData)
+}
+
+func (d *DefaultIPAM) ExecDel(ipamType string, stdinData []byte) error {
+	return ipam.ExecDel(ipamType, stdinData)
+}
+
+func (d *DefaultIPAM) ExecCheck(plugin string, netconf []byte) error {
+	return ipam.ExecCheck(plugin, netconf)
+}
+
+var _ IPAM = &DefaultIPAM{}
+
+// NetworkConfigurer interface defines methods for network configuration
+type NetworkConfigurer interface {
+	SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error)
+	SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error
+	RollbackVeth(netns ns.NetNS, hostInterface, containerInterface *current.Interface) error
+}
+
+// DefaultNetworkConfigurer implements the NetworkConfigurer interface
+type DefaultNetworkConfigurer struct{}
+
+func (d *DefaultNetworkConfigurer) SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
+	return setupContainerVethLegacy(podname, namespace, netns, ifName, mtu, pr)
+}
+
+func (d *DefaultNetworkConfigurer) SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error {
+	return setupHostVeth(host, container, result)
+}
+
+func (d *DefaultNetworkConfigurer) RollbackVeth(netns ns.NetNS, hostInterface, containerInterface *current.Interface) error {
+	return rollbackVeth(netns, hostInterface, containerInterface)
+}
+
+var _ NetworkConfigurer = &DefaultNetworkConfigurer{}
+
+type IPMasqManager interface {
+	SetupIPMasq(ipn *net.IPNet, chain, comment string) error
+	TeardownIPMasq(ipn *net.IPNet, chain, comment string) error
+}
+
+type DefaultIPMasqManager struct{}
+
+func (d *DefaultIPMasqManager) SetupIPMasq(ipn *net.IPNet, chain, comment string) error {
+	return ip.SetupIPMasq(ipn, chain, comment)
+}
+
+func (d *DefaultIPMasqManager) TeardownIPMasq(ipn *net.IPNet, chain, comment string) error {
+	return ip.TeardownIPMasq(ipn, chain, comment)
+}
+
+var _ IPMasqManager = &DefaultIPMasqManager{}
+
 var logger *logrus.Entry
 
 func init() {
@@ -51,9 +139,10 @@ func init() {
 
 type NetConf struct {
 	types.NetConf
-	IPMasq    bool   `json:"ipMasq"`
-	MTU       int    `json:"mtu"`
-	DefaultGW string `json:"defaultGW,omitempty"`
+	IPMasq                    bool   `json:"ipMasq"`
+	MTU                       int    `json:"mtu"`
+	DefaultGW                 string `json:"defaultGW,omitempty"`
+	PluginIpRequestRetryTimes int    `json:"retryTimes,omitempty"`
 }
 
 func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
@@ -107,6 +196,40 @@ func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, 
 	return hostInterface, containerInterface, nil
 }
 
+// rollbackVeth encapsulates the logic to roll back veth devices
+func rollbackVeth(netns ns.NetNS, hostInterface, containerInterface *current.Interface) error {
+	var errs []error
+
+	if containerInterface != nil {
+		err := netns.Do(func(_ ns.NetNS) error {
+			_, err := ip.DelLinkByNameAddr(containerInterface.Name)
+			if err != nil && err == ip.ErrLinkNotFound {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("failed to delete container veth %s: %w", containerInterface.Name, err)
+			}
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if hostInterface != nil {
+		_, err := ip.DelLinkByNameAddr(hostInterface.Name)
+		if err != nil && err == ip.ErrLinkNotFound {
+		} else if err != nil {
+			errs = append(errs, fmt.Errorf("failed to delete host veth %s: %w", hostInterface.Name, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("rollback errors: %v", errs)
+	}
+	return nil
+}
+
 func setupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error {
 	// hostVeth moved namespaces and may have a new ifindex
 	vethName := host.Name
@@ -149,7 +272,7 @@ func setupHostVeth(host *current.Interface, container *current.Interface, result
 					goto nextStep
 				}
 			}
-			return fmt.Errorf("failed to add route on host: %v", err)
+			return NewIPRelatedError(ipc.Address.IP.String(), err.Error())
 		}
 
 	nextStep:
@@ -197,73 +320,44 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("failed to load netconf: %v", err)
 	}
 
-	// run the IPAM plugin and get back the config to apply
-	r, err := ipam.ExecAdd(conf.IPAM.Type, args.StdinData)
-	if err != nil {
-		logger.WithError(err).Error("failed to exec IPAM plugin")
-		return fmt.Errorf("failed to execute IPAM plugin: %w", err)
-	}
-
-	// Invoke ipam del if err to avoid ip leak
-	defer func() {
-		if err != nil {
-			ipam.ExecDel(conf.IPAM.Type, args.StdinData)
-		}
-	}()
-
-	// Convert whatever the IPAM result was into the current Result type
-	result, err := current.NewResultFromResult(r)
-	if err != nil {
-		return fmt.Errorf("could not convert result of IPAM plugin: %v", err)
-	}
-	logger.WithField("ipamResult", result).Infof("got result from IPAM")
-
-	if len(result.IPs) == 0 {
-		return errors.New("IPAM plugin returned missing IP config")
-	}
-
-	if err := ip.EnableForward(result.IPs); err != nil {
-		return fmt.Errorf("could not enable IP forwarding: %v", err)
-	}
-
 	netns, err := ns.GetNS(args.Netns)
 	if err != nil {
 		return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
 	}
 	defer netns.Close()
 
-	if conf.DefaultGW != "" {
-		for i := range result.IPs {
-			if result.IPs[i].Gateway == nil {
-				result.IPs[i].Gateway = net.ParseIP(conf.DefaultGW)
-			}
+	var result *current.Result
+
+	var IpRetryErrorList []error
+
+	defer func() {
+		IpRetryErrList := mergeErrors(IpRetryErrorList)
+		if len(IpRetryErrorList) > 0 {
+			logger.WithError(IpRetryErrList).Error("IP related retry errors")
 		}
+		if err != nil {
+			err = fmt.Errorf("%w; IP related retry errors: %v", err, IpRetryErrList)
+		}
+	}()
+
+	for i := 0; i <= conf.PluginIpRequestRetryTimes; i++ {
+		result, err = configureNetworkWithIPAM(&conf, pK8Sargs, args, netns, &DefaultNetworkConfigurer{}, &DefalutNetworkChecker{}, &DefaultIPAM{}, &DefaultIPMasqManager{})
+		if err != nil {
+			if isIPRelatedError(err) {
+				IpRetryErrorList = append(IpRetryErrorList, fmt.Errorf("retry %d failed: %v", i, err))
+				continue
+			}
+			return err
+		}
+		break
 	}
 
-	hostInterface, containerInterface, err := setupContainerVethLegacy(string(pK8Sargs.K8S_POD_NAME), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
 	if err != nil {
-		return fmt.Errorf("failed to setup container veth: %w", err)
+		return fmt.Errorf("failed to set IP Related conf after %d try", conf.PluginIpRequestRetryTimes)
 	}
 
-	if err = setupHostVeth(hostInterface, containerInterface, result); err != nil {
-		return fmt.Errorf("failed to setup host veth: %w", err)
-	}
-
-	if conf.IPMasq {
-		chain := utils.FormatChainName(conf.Name, args.ContainerID)
-		comment := utils.FormatComment(conf.Name, args.ContainerID)
-		for _, ipc := range result.IPs {
-			if err = ip.SetupIPMasq(&ipc.Address, chain, comment); err != nil {
-				return fmt.Errorf("failed to setup IP masquerade: %w", err)
-			}
-		}
-	}
-
-	// Only override the DNS settings in the previous result if any DNS fields
-	// were provided to the ptp plugin. This allows, for example, IPAM plugins
-	// to specify the DNS settings instead of the ptp plugin.
-	if dnsConfSet(conf.DNS) {
-		result.DNS = conf.DNS
+	if result == nil {
+		return fmt.Errorf("empty result get from IPAM")
 	}
 
 	logger.WithField("result", logfields.Json(result)).Infof("success to exec plugin")
@@ -448,6 +542,115 @@ func validateCniContainerInterface(intf current.Interface) error {
 	return nil
 }
 
+func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdArgs, netns ns.NetNS, networkConfigurer NetworkConfigurer, networkChecker NetworkChecker, ipam IPAM, ipMasqManager IPMasqManager) (*current.Result, error) {
+	// Execute the IPAM plugin to allocate IP resources
+	r, err := ipam.ExecAdd(conf.IPAM.Type, args.StdinData)
+	if err != nil {
+		logger.WithError(err).Error("failed to exec IPAM plugin")
+		return nil, fmt.Errorf("failed to execute IPAM plugin: %w", err)
+	}
+
+	// Ensure IP resources are released in case of an error
+	defer func() {
+		if err != nil {
+			if delErr := ipam.ExecDel(conf.IPAM.Type, args.StdinData); delErr != nil {
+				// If the rollback fails, clean original err type, append the rollback error to the main error.
+				err = fmt.Errorf("%v; rollback failed: %v", err, delErr)
+				logger.WithError(delErr).Error("failed to release IPAM resources")
+			}
+		}
+	}()
+
+	// Convert the IPAM result into the current Result type
+	result, err := current.NewResultFromResult(r)
+	if err != nil {
+		return nil, fmt.Errorf("could not convert result of IPAM plugin: %v", err)
+	}
+	logger.WithField("ipamResult", result).Infof("got result from IPAM")
+
+	// Validate that the IPAM plugin returned at least one IP configuration
+	if len(result.IPs) == 0 {
+		return nil, errors.New("IPAM plugin returned missing IP config")
+	}
+
+	// Enable IP forwarding for the allocated IPs
+	if err := ip.EnableForward(result.IPs); err != nil {
+		return nil, fmt.Errorf("could not enable IP forwarding: %v", err)
+	}
+
+	// Set the default gateway if specified in the configuration
+	if conf.DefaultGW != "" {
+		for i := range result.IPs {
+			if result.IPs[i].Gateway == nil {
+				result.IPs[i].Gateway = net.ParseIP(conf.DefaultGW)
+			}
+		}
+	}
+
+	// Set up the veth pair between the host and the container
+	hostInterface, containerInterface, err := networkConfigurer.SetupContainerVeth(string(pK8Sargs.K8S_POD_NAME), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup container veth: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			rollbackErr := networkConfigurer.RollbackVeth(netns, hostInterface, containerInterface)
+			if rollbackErr != nil {
+				// If the rollback fails, clean original err type, append the rollback error to the main error.
+				err = fmt.Errorf("%v; rollback failed: %v", err, rollbackErr)
+			}
+		}
+	}()
+
+	// Configure the host-side veth interface
+	if err = networkConfigurer.SetupHostVeth(hostInterface, containerInterface, result); err != nil {
+		return nil, fmt.Errorf("failed to setup host veth: %w", err)
+	}
+
+	// Configure IP masquerading if enabled in the configuration
+	if conf.IPMasq {
+		chain := utils.FormatChainName(conf.Name, args.ContainerID)
+		comment := utils.FormatComment(conf.Name, args.ContainerID)
+		for _, ipc := range result.IPs {
+			if err = ipMasqManager.SetupIPMasq(&ipc.Address, chain, comment); err != nil {
+				return nil, fmt.Errorf("failed to setup IP masquerade: %w", err)
+			}
+		}
+	}
+	defer func() {
+		if len(result.IPs) != 0 && conf.IPMasq {
+			chain := utils.FormatChainName(conf.Name, args.ContainerID)
+			comment := utils.FormatComment(conf.Name, args.ContainerID)
+			for _, ipc := range result.IPs {
+				err = ipMasqManager.TeardownIPMasq(&ipc.Address, chain, comment)
+				if err != nil {
+					err = fmt.Errorf("failed to roll back IP masquerade: %w", err)
+				}
+			}
+		}
+	}()
+
+	// Only override the DNS settings in the previous result if any DNS fields
+	// were provided to the ptp plugin. This allows, for example, IPAM plugins
+	// to specify the DNS settings instead of the ptp plugin.
+	if dnsConfSet(conf.DNS) {
+		result.DNS = conf.DNS
+	}
+
+	// After the container network is configured, verify the reliability of the
+	// IP provided by the IaasS by testing the connectivity between the container
+	// and the gateway.
+	err = VerifyNetworkConnectivity(result, netns, conf.MTU, networkChecker)
+	if err != nil {
+		logger.WithError(err).Error("Failed to verify network connectivity")
+		return nil, err
+	}
+
+	// Return the IPAM result for further use
+	return result, nil
+}
+
 // VethNameForPod return host-side veth name for pod
 // max veth length is 15
 func vethNameForPod(name, namespace, prefix string) string {
@@ -467,6 +670,19 @@ func loadK8SArgs(envArgs string) (*K8SArgs, error) {
 		}
 	}
 	return &k8sArgs, nil
+}
+
+func mergeErrors(errors []error) error {
+	var nonNilErrors []string
+	for _, err := range errors {
+		if err != nil {
+			nonNilErrors = append(nonNilErrors, err.Error())
+		}
+	}
+	if len(nonNilErrors) == 0 {
+		return nil
+	}
+	return fmt.Errorf(strings.Join(nonNilErrors, "; "))
 }
 
 // K8SArgs k8s pod args

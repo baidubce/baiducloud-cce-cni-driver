@@ -248,7 +248,7 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 		}
 	}
 
-	//When the Finalizer is null, only patching is allowed, updates will ignore changes.
+	// When the Finalizer is null, only patching is allowed, updates will ignore changes.
 UpdateStatus:
 	if isNeedSkipUpdate {
 		return nil
@@ -374,6 +374,24 @@ func (esm *eniStateMachine) start() error {
 	if esm.resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
 		esm.scopeLog.Debugf("eni %s is already in inused", esm.resource.Name)
 	} else if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
+		// TODO: The preCreated ENI's OwnerReferences maybe can be managed by instance-group in the feature.
+		owners := esm.resource.OwnerReferences
+		managedByMe := false
+		if len(owners) != 0 {
+			for _, o := range owners {
+				if o.APIVersion == ccev2.SchemeGroupVersion.String() && o.Kind == ccev2.NRSKindDefinition {
+					managedByMe = true
+					break
+				}
+			}
+		}
+		if !managedByMe {
+			esm.scopeLog.Infof("eni object %s has not been managed by cce-cni yet (OwnerReference not initialized), skip state machine",
+				esm.resource.Name)
+			esm.isSync = true
+			return nil
+		}
+
 		// refresh status of ENI
 		esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
 		if cloud.IsErrorReasonNoSuchObject(err) {
@@ -444,8 +462,8 @@ func updateENISpecFromVPCENI(esm *eniStateMachine) {
 	esm.resource.Spec.ENI.VpcID = esm.vpceni.VpcId
 	esm.resource.Spec.ENI.ZoneName = esm.vpceni.ZoneName
 	esm.resource.Spec.ENI.SubnetID = esm.vpceni.SubnetId
-	esm.resource.Spec.ENI.PrivateIPSet = toModelPrivateIP(esm.vpceni.PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
-	esm.resource.Spec.ENI.IPV6PrivateIPSet = toModelPrivateIP(esm.vpceni.Ipv6PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
+	esm.resource.Spec.ENI.PrivateIPSet = ToModelPrivateIP(esm.vpceni.PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
+	esm.resource.Spec.ENI.IPV6PrivateIPSet = ToModelPrivateIP(esm.vpceni.Ipv6PrivateIpSet, esm.vpceni.VpcId, esm.vpceni.SubnetId)
 	ElectENIIPv6PrimaryIP(esm.resource)
 }
 
@@ -544,8 +562,8 @@ func ElectENIIPv6PrimaryIP(newObj *ccev2.ENI) {
 	}
 }
 
-// toModelPrivateIP convert private ip to model
-func toModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*models.PrivateIP {
+// ToModelPrivateIP convert private ip to model
+func ToModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*models.PrivateIP {
 	var pIPSet []*models.PrivateIP
 	for _, pip := range ipset {
 		newPIP := &models.PrivateIP{

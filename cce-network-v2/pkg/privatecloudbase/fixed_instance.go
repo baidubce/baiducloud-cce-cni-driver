@@ -20,9 +20,9 @@ var _ endpoint.DirectIPAllocator = &InstancesManager{}
 func (m *InstancesManager) NodeEndpoint(cep *ccev2.CCEEndpoint) (endpoint.DirectEndpointOperation, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	node, ok := m.nodeMap[cep.Spec.Network.IPAllocation.NodeIP]
+	node, ok := m.nodeMap[cep.Spec.Network.IPAllocation.NodeName]
 	if !ok {
-		return nil, fmt.Errorf("node %s not found", cep.Spec.Network.IPAllocation.NodeIP)
+		return nil, fmt.Errorf("node %s not found", cep.Spec.Network.IPAllocation.NodeName)
 	}
 	return &fixedIPOperation{
 		InstancesManager: m,

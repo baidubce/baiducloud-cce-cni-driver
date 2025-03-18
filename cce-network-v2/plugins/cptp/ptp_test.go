@@ -17,8 +17,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/sirupsen/logrus"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,7 +37,26 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containernetworking/plugins/pkg/testutils"
 	"github.com/containernetworking/plugins/plugins/ipam/host-local/backend/allocator"
+	"github.com/stretchr/testify/mock"
 )
+
+// MockNetworkUtils is a mock implementation of the NetworkUtils interface
+type MockNetworkUtils struct {
+	mock.Mock
+}
+
+func (m *MockNetworkUtils) GetDefaultGateway() (net.IP, error) {
+	args := m.Called()
+	if ip, ok := args.Get(0).(net.IP); ok {
+		return ip, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockNetworkUtils) SendIcmpProbeInNetNS(netns ns.NetNS, srcIP net.IP, targetIP net.IP, mtu int) (bool, error) {
+	args := m.Called(netns, srcIP, targetIP, mtu)
+	return args.Bool(0), args.Error(1)
+}
 
 type Net struct {
 	Name          string                 `json:"name"`
@@ -400,17 +424,17 @@ var _ = Describe("ptp Operations", func() {
 			defer os.RemoveAll(resolvConfPath)
 
 			conf := fmt.Sprintf(`{
-			    "cniVersion": "%s",
-			    "name": "mynet",
-			    "type": "ptp",
-			    "ipMasq": true,
-			    "mtu": 5000,
-			    "ipam": {
+				"cniVersion": "%s",
+				"name": "mynet",
+				"type": "ptp",
+				"ipMasq": true,
+				"mtu": 5000,
+				"ipam": {
 				"type": "host-local",
 				"subnet": "10.1.2.0/24",
 				"resolvConf": "%s",
 				"dataDir": "%s"
-			    }
+				}
 			}`, ver, resolvConfPath, dataDir)
 
 			doTest(conf, ver, 1, ipamDNSConf, targetNS)
@@ -445,18 +469,18 @@ var _ = Describe("ptp Operations", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				conf := fmt.Sprintf(`{
-				    "cniVersion": "%s",
-				    "name": "mynet",
-				    "type": "ptp",
-				    "ipMasq": true,
-				    "mtu": 5000,
-				    "ipam": {
+					"cniVersion": "%s",
+					"name": "mynet",
+					"type": "ptp",
+					"ipMasq": true,
+					"mtu": 5000,
+					"ipam": {
 					"type": "host-local",
 					"subnet": "10.1.2.0/24",
 					"resolvConf": "%s",
 					"dataDir": "%s"
-				    },
-				    "dns": %s
+					},
+					"dns": %s
 				}`, ver, resolvConfPath, dataDir, string(dnsConfBytes))
 
 				doTest(conf, ver, 1, ptpDNSConf, targetNS)
@@ -475,22 +499,22 @@ var _ = Describe("ptp Operations", func() {
 			defer os.RemoveAll(resolvConfPath)
 
 			conf := fmt.Sprintf(`{
-			    "cniVersion": "%s",
-			    "name": "mynet",
-			    "type": "ptp",
-			    "ipMasq": true,
-			    "mtu": 5000,
-			    "ipam": {
+				"cniVersion": "%s",
+				"name": "mynet",
+				"type": "ptp",
+				"ipMasq": true,
+				"mtu": 5000,
+				"ipam": {
 				"type": "host-local",
 				"subnet": "10.1.2.0/24",
 				"dataDir": "%s",
 				"resolvConf": "%s"
-			    },
-			    "dns": {
+				},
+				"dns": {
 				"nameservers": [],
 				"search": [],
 				"options": []
-			    }
+				}
 			}`, ver, dataDir, resolvConfPath)
 
 			doTest(conf, ver, 1, types.DNS{}, targetNS)
@@ -500,16 +524,16 @@ var _ = Describe("ptp Operations", func() {
 			const IFNAME = "ptp0"
 
 			conf := fmt.Sprintf(`{
-			    "cniVersion": "%s",
-			    "name": "mynet",
-			    "type": "ptp",
-			    "ipMasq": true,
-			    "mtu": 5000,
-			    "ipam": {
+				"cniVersion": "%s",
+				"name": "mynet",
+				"type": "ptp",
+				"ipMasq": true,
+				"mtu": 5000,
+				"ipam": {
 				"type": "host-local",
 				"dataDir": "%s",
 				"subnet": "10.1.2.0/24"
-			    }
+				}
 			}`, ver, dataDir)
 
 			args := &skel.CmdArgs{
@@ -532,4 +556,262 @@ var _ = Describe("ptp Operations", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 	}
+})
+
+type MockNetworkConfigurer struct {
+	mock.Mock
+}
+
+var _ NetworkChecker = &MockNetworkChecker{}
+
+func (m *MockNetworkConfigurer) SetupContainerVeth(podName, podNamespace string, netns ns.NetNS, ifName string, mtu int, result *types100.Result) (hostInterface, containerInterface *types100.Interface, err error) {
+	args := m.Called(podName, podNamespace, netns, ifName, mtu, result)
+	return args.Get(0).(*types100.Interface), args.Get(1).(*types100.Interface), args.Error(2)
+}
+
+func (m *MockNetworkConfigurer) RollbackVeth(netns ns.NetNS, hostInterface, containerInterface *types100.Interface) error {
+	args := m.Called(netns, hostInterface, containerInterface)
+	return args.Error(0)
+}
+
+func (m *MockNetworkConfigurer) SetupHostVeth(hostInterface, containerInterface *types100.Interface, result *types100.Result) error {
+	args := m.Called(hostInterface, containerInterface, result)
+	return args.Error(0)
+}
+
+type MockIPAM struct {
+	mock.Mock
+}
+
+func (m *MockIPAM) ExecAdd(plugin string, stdinData []byte) (types.Result, error) {
+	args := m.Called(plugin, stdinData)
+	result := args.Get(0)
+	if result == nil {
+		return nil, args.Error(1)
+	}
+
+	// Ensure the type assertion is safe
+	if res, ok := result.(*types100.Result); ok {
+		return res, args.Error(1)
+	}
+
+	// Return a custom error if the type assertion fails
+	return nil, fmt.Errorf("unexpected type for result")
+}
+
+func (m *MockIPAM) ExecDel(plugin string, stdinData []byte) error {
+	args := m.Called(plugin, stdinData)
+	return args.Error(0)
+}
+
+func (m *MockIPAM) ExecCheck(plugin string, netconf []byte) error {
+	return nil
+}
+
+var _ IPAM = &MockIPAM{}
+
+type MockIPMasqManager struct {
+	mock.Mock
+}
+
+func (m *MockIPMasqManager) SetupIPMasq(ipn *net.IPNet, chain, comment string) error {
+	args := m.Called(ipn, chain, comment)
+	return args.Error(0)
+}
+
+func (m *MockIPMasqManager) TeardownIPMasq(ipn *net.IPNet, chain, comment string) error {
+	args := m.Called(ipn, chain, comment)
+	return args.Error(0)
+}
+
+var _ IPMasqManager = &MockIPMasqManager{}
+
+var _ = Describe("configureNetworkWithIPAM", func() {
+	var (
+		conf              *NetConf
+		pK8Sargs          *K8SArgs
+		args              *skel.CmdArgs
+		netns             ns.NetNS
+		mockIPAM          *MockIPAM
+		mockConfigurer    *MockNetworkConfigurer
+		mockChecker       *MockNetworkChecker
+		mockIPMasqManager *MockIPMasqManager
+		result            *types100.Result
+		err               error
+	)
+
+	logger = logging.DefaultLogger.WithFields(logrus.Fields{
+		"cmdArgs": logfields.Json("test"),
+		"plugin":  "cptp",
+		"mod":     "ADD",
+	})
+
+	BeforeEach(func() {
+		conf = &NetConf{
+			IPMasq: true,
+			MTU:    1500,
+		}
+		pK8Sargs = &K8SArgs{
+			K8S_POD_NAME:      "test-pod",
+			K8S_POD_NAMESPACE: "default",
+		}
+		args = &skel.CmdArgs{
+			ContainerID: "dummy",
+			Netns:       "/var/run/netns/test",
+			IfName:      "eth0",
+			StdinData:   []byte(`{"cniVersion": "0.3.1"}`),
+		}
+		var err error
+		netns, err = testutils.NewNS()
+		Expect(err).NotTo(HaveOccurred())
+
+		mockIPAM = &MockIPAM{}
+		mockConfigurer = &MockNetworkConfigurer{}
+		mockChecker = &MockNetworkChecker{}
+		mockIPMasqManager = &MockIPMasqManager{}
+	})
+
+	AfterEach(func() {
+		Expect(netns.Close()).To(Succeed())
+		Expect(testutils.UnmountNS(netns)).To(Succeed())
+	})
+
+	It("should configure network with IPAM successfully", func() {
+		ipConfig := &types100.IPConfig{
+			Address: net.IPNet{
+				IP:   net.ParseIP("192.168.1.10"),
+				Mask: net.CIDRMask(24, 32),
+			},
+			Gateway: net.ParseIP("192.168.1.1"),
+		}
+		result = &types100.Result{
+			IPs: []*types100.IPConfig{ipConfig},
+		}
+
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(result, nil)
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+		mockConfigurer.On("SetupContainerVeth", "test-pod", "default", netns, "eth0", 1500, result).Return(&types100.Interface{}, &types100.Interface{}, nil)
+		mockConfigurer.On("SetupHostVeth", mock.Anything, mock.Anything, result).Return(nil)
+		mockChecker.On("SendIcmpProbeInNetNS", netns, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(true, nil)
+		mockIPMasqManager.On("SetupIPMasq", &ipConfig.Address, "KUBE-SEP-TEST-POD-DEFAULT", "masquerade for test-pod").Return(nil)
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).NotTo(BeNil())
+	})
+
+	It("should return error if IPAM ExecAdd fails", func() {
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(nil, fmt.Errorf("IPAM ExecAdd error"))
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to execute IPAM plugin"))
+		Expect(result).To(BeNil())
+	})
+
+	It("should return error if IPAM RollBack fails", func() {
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(nil, fmt.Errorf("IPAM ExecAdd error"))
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, fmt.Errorf("IPAM ExecDel error"))
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("rollback failed"))
+		Expect(result).To(BeNil())
+	})
+
+	It("should return error if SetupContainerVeth fails", func() {
+		ipConfig := &types100.IPConfig{
+			Address: net.IPNet{
+				IP:   net.ParseIP("192.168.1.10"),
+				Mask: net.CIDRMask(24, 32),
+			},
+			Gateway: net.ParseIP("192.168.1.1"),
+		}
+		result = &types100.Result{
+			IPs: []*types100.IPConfig{ipConfig},
+		}
+
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(result, nil)
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+		mockConfigurer.On("SetupContainerVeth", "test-pod", "default", netns, "eth0", 1500, result).Return(nil, nil, fmt.Errorf("SetupContainerVeth error"))
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to setup container veth"))
+		Expect(result).To(BeNil())
+	})
+
+	It("should return error if SetupHostVeth fails", func() {
+		ipConfig := &types100.IPConfig{
+			Address: net.IPNet{
+				IP:   net.ParseIP("192.168.1.10"),
+				Mask: net.CIDRMask(24, 32),
+			},
+			Gateway: net.ParseIP("192.168.1.1"),
+		}
+		result = &types100.Result{
+			IPs: []*types100.IPConfig{ipConfig},
+		}
+
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(result, nil)
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+		mockConfigurer.On("SetupContainerVeth", "test-pod", "default", netns, "eth0", 1500, result).Return(&types100.Interface{}, &types100.Interface{}, nil)
+		mockConfigurer.On("SetupHostVeth", mock.Anything, mock.Anything, result).Return(fmt.Errorf("SetupHostVeth error"))
+		mockConfigurer.On("RollbackVeth", netns, mock.Anything, mock.Anything).Return(nil)
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to setup host veth"))
+		Expect(result).To(BeNil())
+	})
+
+	It("should return error if rollback fail", func() {
+		ipConfig := &types100.IPConfig{
+			Address: net.IPNet{
+				IP:   net.ParseIP("192.168.1.10"),
+				Mask: net.CIDRMask(24, 32),
+			},
+			Gateway: net.ParseIP("192.168.1.1"),
+		}
+		result = &types100.Result{
+			IPs: []*types100.IPConfig{ipConfig},
+		}
+
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(result, nil)
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+		mockConfigurer.On("SetupContainerVeth", "test-pod", "default", netns, "eth0", 1500, result).Return(&types100.Interface{}, &types100.Interface{}, nil)
+		mockConfigurer.On("SetupHostVeth", mock.Anything, mock.Anything, result).Return(fmt.Errorf("SetupHostVeth error"))
+		mockConfigurer.On("RollbackVeth", netns, mock.Anything, mock.Anything).Return(fmt.Errorf("RollbackVeth error"))
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("RollbackVeth error"))
+		Expect(result).To(BeNil())
+	})
+
+	It("should return error if network connectivity verification fails", func() {
+		ipConfig := &types100.IPConfig{
+			Address: net.IPNet{
+				IP:   net.ParseIP("192.168.1.10"),
+				Mask: net.CIDRMask(24, 32),
+			},
+			Gateway: net.ParseIP("192.168.1.1"),
+		}
+		result = &types100.Result{
+			IPs: []*types100.IPConfig{ipConfig},
+		}
+
+		mockIPAM.On("ExecAdd", "", args.StdinData).Return(result, nil)
+		mockIPAM.On("ExecDel", mock.Anything, mock.Anything).Return(result, nil)
+		mockConfigurer.On("SetupContainerVeth", "test-pod", "default", netns, "eth0", 1500, result).Return(&types100.Interface{}, &types100.Interface{}, nil)
+		mockConfigurer.On("SetupHostVeth", mock.Anything, mock.Anything, result).Return(nil)
+		mockIPMasqManager.On("SetupIPMasq", &ipConfig.Address, "KUBE-SEP-TEST-POD-DEFAULT", "masquerade for test-pod").Return(nil)
+		mockChecker.On("SendIcmpProbeInNetNS", netns, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(false, fmt.Errorf("ICMP probe error"))
+
+		result, err = configureNetworkWithIPAM(conf, pK8Sargs, args, netns, mockConfigurer, mockChecker, mockIPAM, mockIPMasqManager)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to verify network connectivity"))
+		Expect(result).To(BeNil())
+	})
 })

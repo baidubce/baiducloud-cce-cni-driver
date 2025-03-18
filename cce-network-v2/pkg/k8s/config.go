@@ -19,11 +19,17 @@ package k8s
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 var (
 	// config is the configuration of Kubernetes related settings
 	config configuration
+
+	// DefaultSyncBackOff is the default backoff period for cesSync calls.
+	DefaultSyncBackOff = 1 * time.Second
+	// maxSyncBackOff is the max backoff period for cesSync calls.
+	MaxSyncBackOff = 100 * time.Second
 )
 
 type configuration struct {

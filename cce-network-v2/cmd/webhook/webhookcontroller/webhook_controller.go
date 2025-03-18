@@ -22,10 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhookcontroller/writer"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-
 	"github.com/spf13/pflag"
+	"golang.org/x/time/rate"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,6 +35,9 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhookcontroller/writer"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 )
 
 const (
@@ -84,7 +85,12 @@ func New(handlers map[string]admission.Handler) (*Controller, error) {
 	c := &Controller{
 		kubeClient: cs,
 		handlers:   handlers,
-		queue:      workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "cce-eni-ipam-webhook-controller"),
+		queue: workqueue.NewNamedRateLimitingQueue(workqueue.NewMaxOfRateLimiter(
+			workqueue.NewItemExponentialFailureRateLimiter(k8s.DefaultSyncBackOff, k8s.MaxSyncBackOff),
+			// 10 qps, 100 bucket size. This is only for retry speed and its
+			// only the overall factor (not per item).
+			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(k8s.GetQPS()), k8s.GetBurst())},
+		), "cce-eni-ipam-webhook-controller"),
 	}
 
 	c.informerFactory = cs.Informers

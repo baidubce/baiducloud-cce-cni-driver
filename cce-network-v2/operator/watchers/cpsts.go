@@ -62,7 +62,8 @@ func StartSynchronizingCPSTS(ctx context.Context) error {
 		return cpstsManager.Update(obj)
 	}
 
-	controller := cm.NewResyncController("cce-cpsts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.CCEClient().Informers.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer(), cpstsManagerSyncHandler)
+	controller := cm.NewResyncController("cce-cpsts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
+		k8s.CCEClient().Informers.Cce().V2alpha1().ClusterPodSubnetTopologySpreads().Informer(), cpstsManagerSyncHandler)
 	controller.RunWithResync(1 * time.Hour)
 
 	pstsManagerSyncHandler := func(key string) error {
@@ -83,7 +84,8 @@ func StartSynchronizingCPSTS(ctx context.Context) error {
 		}
 		return nil
 	}
-	cm.NewResyncController("cce-cpsts-psts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer(), pstsManagerSyncHandler).RunWithResync(operatorOption.Config.ResourceResyncInterval)
+	cm.NewResyncController("cce-cpsts-psts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
+		k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer(), pstsManagerSyncHandler).RunWithResync(operatorOption.Config.ResourceResyncInterval)
 
 	updateNsFunc := func(objObj, newObj interface{}) {
 		oldNs, oldOk := objObj.(*corev1.Namespace)

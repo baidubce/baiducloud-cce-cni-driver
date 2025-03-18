@@ -18,14 +18,15 @@ package watchers
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	ccev2lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2alpha1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/cm"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var SecurityGroupClient = &sgUpdaterImpl{}
@@ -57,7 +58,7 @@ func StartSynchronizingSecurityGroup(ctx context.Context, sgManager syncer.Secur
 	}
 	informer := k8s.CCEClient().Informers.Cce().V2alpha1().SecurityGroups().Informer()
 	resyncPeriod := sgManager.ResyncSecurityGroup(ctx)
-	controller := cm.NewResyncController("cce-sg-controller", int(operatorOption.Config.ResourceResyncWorkers),
+	controller := cm.NewResyncController("cce-sg-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
 		informer, sgSyncHandler)
 	controller.RunWithResync(resyncPeriod)
 	return nil

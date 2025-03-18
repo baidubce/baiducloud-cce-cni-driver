@@ -260,7 +260,7 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 				}
 			}
 
-			if err := rd.mutateNodeResource(rdmaNetResourceSet, rii.VifFeatures, rii.MacAddress); err != nil {
+			if err := rd.mutateNodeResource(rdmaNetResourceSet, rii.LabelSelectorValue, rii.VifFeatures, rii.MacAddress); err != nil {
 				rdLog.WithError(err).WithField("retryCount", retryCount).Warning("Unable to mutate nodeResource")
 				continue
 			}
@@ -324,7 +324,7 @@ func generateRdmaENISpec(vifFeatures string) (eni *api.ENISpec, err error) {
 	return
 }
 
-func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourceSet, vifFeatures, macAddress string) error {
+func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourceSet, labelSelectorValue, vifFeatures, macAddress string) error {
 	// reset NetworkresourceSet.Spec.Addresses to avoid stale data
 	rdmaNetResourceSet.Spec.Addresses = []ccev2.NodeAddress{}
 
@@ -373,6 +373,7 @@ func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourc
 	for key, v := range k8sNodeParsed.Labels {
 		rdmaNetResourceSet.ObjectMeta.Labels[key] = v
 	}
+	rdmaNetResourceSet.ObjectMeta.Labels[k8s.LabelNodeName] = labelSelectorValue
 
 	for _, k8sAddress := range k8sNodeParsed.IPAddresses {
 		k8sAddressStr := k8sAddress.IP.String()

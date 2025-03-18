@@ -82,7 +82,8 @@ func StartSynchronizingPSTS(ctx context.Context) error {
 		}
 	}
 
-	controller := cm.NewResyncController("cce-psts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer(), pstsManagerSyncHandler)
+	controller := cm.NewResyncController("cce-psts-controller", int(operatorOption.Config.ResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
+		k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer(), pstsManagerSyncHandler)
 	controller.RunWithResync(operatorOption.Config.ResourceResyncInterval)
 	return nil
 }

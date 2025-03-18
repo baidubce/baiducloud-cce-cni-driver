@@ -191,7 +191,7 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 			logfields.HelpMessage,
 			"Check if cce-network-operator pod is running and does not have any warnings or error messages.",
 		).Info("Waiting for IPs to become available in CRD-backed allocation pool")
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 
 	go func() {
@@ -304,7 +304,7 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 	}
 	n.mutex.Lock()
 
-	var markedToReleaseIPMap = make(map[string]*crdAllocator)
+	markedToReleaseIPMap := make(map[string]*crdAllocator)
 	n.allocationPoolSize[IPv4] = 0
 	n.allocationPoolSize[IPv6] = 0
 	if node.Spec.IPAM.Pool != nil {

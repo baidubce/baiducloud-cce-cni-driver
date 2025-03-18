@@ -20,13 +20,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
-	k8sUtils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/utils"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
-	pkgOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +29,13 @@ import (
 	k8sTypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
+	k8sUtils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/utils"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	pkgOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 )
 
 const (
@@ -107,7 +109,12 @@ func checkAndMarkNode(nodeName string, options markNodeOptions) bool {
 
 // ccePodsWatcher starts up a pod watcher to handle pod events.
 func ccePodsWatcher(stopCh <-chan struct{}) {
-	cceQueue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "cce-pod-queue")
+	cceQueue := workqueue.NewNamedRateLimitingQueue(workqueue.NewMaxOfRateLimiter(
+		workqueue.NewItemExponentialFailureRateLimiter(k8s.DefaultSyncBackOff, k8s.MaxSyncBackOff),
+		// 10 qps, 100 bucket size. This is only for retry speed and its
+		// only the overall factor (not per item).
+		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(k8s.GetQPS()), k8s.GetBurst())},
+	), "cce-pod-queue")
 
 	eventHandler := &cache.FilteringResourceEventHandler{
 		FilterFunc: func(obj interface{}) bool {
@@ -261,7 +268,7 @@ func setNodeNetworkUnavailable(ctx context.Context, nodeName, reason, message st
 	patch := []byte(fmt.Sprintf(`{"status":{"conditions":%s}}`, raw))
 
 	_, err = NodeClient.NodeInterface().PatchStatus(ctx, nodeName, patch)
-	log.Infof("Setting NodeNetworkUnavailable for node %s", nodeName)
+	log.Infof("Setting NodeNetworkUnavailable for node %s to %v", nodeName, status)
 	return err
 }
 

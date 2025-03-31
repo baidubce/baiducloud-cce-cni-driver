@@ -3,7 +3,7 @@
 
 include ../Makefile.defs
 
-TARGETS := agent webhook
+TARGETS := agent webhook exclusive-rdma-agent
 
 .PHONY: all $(TARGETS) clean install
 

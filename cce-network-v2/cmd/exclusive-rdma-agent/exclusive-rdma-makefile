@@ -1,0 +1,44 @@
+#attention! This makefile is not used! We still execute make in the standard way!
+
+#You need to firstly copy this file to directory cce-network-v2 to repalce the makefile there, which is suggested to backup first.
+#then, go to the directory cce-network-v2 to execute make -f exclusive-rdma-makefile, and then execute make install -f exclusive-rdma-makefile
+#Provide an independent makefile solely for building and installing the cni plugins and agents required for the exclusive RDMA network card,
+#At this point, there is no need for the two makefiles in the cmd and plugins directories, as well as their parent makefiles
+
+GO=go
+
+SRC_DIR1=cmd/exclusive-rdma-agent
+SRC_DIR2=plugins/exclusive-rdma
+
+BIN_DIR1=output/bin/cmd
+BIN_DIR2=output/bin/plugins
+
+TARGET1=$(BIN_DIR1)/exclusive-rdma-agent
+TARGET2=$(BIN_DIR2)/exclusive-rdma
+
+all: $(TARGET1) $(TARGET2)
+
+$(TARGET1):
+	@echo "Building exclusive-rdma-agent..."
+	@mkdir -p $(BIN_DIR1)
+	@$(GO) build -o $(TARGET1) ./$(SRC_DIR1)
+	@echo "Successfully built $(TARGET1)"
+
+$(TARGET2):
+	@echo "Building cni plugin: exclusive-rdma..."
+	@mkdir -p $(BIN_DIR2)
+	@$(GO) build -o $(TARGET2) ./$(SRC_DIR2)
+	@echo "Successfully built $(TARGET2)"
+
+clean:
+	@echo "Cleaning up..."
+	@rm -f $(TARGET1) $(TARGET2)
+	@echo "Cleanup completed"
+
+install:
+	@echo "Installing..."
+	@chmod 0755 $(TARGET1)
+	@chmod 0755 $(TARGET2)
+	@echo "Successfully installed"
+
+.PHONY: all clean install

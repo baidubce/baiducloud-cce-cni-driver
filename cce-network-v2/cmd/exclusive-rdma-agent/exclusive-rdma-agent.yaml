@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: exclusive-rdma-agent
+  namespace: kube-system
+spec:
+  template:
+    metadata:
+      labels:
+        app: exclusive-rdma-agent
+    spec:
+      # we use serviceAccount to grant this pod access to api-server, in our current test env.
+      # serviceAccount is defined below
+      serviceAccountName: exclusive-rdma-agent
+      # we use nodeSelector to make sure this pod only run on the npu nodes, in our current test env.
+      nodeSelector:
+        beta.kubernetes.io/instance-npu: "true"
+      containers:
+        - command:
+            - /bin/exclusive-rdma-agent 
+          args:
+            - --config=/etc/cni/net.d/00-cce-cni.conflist # just for test in current env, need to change it later using actual pro env
+            - --rstype=rdma 
+            - --driver=mlx5_core 
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - "/bin/sh"
+                  - "-c"
+                  - "/home/cce/install-exclusive-rdma.sh" 
+          image: registry.baidubce.com/cce-plugin-dev/exclusive-rdma-agent:mxz-test
+          imagePullPolicy: Always
+          name: exclusive-rdma-agent
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /etc/cni/net.d 
+              name: cni-net-dir
+            - mountPath: /opt/cni/bin 
+              name: cni-bin-dir
+            - mountPath: /var/run/exclusive-rdma 
+              name: socket-dir
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: system-node-critical
+      enableServiceLinks: true
+      hostIPC: true
+      hostNetwork: true
+      hostPID: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - hostPath:
+            path: /etc/cni/net.d 
+            type: DirectoryOrCreate
+          name: cni-net-dir
+        - hostPath: 
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+          name: cni-bin-dir
+        - hostPath:
+            path: /var/run/exclusive-rdma
+            type: DirectoryOrCreate
+          name: socket-dir
+        # used to avoid other pods to schedule on this node, which won't be used in our current test
+        # tolerations: 
+        #   - key: "serveless rdma node"
+        #     operator: "Equal"
+        #     value: "true"
+        #     effect: "NoSchedule"
+        # the affinity below is copied from cce-network-agent daemonset yaml, which won't be used in our current test
+        # affinity: 
+        #   nodeAffinity:
+        #     requiredDuringSchedulingIgnoredDuringExecution:
+        #       nodeSelectorTerms:
+        #         - matchExpressions:
+        #           - key: type
+        #             operator: NotIn
+        #             values:
+        #               - virtual-kubelet
+        #           - key: node.kubernetes.io/instance-type
+        #             operator: NotIn
+        #             values:
+        #               - HPAS
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 2
+  selector:
+    matchLabels:
+     app: exclusive-rdma-agent
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pod-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pod-reader
+subjects:
+- kind: ServiceAccount
+  name: exclusive-rdma-agent
+  namespace: kube-system
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: exclusive-rdma-agent
+  namespace: kube-system

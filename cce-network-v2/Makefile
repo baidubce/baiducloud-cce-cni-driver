@@ -211,7 +211,7 @@ install:
 GIT_VERSION: force
 	@if [ "$(GIT_VERSION)" != "`cat 2>/dev/null GIT_VERSION`" ] ; then echo "$(GIT_VERSION)" >GIT_VERSION; fi
 
-# DOCKER_IMAGES := cce-network-operator cce-network-operator-vpc-eni cce-network-agent
+# DOCKER_IMAGES := cce-network-operator cce-network-operator-vpc-eni cce-network-agent exclusive-rdma-agent
 DOCKER_IMAGES := cce-network-operator-vpc-eni cce-network-agent
 # target for amd64 architecture docker image
 docker: GOARCH := amd64

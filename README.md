@@ -26,7 +26,7 @@ Please go through CNI Spec to get some basic understanding of CNI driver before 
 
 ## Requirements
 * Recommended linux kervel version >= 5.10
-* Gloang version >= 1.21
+* Golang version >= 1.21
 * k8s version >= 1.20
 
 ## Issues

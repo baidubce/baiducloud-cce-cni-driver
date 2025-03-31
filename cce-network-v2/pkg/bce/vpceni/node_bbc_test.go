@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	k8sutilnet "k8s.io/utils/net"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
@@ -22,6 +23,7 @@ import (
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+	"github.com/baidubce/bce-sdk-go/services/vpc"
 )
 
 func Test_bbcNode_prepareIPAllocation(t *testing.T) {
@@ -32,16 +34,11 @@ func Test_bbcNode_prepareIPAllocation(t *testing.T) {
 		}
 		operatorOption.Config.EnableNodeAnnotationSync = false
 
-		eni, err := k8s.CCEClient().CceV2().ENIs().Get(context.TODO(), "eni-bbcprimary", metav1.GetOptions{})
+		_, err = k8s.CCEClient().CceV2().ENIs().Get(context.TODO(), "eni-bbcprimary", metav1.GetOptions{})
 		if !assert.NoError(t, err) {
 			return
 		}
 
-		ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(), func(ctx context.Context) []metav1.Object {
-			return []metav1.Object{
-				eni,
-			}
-		})
 		allocation, err := node.PrepareIPAllocation(log)
 		if assert.NoError(t, err) {
 			assert.Equalf(t, allocation.AvailableInterfaces, 0, "should have available interfaces")
@@ -89,6 +86,10 @@ func Test_bbcNode_prepareIPAllocation(t *testing.T) {
 		exceptSubnetIDs := []string{"sbn-vxda1", "sbn-vxda2"}
 		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, exceptSubnetIDs)
 
+		err = node.refreshAvailableSubnets()
+		if !assert.NoError(t, err) {
+			return
+		}
 		allocation, err := node.PrepareIPAllocation(log)
 		if assert.NoError(t, err) {
 			assert.Equalf(t, allocation.AvailableInterfaces, 0, "should have available interfaces")
@@ -254,8 +255,8 @@ func Test_bbcNode_allocateIPs(t *testing.T) {
 	})
 }
 
-// 准备 BCC 测试上下文环境
-// 包含初始化 mock 对象，保存到 clientgo缓存中，并返回 BCCNode 实例
+// Prepare BCC test context environment
+// Includes initializing mock objects, saving them to clientgo cache, and returning a BCCNode instance
 func bbcTestContext(t *testing.T) (*bceNetworkResourceSet, error) {
 	ccemock.InitMockEnv()
 	mockCtl := gomock.NewController(t)
@@ -280,8 +281,43 @@ func bbcTestContext(t *testing.T) (*bceNetworkResourceSet, error) {
 	}
 	ccemock.EnsureSubnetIDsToInformer(t, k8sObj.Spec.ENI.VpcID, k8sObj.Spec.ENI.SubnetIDs)
 
+	vpcSbn := []vpc.Subnet{
+		{
+			SubnetId:    sbn.Name,
+			Cidr:        "10.128.34.0/24",
+			AvailableIp: 233,
+		},
+	}
 	im.GetMockCloudInterface().EXPECT().
-		GetBBCInstanceENI(gomock.Any(), gomock.Eq(k8sObj.InstanceID())).Return(newMockBBCEniWithMultipleIPs(k8sObj, sbn), nil).AnyTimes()
+		ListSubnets(gomock.Any(), gomock.Any()).Return(vpcSbn, nil).AnyTimes()
+
+	eni := &ccev2.ENI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "eni-bbcprimary",
+			Labels: map[string]string{
+				k8s.LabelInstanceID: k8sObj.Spec.InstanceID,
+				k8s.LabelNodeName:   k8sNode.GetName(),
+			},
+		},
+		Spec: ccev2.ENISpec{
+			ENI: models.ENI{
+				SubnetID: "sbn-bbcprimary",
+			},
+		},
+	}
+	bbcEniDetails := newMockBBCEniWithMultipleIPs(k8sObj, sbn)
+	for _, ip := range bbcEniDetails.PrivateIpSet {
+		eni.Spec.PrivateIPSet = append(eni.Spec.PrivateIPSet, &models.PrivateIP{
+			PrivateIPAddress: ip.PrivateIpAddress,
+			Primary:          ip.Primary,
+			SubnetID:         ip.SubnetId,
+		})
+	}
+	enis := []*ccev2.ENI{eni}
+	ccemock.EnsureEnisToInformer(t, enis)
+
+	im.GetMockCloudInterface().EXPECT().
+		GetBBCInstanceENI(gomock.Any(), gomock.Eq(k8sObj.InstanceID())).Return(bbcEniDetails, nil).AnyTimes()
 
 	bcesync.InitBSM()
 	node := NewBCENetworkResourceSet(nil, k8sObj, im)

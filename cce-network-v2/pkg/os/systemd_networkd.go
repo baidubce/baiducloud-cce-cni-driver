@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	usrPath                   = "/usr-host"
-	defaultLinkPath           = usrPath + "/lib/systemd/network/98-default.link"
-	macAddressPolicyKey       = "MACAddressPolicy"
-	macAddressPolicyValueNone = "none"
+	usrPath                               = "/usr-host"
+	defaultLinkPath                       = usrPath + "/lib/systemd/network/98-default.link"
+	macAddressPolicyKey                   = "MACAddressPolicy"
+	macAddressPolicyValueNone             = "none"
+	lowestVersionToChangeMACAddressPolicy = "22.04"
 
 	defaultLinkTemplate = `
 [Match]

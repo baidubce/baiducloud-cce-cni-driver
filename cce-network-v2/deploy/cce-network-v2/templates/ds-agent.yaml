@@ -54,6 +54,10 @@ spec:
           imagePullPolicy: Always
           name: agent
           securityContext:
+            capabilities:
+              add:
+              - NET_ADMIN
+              - SYS_ADMIN
             privileged: true
           volumeMounts:
             - mountPath: /dev/log
@@ -61,6 +65,7 @@ spec:
             - mountPath: /var/run/cce-network-v2
               name: socket-dir
             - mountPath: /var/run/netns
+              mountPropagation: Bidirectional
               name: netns-dir
             - mountPath: /opt/cni/bin
               name: cni-bin-dir

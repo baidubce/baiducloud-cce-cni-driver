@@ -68,42 +68,42 @@ func TestGetEnvName(t *testing.T) {
 			args: args{
 				option: "foo",
 			},
-			want: "CILIUM_FOO",
+			want: "CCE_FOO",
 		},
 		{
 			name: "Capital option",
 			args: args{
 				option: "FOO",
 			},
-			want: "CILIUM_FOO",
+			want: "CCE_FOO",
 		},
 		{
 			name: "with numbers",
 			args: args{
 				option: "2222",
 			},
-			want: "CILIUM_2222",
+			want: "CCE_2222",
 		},
 		{
 			name: "mix numbers small letters",
 			args: args{
 				option: "22ada22",
 			},
-			want: "CILIUM_22ADA22",
+			want: "CCE_22ADA22",
 		},
 		{
 			name: "mix numbers small letters and dashes",
 			args: args{
 				option: "22ada2------2",
 			},
-			want: "CILIUM_22ADA2______2",
+			want: "CCE_22ADA2______2",
 		},
 		{
 			name: "normal option",
 			args: args{
 				option: "conntrack-garbage-collector-interval",
 			},
-			want: "CILIUM_CONNTRACK_GARBAGE_COLLECTOR_INTERVAL",
+			want: "CCE_CONNTRACK_GARBAGE_COLLECTOR_INTERVAL",
 		},
 	}
 	for _, tt := range tests {

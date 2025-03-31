@@ -311,6 +311,9 @@ func (e *EndpointAllocator) allocateIP(ctx context.Context, logEntry *logrus.Ent
 		newEP.Labels[k8s.LabelENIType] = "rdma"
 	}
 
+	// add finalizer for delayed delete endpoint
+	k8s.FinalizerAddRemoteIP(newEP)
+
 	// allocate the new dynamic endpoint
 	if psts == nil && !isFixedIPPod {
 		if oldEP != nil {
@@ -368,14 +371,18 @@ func (e *EndpointAllocator) Restore() {
 		}
 		logEntry.Infof("start to restore rdma endpoint")
 		for _, ep := range eps {
-			// skip the non rdma endpoint which name is like "podname-rdma-primarymacaddressindex"
+			// skip the non rdma cceendpoint which name is like "podname-rdma-primarymacaddressindex"
 			if !bceutils.IsCCERdmaEndpointName(ep.Name) {
 				continue
 			}
-			// skip the rdma endpoint which primary mac address is not equal to current NetworkResourceSet
+			// skip the rdma cceendpoint which primary mac address is not equal to current NetworkResourceSet
 			if !bceutils.IsThisMasterMacCCERdmaEndpointName(ep.Name, e.rdmaAttr.primaryMacAddress) {
-				// skip the rdma endpoint which primary mac address is not equal to current node
-				// because the rdma endpoint is created by other node
+				// skip the rdma cceendpoint which primary mac address is not equal to current node
+				// because the rdma cceendpoint is created by other node
+				continue
+			}
+			// skip the cceendpoint which is deleting or deleted
+			if ep.GetDeletionTimestamp() != nil || !ep.GetDeletionTimestamp().IsZero() {
 				continue
 			}
 			epLog := logEntry.WithFields(logrus.Fields{
@@ -448,6 +455,10 @@ func (e *EndpointAllocator) Restore() {
 			"name":      ep.Name,
 		})
 		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
+			continue
+		}
+		// skip the cceendpoint which is deleting or deleted
+		if ep.GetDeletionTimestamp() != nil || !ep.GetDeletionTimestamp().IsZero() {
 			continue
 		}
 		ips, err := e.extractEndpointIPs(ep)
@@ -578,7 +589,6 @@ func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *cc
 
 		}
 	}
-	k8s.FinalizerAddRemoteIP(newEP)
 
 	// fixed ip endpoint is not use psts
 	if psts == nil {
@@ -776,6 +786,16 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 
 deleteObj:
 	// delete endpoint
+	// remove finalizer first
+	ep.Finalizers = []string{}
+	_, err = e.cceEndpointClient.CCEEndpoints(ep.Namespace).Update(context.TODO(), ep, metav1.UpdateOptions{})
+	// ignore not found error
+	if kerrors.IsNotFound(err) {
+		err = nil
+	}
+	if err != nil {
+		logEntry.WithField("err", err).WithField("cep", ep.Name).Warning("failed to remove finalizer of cep before delete")
+	}
 	logEntry.WithField("step", "delete").Info("maker endpoint deleted")
 	return e.cceEndpointClient.CCEEndpoints(ep.Namespace).Delete(context.TODO(), ep.Name, metav1.DeleteOptions{})
 }

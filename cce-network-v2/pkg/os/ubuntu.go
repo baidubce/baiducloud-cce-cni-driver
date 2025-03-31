@@ -3,6 +3,8 @@ package os
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"gopkg.in/fsnotify.v1"
 )
@@ -33,8 +35,8 @@ func (*ubuntuOS) DisableDHCPv6(udevName, cceName string) error {
 // and start to monitor the default link file to detect whether it is removed
 // or its option "MACAddressPolicy" is not 'none'
 func (o *ubuntuOS) DisableAndMonitorMacPersistant() error {
-	if o.VersionID != "22.04" {
-		log.Info("not ubuntu 22.04, skip disable mac persistent")
+	if !o.isGreaterThanOrEqual(lowestVersionToChangeMACAddressPolicy) {
+		log.Info("not ubuntu 22.04 or higher version, skip disable mac persistent")
 		return nil
 	}
 	go o.startWatchingDefaultLinkFile()
@@ -77,7 +79,7 @@ func (o *ubuntuOS) overrideSystemdDefaultLinkConfig() error {
 // On a remove operation, it removes the watcher for the deleted file, recreates the file if it does not exist,
 // restarts the systemd-udevd, adds the new file to the watcher, and then checks and deals with the MAC address policy again.
 func (o *ubuntuOS) startWatchingDefaultLinkFile() {
-	log.Info("ubuntu 22.04 detected, start to watch default link file")
+	log.Info("ubuntu 22.04 or higher detected, start to watch default link file")
 
 	// ensure the file was created correctly
 	o.checkAndDealMACAddressPolicy(defaultLinkPath, defaultLinkTemplate)
@@ -153,4 +155,20 @@ func (o *ubuntuOS) checkAndDealMACAddressPolicy(filePath, template string) {
 		log.Fatalf("update default link file %s failed: %v", filePath, err)
 	}
 	log.Infof("update default link file success，now option %s is set correctly to %s", macAddressPolicyKey, macAddressPolicyValueNone)
+}
+
+// check if system version in os-release is higher than ubuntu 22.04
+func (o *OSRelease) isGreaterThanOrEqual(Standard string) bool {
+	versionNums := strings.Split(o.VersionID, ".")
+	num1, _ := strconv.Atoi(versionNums[0])
+	num2, _ := strconv.Atoi(versionNums[1])
+
+	StandardNums := strings.Split(Standard, ".")
+	sNum1, _ := strconv.Atoi(StandardNums[0])
+	sNum2, _ := strconv.Atoi(StandardNums[1])
+
+	if num1 > sNum1 || (num1 == sNum1 && num2 >= sNum2) {
+		return true
+	}
+	return false
 }

@@ -26,15 +26,20 @@ import (
 	"time"
 
 	. "gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/checker"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test(t *testing.T) {
@@ -203,11 +208,11 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 		name        string
 		fields      *fields
 		args        args
-		want        bool
+		want        error
 	}{
 		{
 			name: "test-1 - should allocate a v4 addr",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				atomic.StoreInt32(&reSyncCalls, 0)
 				return &fields{
@@ -266,7 +271,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 		},
 		{
 			name: "test-2 - failed to allocate a v4 addr",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				atomic.StoreInt32(&reSyncCalls, 0)
 				return &fields{
@@ -321,7 +326,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 		},
 		{
 			name: "test-3 - node is already allocated with the requested pod CIDRs",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				return &fields{
 					canAllocateNodes: true,
@@ -359,7 +364,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 		},
 		{
 			name: "test-4 - node is requesting pod CIDRs, it's already locally allocated but the spec is not updated",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				atomic.StoreInt32(&reSyncCalls, 0)
 				return &fields{
@@ -412,7 +417,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 		},
 		{
 			name: "test-5 - node requires a new CIDR but the first allocator is full",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				atomic.StoreInt32(&reSyncCalls, 0)
 				return &fields{
@@ -606,6 +611,26 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Delete(c *C) {
 	})
 }
 
+// podCidrTestContext creates a context for pod CIDR tests.
+func podCidrTestContext(t *testing.T) (ipam.NetResourceSetGetterUpdater, error) {
+	ccemock.NewMockClient()
+	nrsGetterUpdater := watchers.NetResourceSetClient
+
+	k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "node1")
+	err := ccemock.EnsureNrsToInformer(t, []*v2.NetResourceSet{k8sObj})
+	if !assert.NoError(t, err, "ensure nrs to informer failed") {
+		return nil, err
+	}
+
+	k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+	err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+	if !assert.NoError(t, err, "ensure node to informer failed") {
+		return nil, err
+	}
+
+	return nrsGetterUpdater, nil
+}
+
 func (s *PodCIDRSuite) TestNodesPodCIDRManager_Resync(c *C) {
 	var reSyncCalls int32
 	type fields struct {
@@ -636,8 +661,14 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Resync(c *C) {
 
 	for _, tt := range tests {
 		tt.fields = tt.testSetup()
+		nodeGetter, err := podCidrTestContext(&testing.T{})
+		if err != nil {
+			c.Assert(err, IsNil)
+		}
 		n := &NodesPodCIDRManager{
-			k8sReSync: tt.fields.k8sReSync,
+			k8sReSync:            tt.fields.k8sReSync,
+			nodeGetter:           nodeGetter,
+			netResourceSetsToK8s: map[string]*netResourceSetK8sOp{},
 		}
 		n.Resync(context.Background(), time.Time{})
 
@@ -666,11 +697,11 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 		name        string
 		fields      *fields
 		args        args
-		want        bool
+		want        error
 	}{
 		{
 			name: "test-1 - should allocate a v4 addr",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				return &fields{
 					canAllocateNodes: true,
@@ -727,7 +758,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 		},
 		{
 			name: "test-2 - failed to allocate a v4 addr",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				return &fields{
 					canAllocateNodes: true,
@@ -780,7 +811,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 		},
 		{
 			name: "test-3 - node is already allocated with the requested pod CIDRs",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				return &fields{
 					canAllocateNodes: true,
@@ -826,7 +857,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 		},
 		{
 			name: "test-4 - node is requesting pod CIDRs, it's already allocated locally but the spec is not updated",
-			want: true,
+			want: nil,
 			testSetup: func() *fields {
 				return &fields{
 					canAllocateNodes: true,

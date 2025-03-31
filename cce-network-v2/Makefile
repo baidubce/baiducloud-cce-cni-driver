@@ -211,27 +211,36 @@ install:
 GIT_VERSION: force
 	@if [ "$(GIT_VERSION)" != "`cat 2>/dev/null GIT_VERSION`" ] ; then echo "$(GIT_VERSION)" >GIT_VERSION; fi
 
-# DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni cce-network-operator
-DOCKER_IMAGES := cce-network-agent cce-network-operator-vpc-eni
-docker: GOARCH = amd64
+# DOCKER_IMAGES := cce-network-operator cce-network-operator-vpc-eni cce-network-agent
+DOCKER_IMAGES := cce-network-operator-vpc-eni cce-network-agent
+# target for amd64 architecture docker image
+docker: GOARCH := amd64
+docker: export GOARCH=amd64
 docker: $(DOCKER_IMAGES)
-docker-arm: GOARCH = arm64
+# target for arm64 architecture docker image
+docker-arm: GOARCH := arm64
+docker-arm: export GOARCH=arm64
 docker-arm: image-suffix = -arm64
 docker-arm: $(DOCKER_IMAGES)
 
 # use docker build base on profile variable
+$(DOCKER_IMAGES): build
 # build docker image for amd64 and arm64 when GOARCH is amd64 and arm64
-ifeq ($(GOARCH), amd64)
-# for amd64
-$(DOCKER_IMAGES): build
-	docker build -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION) -f deploy/dockerfile/$(@).Dockerfile .
-	docker push registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)
-else
-# for amd64
-$(DOCKER_IMAGES): build
-	echo "GOARCH=$(GOARCH)"
-	docker buildx build --platform linux/$(GOARCH)  -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)$(image-suffix) -f deploy/dockerfile/$(@).Dockerfile$(image-suffix) . $(PUSH_IMAGE_FLAGS)
-endif
+# docker build -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION) -f deploy/dockerfile/$(@).Dockerfile . $(PUSH_IMAGE_FLAGS)
+# docker buildx build --platform linux/$(GOARCH)  -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)$(image-suffix) -f deploy/dockerfile/$(@).Dockerfile$(image-suffix) . # $(PUSH_IMAGE_FLAGS)
+	@echo "Architecture: $(GOARCH)"
+# 使用 shell 条件判断 Architecture
+	@if [ "$(GOARCH)" = "amd64" ]; then \
+		echo "Building for amd64..."; \
+		docker build -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION) -f deploy/dockerfile/$(@).Dockerfile .; \
+		docker push registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION); \
+    elif [ "$(GOARCH)" = "arm64" ]; then \
+		echo "Building for arm64..."; \
+		docker buildx build --platform linux/$(GOARCH)  -t registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)$(image-suffix) -f deploy/dockerfile/$(@).Dockerfile$(image-suffix) .; \
+		docker push registry.baidubce.com/cce-plugin-$(PROFILE)/$(@):$(VERSION)$(image-suffix); \
+    else \
+		echo "*** Unsupported GOARCH: $(GOARCH) ***"; \
+	fi
 
 CONTROLLER_GEN = $(PWD)/output/bin/controller-gen
 manifests: ## Generate K8s manifests e.g. CRD, RBAC etc.
@@ -545,12 +554,12 @@ rm -rf $$TMP_DIR ;\
 }
 endef
 
-# 生成docker 构建时的相关变量
+# 生成 docker 构建时的相关变量
 define docker-build-env
 ifeq ($(GOARCH), arm64)
 	imageTag := $(VERSION)-$(GOARCH)
-	dockerFile := deploy/dockerfile/$(@)-$(GOARCH).Dockerfile
-else 
+	dockerFile := deploy/dockerfile/$(@).Dockerfile-$(GOARCH)
+else  ifeq ($(GOARCH), amd64)
 	imageTag := $(VERSION)	
 	dockerFile := deploy/dockerfile/$(@).Dockerfile
 endif

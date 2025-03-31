@@ -6,12 +6,22 @@ import (
 	"strings"
 	"time"
 
-	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/sirupsen/logrus"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
+
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netlinkwrapper"
+	nswrapper "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nswrapper"
 )
+
+// init netlinkImpl from netlinkwrapper.
+var netlinkImpl = netlinkwrapper.NewNetLink()
+
+// init nsImpl from nswrapper.
+var nsImpl = nswrapper.NewNS()
 
 type agentGCer struct {
 	ea       *EndpointAllocator
@@ -65,7 +75,7 @@ func (gcer *agentGCer) dynamicEndpointsGC() {
 				gcer.ea.tryDeleteEndpointAfterPodDeleted(ep, true, gcer.logEntry)
 				delete(gcer.expiredCepMap, key)
 			}
-			if !ok {
+			if !ok && isThisCEPReadyForDelete(gcer.logEntry, ep) {
 				gcer.expiredCepMap[key] = now
 			}
 		}
@@ -100,6 +110,11 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 			return
 		}
 		for addr, owner := range alloc {
+			var (
+				cep *ccev2.CCEEndpoint
+				err error
+			)
+
 			scopedLog := gcer.logEntry.WithFields(logrus.Fields{
 				"ip":    addr,
 				"owner": owner,
@@ -125,16 +140,15 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 			}
 
 			if gcer.ea.isRDMAMode() {
-				// rdma mode skip gc ips if pod is exsit
-				// skip if cep do not have containers ip
-				_, err := gcer.ea.podClient.Get(namespace, name)
+				// rdma mode skip gc ips if cep is exsit
+				cep, err = gcer.ea.cceEndpointClient.Get(namespace, name)
 				if !kerrors.IsNotFound(err) {
 					delete(gcer.expiredIPMap, addr)
 					continue
 				}
 			} else {
 				// ethernet skip if cep do not have containers ip
-				cep, err := gcer.ea.cceEndpointClient.Get(namespace, name)
+				cep, err = gcer.ea.cceEndpointClient.Get(namespace, name)
 				if err == nil && cep != nil {
 					containersIPs := false
 					if cep.Status.Networking != nil && len(cep.Status.Networking.Addressing) != 0 {
@@ -156,7 +170,7 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 				}
 			}
 
-			if !ok {
+			if !ok && (cep == nil || isThisCEPReadyForDelete(scopedLog, cep)) {
 				gcer.expiredIPMap[addr] = &ipOwnerTime{
 					owner:      owner,
 					time:       now,
@@ -176,7 +190,7 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 			continue
 		}
 
-		// ip may bot used
+		// ip may be used
 		if onwerTime.lastVisted != now {
 			delete(gcer.expiredIPMap, addr)
 			continue

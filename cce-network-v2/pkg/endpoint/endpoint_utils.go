@@ -17,20 +17,28 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
+	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
+	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netlinkwrapper"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
-	corev1 "k8s.io/api/core/v1"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
+	pluginManager "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/plugins/pluginmanager"
 )
 
+// GetEndpointFromCache
 // GetEndpointCrossCache try get endpoint from cache
 // if endpoint is missing the try get from apiserver
 func GetEndpointCrossCache(ctx context.Context, cceEndpointClient *watchers.CCEEndpointClient, namespace string, name string) (*ccev2.CCEEndpoint, error) {
@@ -170,4 +178,102 @@ func GetPodNameFromCEP(cep *ccev2.CCEEndpoint) (namesapce, name string) {
 		return cep.Namespace, cep.Spec.ExternalIdentifiers.K8sPodName
 	}
 	return cep.Namespace, cep.Name
+}
+
+func getIpFromLink(netlink netlinkwrapper.NetLink, link netlink.Link, family int, ip string) (bool, error) {
+	ips, err := netlink.AddrList(link, family)
+	if err != nil {
+		return false, err
+	}
+	for _, ipNet := range ips {
+		if ipNet.IP.String() == ip {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isThisCEPReadyForDelete(logEntry *logrus.Entry, ep *ccev2.CCEEndpoint) bool {
+	isReadyForDelete := true
+
+	defer func() {
+		logEntry.WithField("isThisCEPReadyForDelete", isReadyForDelete).
+			WithField("namespace", ep.Namespace).
+			WithField("CCEEndpoint", ep.Name).
+			Infof("The state of ReadyForDelete is %v", isReadyForDelete)
+	}()
+
+	if ep.Status.Networking != nil && ep.Status.ExternalIdentifiers != nil {
+		// 0. init netlinkImpl and nsImpl from netlinkwrapper and nswrapper
+		netlinkImpl := netlinkImpl
+		nsImpl := nsImpl
+
+		// 1. check netns exists
+		netnsPath := ep.Status.ExternalIdentifiers.Netns
+		if netnsPath == "" {
+			isReadyForDelete = true
+			return isReadyForDelete
+		}
+		// The ep.Status.ExternalIdentifiers is netns,
+		// it is a path like "/var/run/netns/cni-bad2142b-a133-ec2e-f1b7-6b00ce41f023"
+		if !strings.HasPrefix(netnsPath, "/var/run/netns") {
+			isReadyForDelete = true
+			return isReadyForDelete
+		}
+
+		// 2. check ips exists in netns
+		for _, address := range ep.Status.Networking.Addressing {
+			var family int
+			eniId := address.Interface
+			ip := address.IP
+			familyStr := string(address.Family)
+			if familyStr == "4" {
+				family = netlink.FAMILY_V4
+			} else if familyStr == "6" {
+				family = netlink.FAMILY_V6
+			} else {
+				err := fmt.Errorf("unknown family: %s", familyStr)
+				logEntry.WithField("isThisCEPReadyForDelete(CurrentValue)", isReadyForDelete).
+					WithField("CCEEndpoint", ep.Name).
+					WithField("ENIID", eniId).
+					WithField("Family", familyStr).
+					WithField("IP", ip).
+					WithField("Link", pluginManager.ContainerInterfaceName).
+					WithError(err).
+					Warning("get ip from netns error")
+				continue
+			}
+			if eniId == "" || ip == "" {
+				continue
+			}
+			// check ip exists in netns
+			err := nsImpl.WithNetNSPath(netnsPath, func(netns ns.NetNS) error {
+				link, err := netlinkImpl.LinkByName(pluginManager.ContainerInterfaceName)
+				if err != nil {
+					return err
+				}
+				IsExist, err := getIpFromLink(netlinkImpl, link, family, ip)
+				if err == nil && IsExist {
+					isReadyForDelete = false
+				}
+				return err
+			})
+			if err != nil {
+				logEntry.WithField("isThisCEPReadyForDelete(CurrentValue)", isReadyForDelete).
+					WithField("CCEEndpoint", ep.Name).
+					WithField("ENIID", eniId).
+					WithField("Family", familyStr).
+					WithField("IP", ip).
+					WithField("Link", pluginManager.ContainerInterfaceName).
+					WithError(err).
+					Warning("get ip from netns error")
+			}
+			if !isReadyForDelete {
+				break
+			}
+		}
+		return isReadyForDelete
+	} else {
+		return true
+	}
 }

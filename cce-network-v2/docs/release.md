@@ -8,6 +8,11 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
+#### 2.12.18 [暂未发布]
+1. [Bug] 修复 cce-network-v2 目录下的 Makefile，解决 make docker-arm 无法编译出 arm64 镜像的问题
+2. [Bug] 修改 CCEEndpoint GC 清理逻辑，由以 Pod 为中心的垃圾回收机制修改为以 IP 为中心的垃圾回收机制，解决因容器残留导致误清理 CCEEndpoint 对象，导致未释放 IP 被错误重用的问题
+3. [Optimize] 支持 Ubuntu 操作系统的 22.04 及以上所有版本的 MacAddressPolicy 参数修改为 None 并对其配置进行监控，以解决 Veth Pair 的 MacAddress 偶发被修改而导致的 Pod 网络不通的问题
+
 #### 2.12.17 [20250317]
 1. [Optimize] NRS Manager Resync 同步逻辑由串行执行修改为并发执行
 2. [Optimize] 弹性网卡和 NRS 状态逻辑由周期同步改为 ENI 成功创建后立即触发 NRS Manager Resync

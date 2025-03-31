@@ -29,6 +29,11 @@ const (
 
 	// 0.4.0 is the version of CNI spec
 	defaultCNIVersion = "0.4.0"
+
+	// default container interface name
+	DefalutContainerInterfaceName = "eth0"
+	// configuration of container interface name
+	ContainerInterfaceName = "eth0"
 )
 
 var (
@@ -234,6 +239,9 @@ func newPtpPlugin() CniPlugin {
 		"mtu":        option.Config.MTU,
 		"retryTimes": option.Config.PluginIpRequestRetryTimes,
 	})
+	if ContainerInterfaceName != DefalutContainerInterfaceName {
+		plugin["containerInterfaceName"] = ContainerInterfaceName
+	}
 	return plugin
 }
 

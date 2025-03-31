@@ -26,7 +26,6 @@ import (
 	"gopkg.in/check.v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/checker"
-	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 )
 
 func Test(t *testing.T) {
@@ -91,6 +90,7 @@ func (t *CNITypesSuite) TestReadCNIConfClusterPoolV2(c *check.C) {
 {
   "cniVersion":"0.3.1",
   "name":"cce",
+  "type":"cce-cni",
   "plugins": [
     {
       "cniVersion":"0.3.1",
@@ -106,13 +106,12 @@ func (t *CNITypesSuite) TestReadCNIConfClusterPoolV2(c *check.C) {
 	netConf1 := NetConf{
 		NetConf: cnitypes.NetConf{
 			CNIVersion: "0.3.1",
+			Name:       "cce",
 			Type:       "cce-cni",
 		},
 		IPAM: IPAM{
-			IPAMSpec: ipamTypes.IPAMSpec{
-				PodCIDRAllocationThreshold: 10,
-				PodCIDRReleaseThreshold:    20,
-			},
+			// we remove the configuration of plugins field from v2.10.0,
+			// instead of plugins field, we use the configmap of agent directly
 		},
 	}
 	testConfRead(c, confFile1, &netConf1)
@@ -123,6 +122,7 @@ func (t *CNITypesSuite) TestReadCNIConfIPAMType(c *check.C) {
 {
   "cniVersion":"0.3.1",
   "name":"cce",
+  "type":"cce-cni",
   "plugins": [
     {
       "cniVersion":"0.3.1",
@@ -137,12 +137,12 @@ func (t *CNITypesSuite) TestReadCNIConfIPAMType(c *check.C) {
 	netConf := NetConf{
 		NetConf: cnitypes.NetConf{
 			CNIVersion: "0.3.1",
+			Name:       "cce",
 			Type:       "cce-cni",
 		},
 		IPAM: IPAM{
-			IPAM: cnitypes.IPAM{
-				Type: "delegated-ipam",
-			},
+			// we remove the configuration of plugins field from v2.10.0,
+			// instead of plugins field, we use the configmap of agent directly
 		},
 	}
 	testConfRead(c, confFile, &netConf)

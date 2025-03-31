@@ -66,6 +66,7 @@ type EndpointManager struct {
 	k8sAPI        CCEEndpointGetterUpdater
 	pstsLister    ccelister.PodSubnetTopologySpreadLister
 	sbnLister     ccelisterv1.SubnetLister
+	nrsLister     ccelister.NetResourceSetLister
 	eventRecorder record.EventRecorder
 }
 
@@ -79,6 +80,7 @@ func NewEndpointManager(getterUpdater CCEEndpointGetterUpdater, reuseIPImplement
 		k8sAPI:        getterUpdater,
 		pstsLister:    k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Lister(),
 		sbnLister:     k8s.CCEClient().Informers.Cce().V1().Subnets().Lister(),
+		nrsLister:     k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister(),
 		eventRecorder: k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: operatorName}),
 	}
 
@@ -306,7 +308,7 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 		action    *DirectIPAction
 		start     = time.Now()
 	)
-	log.Debug("1. try to delete delegate cep")
+	log.Debug("try to delete delegate cep")
 
 	// not manager by endpoint manager
 	cep, err := manager.k8sAPI.Lister().CCEEndpoints(namespace).Get(name)
@@ -328,8 +330,18 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 	}()
 
 	if !IsFixedIPEndpoint(newCEP) && !IsPSTSEndpoint(newCEP) {
-		return nil
+		// if the node of cep is not exist, we should delete this cep immediately,
+		// else if the node of cep is exist, we should wait for the agent to gc this cep
+		if newCEP != nil && newCEP.Spec.Network.IPAllocation != nil {
+			_, err = manager.nrsLister.Get(newCEP.Spec.Network.IPAllocation.NodeName)
+			if errors.IsNotFound(err) {
+				goto removeFinalizer
+			}
+			return nil
+		}
+		goto removeFinalizer
 	}
+
 	log.Debug("received to delete delegate cep")
 
 	if newCEP.Status.Networking == nil || len(newCEP.Status.Networking.Addressing) == 0 {

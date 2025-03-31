@@ -125,18 +125,18 @@ func CreateNameForENI(clusterID, instanceID, nodeName string) string {
 	return fmt.Sprintf("%s/%s", name, suffix[:6])
 }
 
-func EnsureEnisToInformer(t *testing.T, nrss []*ccev2.ENI) error {
+func EnsureEnisToInformer(t *testing.T, enis []*ccev2.ENI) error {
 	createFunc := func(ctx context.Context) []metav1.Object {
 		var toWaitObj []metav1.Object
 
 		lister := k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
-		for _, nrs := range nrss {
-			_, err := lister.Get(nrs.Name)
+		for _, eni := range enis {
+			_, err := lister.Get(eni.Name)
 			if err == nil {
 				continue
 			}
 
-			result, err := k8s.CCEClient().CceV2().ENIs().Create(ctx, nrs, metav1.CreateOptions{})
+			result, err := k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
 			if err == nil {
 				toWaitObj = append(toWaitObj, result)
 			}

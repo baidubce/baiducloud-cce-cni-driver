@@ -75,7 +75,7 @@ func TestIsErrorBBCENIPrivateIPNotFound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsErrorBBCENIPrivateIPNotFound(tt.args.err); got != tt.want {
+			if got := IsErrorReasonNoSuchObject(tt.args.err); got != tt.want {
 				t.Errorf("IsErrorBBCENIPrivateIPNotFound() = %v, want %v", got, tt.want)
 			}
 		})

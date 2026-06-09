@@ -18,6 +18,7 @@ package ip
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math/big"
 	"net"
 	"sort"
@@ -26,6 +27,10 @@ import (
 const (
 	ipv4BitLen = 8 * net.IPv4len
 	ipv6BitLen = 8 * net.IPv6len
+
+	// IPv6MinPrefixForIPReserve is the minimum prefix length for IPv6 CIDR in VPC IPReserve.
+	// VPC IPReserve only supports IPv6 CIDR with prefix >= /96 (i.e., /96, /112, /128 etc.)
+	IPv6MinPrefixForIPReserve = 96
 )
 
 // CountIPsInCIDR takes a RFC4632/RFC4291-formatted IPv4/IPv6 CIDR and
@@ -209,8 +214,9 @@ func getNetworkPrefix(ipNet *net.IPNet) *net.IP {
 		}
 	} else {
 		mask = make(net.IP, net.IPv4len)
+		ip4 := ipNet.IP.To4()
 		for i := 0; i < net.IPv4len; i++ {
-			mask[net.IPv4len-i-1] = ipNet.IP[net.IPv6len-i-1] & ^ipNet.Mask[i]
+			mask[net.IPv4len-i-1] = ip4[net.IPv4len-i-1] & ^ipNet.Mask[i]
 		}
 	}
 
@@ -345,6 +351,11 @@ func getPreviousIP(ip net.IP) net.IP {
 	if ip.Equal(net.IP(defaultIPv4)) || ip.Equal(net.IP(defaultIPv6)) {
 		return ip
 	}
+	if ip4 := ip.To4(); ip4 != nil && len(ip) == net.IPv4len {
+		if ip4[0] == 0 && ip4[1] == 0 && ip4[2] == 0 && ip4[3] == 0 {
+			return ip
+		}
+	}
 
 	previousIP := make(net.IP, len(ip))
 	copy(previousIP, ip)
@@ -352,7 +363,11 @@ func getPreviousIP(ip net.IP) net.IP {
 	var overflow bool
 	var lowerByteBound int
 	if ip.To4() != nil {
-		lowerByteBound = net.IPv6len - net.IPv4len
+		if len(ip) == net.IPv6len {
+			lowerByteBound = net.IPv6len - net.IPv4len
+		} else {
+			lowerByteBound = 0
+		}
 	} else {
 		lowerByteBound = 0
 	}
@@ -930,4 +945,225 @@ func GetIPFromListByFamily(ipList []net.IP, v4Family bool) net.IP {
 	}
 
 	return nil
+}
+
+// IPRangeToCIDRs converts an IP range (start-end) to minimal CIDR blocks (as strings)
+// This uses a greedy algorithm to find the largest CIDR block starting from current IP
+// Example: 10.0.1.100 - 10.0.1.150 -> ["10.0.1.100/30", "10.0.1.104/29", ...]
+// For IPv6: VPC IPReserve only supports CIDR prefix <= /96, returns error if result contains larger prefix
+func IPRangeToCIDRs(start, end net.IP) ([]string, error) {
+	if start == nil || end == nil {
+		return nil, fmt.Errorf("start or end IP is nil")
+	}
+
+	// Check if both IPs are same family
+	isIPv4Start := start.To4() != nil
+	isIPv4End := end.To4() != nil
+	if isIPv4Start != isIPv4End {
+		return nil, fmt.Errorf("start and end IPs must be same family")
+	}
+
+	if isIPv4Start {
+		return ipv4RangeToCIDRs(start, end)
+	}
+	return ipv6RangeToCIDRs(start, end)
+}
+
+// ipv4RangeToCIDRs converts IPv4 range to CIDRs
+func ipv4RangeToCIDRs(start, end net.IP) ([]string, error) {
+	cidrs := []string{}
+	startInt := ipToUint32(start)
+	endInt := ipToUint32(end)
+
+	if startInt > endInt {
+		return nil, fmt.Errorf("start IP is greater than end IP")
+	}
+
+	for startInt <= endInt {
+		// Find the largest CIDR block that:
+		// 1. Starts at startInt
+		// 2. Does not exceed endInt
+		// Find the largest CIDR block: iterate from /1 (largest) to /32 (smallest),
+		// pick the first prefix that is both aligned and fits within the range.
+		maxSize := 32
+		for size := 1; size <= 32; size++ {
+			blockSize := uint32(1 << uint(32-size))
+			// Check alignment: startInt must be a multiple of blockSize
+			if startInt%blockSize != 0 {
+				continue
+			}
+			// Check bounds: block must not exceed endInt
+			if startInt+blockSize-1 > endInt {
+				continue
+			}
+			// Found the largest valid block
+			maxSize = size
+			break
+		}
+		cidr := fmt.Sprintf("%s/%d", uint32ToIP(startInt).String(), maxSize)
+		cidrs = append(cidrs, cidr)
+		startInt += uint32(1 << uint(32-maxSize))
+	}
+	return cidrs, nil
+}
+
+// ipv6RangeToCIDRs converts IPv6 range to CIDRs
+// VPC IPReserve only supports IPv6 CIDR with prefix >= /96, so we limit the
+// search to start from /96 instead of /1. This ensures all output CIDRs have
+// prefix >= /96, and large ranges are simply split into multiple /96 blocks.
+func ipv6RangeToCIDRs(start, end net.IP) ([]string, error) {
+	cidrs := []string{}
+	startBytes := start.To16()
+	endBytes := end.To16()
+	if startBytes == nil || endBytes == nil {
+		return nil, fmt.Errorf("invalid IPv6 address")
+	}
+
+	if bytesCompare(startBytes, endBytes) > 0 {
+		return nil, fmt.Errorf("start IP is greater than end IP")
+	}
+
+	current := make([]byte, 16)
+	copy(current, startBytes)
+
+	for bytesCompare(current, endBytes) <= 0 {
+		// Find the largest CIDR block starting from current.
+		// Start from IPv6MinPrefixForIPReserve (/96) to guarantee all output
+		// CIDRs satisfy VPC IPReserve constraint.
+		maxPrefixLen := 128
+		for prefixLen := IPv6MinPrefixForIPReserve; prefixLen <= 128; prefixLen++ {
+			if !isAligned(current, prefixLen) {
+				continue
+			}
+			blockEnd := getBlockEnd(current, prefixLen)
+			if bytesCompare(blockEnd, endBytes) > 0 {
+				continue
+			}
+			maxPrefixLen = prefixLen
+			break
+		}
+
+		cidr := fmt.Sprintf("%s/%d", net.IP(current).String(), maxPrefixLen)
+		cidrs = append(cidrs, cidr)
+
+		// Move to next block
+		if maxPrefixLen == 128 {
+			if !incrementIP(current) {
+				break
+			}
+		} else {
+			blockSize := 128 - maxPrefixLen
+			addToIP(current, blockSize)
+		}
+	}
+
+	return cidrs, nil
+}
+
+// Helper functions for IPv6
+
+// bytesCompare compares two byte slices, returns -1, 0, 1
+func bytesCompare(a, b []byte) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// isAligned checks if IP is aligned to the given prefix length
+func isAligned(ip []byte, prefixLen int) bool {
+	if prefixLen == 0 {
+		return true
+	}
+	bytesToCheck := (128 - prefixLen) / 8
+	bitsToCheck := (128 - prefixLen) % 8
+
+	// Check trailing bytes are zero
+	for i := 16 - bytesToCheck; i < 16; i++ {
+		if ip[i] != 0 {
+			return false
+		}
+	}
+
+	// Check trailing bits in the boundary byte
+	if bitsToCheck > 0 {
+		byteIdx := 16 - bytesToCheck - 1
+		mask := byte((1 << bitsToCheck) - 1)
+		if (ip[byteIdx] & mask) != 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+// getBlockEnd returns the last IP in a CIDR block
+func getBlockEnd(ip []byte, prefixLen int) []byte {
+	result := make([]byte, 16)
+	copy(result, ip)
+
+	// Set all bits after prefix to 1
+	bitsToSet := 128 - prefixLen
+	for i := 15; i >= 0 && bitsToSet > 0; i-- {
+		if bitsToSet >= 8 {
+			result[i] = 0xFF
+			bitsToSet -= 8
+		} else {
+			result[i] |= byte((1 << bitsToSet) - 1)
+			bitsToSet = 0
+		}
+	}
+
+	return result
+}
+
+// incrementIP increments IP by 1, returns false if overflow
+func incrementIP(ip []byte) bool {
+	for i := 15; i >= 0; i-- {
+		ip[i]++
+		if ip[i] != 0 {
+			return true
+		}
+	}
+	return false // overflow
+}
+
+// addToIP adds 2^bits to IP
+func addToIP(ip []byte, bits int) {
+	if bits <= 0 || bits > 128 {
+		return
+	}
+
+	// Add 1 to the appropriate bit position
+	byteIdx := 15 - (bits / 8)
+	bitIdx := bits % 8
+
+	carry := byte(1 << bitIdx)
+	for i := byteIdx; i >= 0; i-- {
+		sum := uint16(ip[i]) + uint16(carry)
+		ip[i] = byte(sum)
+		carry = byte(sum >> 8)
+		if carry == 0 {
+			break
+		}
+	}
+}
+
+// ipToUint32 converts IPv4 to uint32
+func ipToUint32(ip net.IP) uint32 {
+	ip = ip.To4()
+	if ip == nil {
+		return 0
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+// uint32ToIP converts uint32 to IPv4
+func uint32ToIP(n uint32) net.IP {
+	return net.IPv4(byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
 }

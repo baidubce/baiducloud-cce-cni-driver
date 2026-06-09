@@ -404,13 +404,9 @@ var (
 	eniIndexMutex sync.Mutex
 )
 
-// findAvailableENIIndex finds the first available ENI index in a thread-safe manner
-// This function prevents race conditions when multiple goroutines are trying to
-// allocate ENI indices simultaneously
-func findAvailableENIIndex() (int, error) {
-	eniIndexMutex.Lock()
-	defer eniIndexMutex.Unlock()
-
+// findAvailableENIIndexLocked finds the first available ENI index.
+// Caller must hold eniIndexMutex.
+func findAvailableENIIndexLocked() (int, error) {
 	linkList, err := netlink.LinkList()
 	if err != nil {
 		return -1, fmt.Errorf("failed to list links: %v", err)
@@ -438,6 +434,15 @@ func findAvailableENIIndex() (int, error) {
 	}
 
 	return -1, fmt.Errorf("no available ENI index found, all %d indices are in use", maxENIIndex)
+}
+
+// findAvailableENIIndex finds the first available ENI index in a thread-safe manner
+// This function prevents race conditions when multiple goroutines are trying to
+// allocate ENI indices simultaneously
+func findAvailableENIIndex() (int, error) {
+	eniIndexMutex.Lock()
+	defer eniIndexMutex.Unlock()
+	return findAvailableENIIndexLocked()
 }
 
 type eniLink struct {
@@ -501,8 +506,13 @@ func (ec *eniLink) rename(isPrimary bool) error {
 	var cceName string
 	if !strings.HasPrefix(udevName, namePrefix) {
 		if !isPrimary {
-			// find the first unused index using thread-safe function
-			availableIndex, err := findAvailableENIIndex()
+			// Keep index allocation and LinkSetName in one critical section.
+			// Otherwise two concurrent goroutines can allocate the same index
+			// before either interface is actually renamed.
+			eniIndexMutex.Lock()
+			defer eniIndexMutex.Unlock()
+
+			availableIndex, err := findAvailableENIIndexLocked()
 			if err != nil {
 				return fmt.Errorf("failed to find available ENI index: %v", err)
 			}

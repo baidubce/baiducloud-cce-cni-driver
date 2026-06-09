@@ -81,8 +81,7 @@ func NewMockNrs(name, instanceType, useMode string, subnetIDs []string) *ccev2.N
 		Status: ccev2.NetResourceStatus{
 			ENIs: make(map[string]ccev2.SimpleENIStatus),
 			IPAM: types.IPAMStatus{
-				Used:            make(types.AllocationMap),
-				CrossSubnetUsed: make(types.AllocationMap),
+				Used: make(types.AllocationMap),
 			},
 		},
 	}

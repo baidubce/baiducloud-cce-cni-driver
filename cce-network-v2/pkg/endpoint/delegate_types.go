@@ -41,6 +41,10 @@ type DirectIPAction struct {
 
 	Owner string
 
+	// ClientToken is used for idempotent IP allocation retries.
+	// +optional
+	ClientToken string
+
 	// IP4/6 addresses assigned to this Endpoint
 	// this field used to dynamic allocate ip
 	// +optional

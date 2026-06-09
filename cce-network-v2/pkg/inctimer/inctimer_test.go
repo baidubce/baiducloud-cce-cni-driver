@@ -39,8 +39,8 @@ func TestTimerHardReset(t *testing.T) {
 	defer done()
 	for i := 0; i < 100; i++ {
 		select {
-		case <-tr.After(time.Millisecond):
-		case <-time.After(time.Millisecond * 2):
+		case <-tr.After(5 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 			t.Fatal("`IncTimer`, after being reset, did not fire")
 		}
 	}

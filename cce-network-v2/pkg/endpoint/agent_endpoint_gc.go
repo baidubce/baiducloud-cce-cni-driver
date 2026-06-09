@@ -10,6 +10,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -47,6 +48,7 @@ func newAgentGcer(ea *EndpointAllocator) *agentGCer {
 func (gcer *agentGCer) gc(ctx context.Context) error {
 	gcer.dynamicEndpointsGC()
 	gcer.dynamicUsedIPsGC()
+	gcer.pstsFixedIPEndpointsGC()
 	return nil
 }
 
@@ -63,7 +65,8 @@ func (gcer *agentGCer) dynamicEndpointsGC() {
 
 	now := time.Now()
 	for _, ep := range eps {
-		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
+		// Skip PSTS endpoints (handled by pstsFixedIPEndpointsGC) and RDMA endpoints
+		if IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
 		_, podName := GetPodNameFromCEP(ep)
@@ -214,6 +217,90 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 			logger.WithError(err).Info("release ip after cep deleted")
 		} else {
 			logger.Info("release ip after cep deleted")
+		}
+	}
+}
+
+// pstsFixedIPEndpointsGC handles GC for PSTS Fixed mode endpoints with TTL
+// When TTL expires, delete the CEP (which triggers Operator to unreserve single IP if needed)
+func (gcer *agentGCer) pstsFixedIPEndpointsGC() {
+	eps, err := gcer.ea.cceEndpointClient.List()
+	if err != nil {
+		gcer.logEntry.WithError(err).Error("list endpoint error in pstsFixedIPEndpointsGC")
+		return
+	}
+
+	now := time.Now()
+	for _, ep := range eps {
+		// Only process PSTS endpoints
+		if !IsPSTSEndpoint(ep) {
+			continue
+		}
+
+		// Only process Fixed mode endpoints
+		if ep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeFixed {
+			continue
+		}
+
+		// Only process endpoints with TTL set
+		if ep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted == nil {
+			continue
+		}
+
+		// Only process endpoints in PodDeleted state
+		if ep.Status.State != string(models.EndpointStatePodDeleted) {
+			continue
+		}
+
+		scopedLog := gcer.logEntry.WithFields(logrus.Fields{
+			"namespace": ep.Namespace,
+			"name":      ep.Name,
+			"step":      "pstsFixedIPEndpointsGC",
+		})
+
+		// Find the PodDeleted timestamp from status log
+		var podDeletedTime time.Time
+		found := false
+		if ep.Status.Log != nil && len(ep.Status.Log) > 0 {
+			for i := len(ep.Status.Log) - 1; i >= 0; i-- {
+				if ep.Status.Log[i].State != models.EndpointStatePodDeleted {
+					continue
+				}
+				parsedTime, parseErr := time.Parse(time.RFC3339, ep.Status.Log[i].Timestamp)
+				if parseErr != nil {
+					scopedLog.WithError(parseErr).Error("failed to parse PodDeleted timestamp")
+					continue
+				}
+				podDeletedTime = parsedTime
+				found = true
+				break
+			}
+		}
+
+		if !found || podDeletedTime.IsZero() {
+			scopedLog.Warn("PodDeleted timestamp not found, skip GC")
+			continue
+		}
+
+		// Check if TTL has expired
+		ttlSeconds := *ep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted
+		expireTime := podDeletedTime.Add(time.Duration(ttlSeconds) * time.Second)
+
+		if now.After(expireTime) {
+			scopedLog.WithFields(logrus.Fields{
+				"podDeletedTime": podDeletedTime.Format(time.RFC3339),
+				"ttlSeconds":     ttlSeconds,
+				"expireTime":     expireTime.Format(time.RFC3339),
+			}).Info("PSTS Fixed mode CEP TTL expired, deleting CEP")
+
+			// Delete CEP - this will trigger Operator's Delete() method
+			// which will unreserve single IP if needed (for Fixed mode without range)
+			err := gcer.ea.deleteEndpointSafely(ep)
+			if err != nil {
+				scopedLog.WithError(err).Error("failed to delete expired PSTS Fixed mode CEP")
+			} else {
+				scopedLog.Info("successfully deleted expired PSTS Fixed mode CEP")
+			}
 		}
 	}
 }

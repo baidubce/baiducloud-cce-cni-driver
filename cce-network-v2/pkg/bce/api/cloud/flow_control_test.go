@@ -36,8 +36,10 @@ import (
 
 // mockClient implements Interface for testing
 type mockClient struct {
-	listSubnetsFunc                      func(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error)
-	batchAddPrivateIPWithClientTokenFunc func(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error)
+	listSubnetsFunc                                 func(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error)
+	batchAddPrivateIPWithClientTokenFunc            func(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error)
+	batchAddPrivateIpCrossSubnetFunc                func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error)
+	batchAddPrivateIpCrossSubnetWithClientTokenFunc func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error)
 }
 
 func (m *mockClient) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error) {
@@ -71,6 +73,15 @@ func (m *mockClient) ListEIPs(ctx context.Context, args eip.ListEipArgs) ([]eip.
 	return nil, nil
 }
 func (m *mockClient) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
+	if m.batchAddPrivateIpCrossSubnetFunc != nil {
+		return m.batchAddPrivateIpCrossSubnetFunc(ctx, eniID, subnetID, privateIPs, count, isIpv6)
+	}
+	return nil, nil
+}
+func (m *mockClient) BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+	if m.batchAddPrivateIpCrossSubnetWithClientTokenFunc != nil {
+		return m.batchAddPrivateIpCrossSubnetWithClientTokenFunc(ctx, eniID, subnetID, privateIPs, count, isIpv6, clientToken)
+	}
 	return nil, nil
 }
 func (m *mockClient) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
@@ -615,5 +626,174 @@ func TestFlowControlClient_BatchAddPrivateIPWithClientToken_ErrorCases(t *testin
 		// Validate error - should get the client error and defer should call req.Error(err)
 		ass.NotNil(err, "expected error from client")
 		ass.Equal(expectedErr, err, "expected mock client error")
+	})
+}
+
+func TestFlowControlClient_BatchAddPrivateIpCrossSubnetWithClientToken(t *testing.T) {
+	ass := assert.New(t)
+
+	tests := []struct {
+		name                string
+		enableRateLimit     bool
+		clientToken         string
+		expectedTokenArg    string
+		expectTokenCall     bool
+		expectedReturnedIPs []string
+	}{
+		{
+			name:                "with_client_token_uses_token_method",
+			enableRateLimit:     false,
+			clientToken:         "token-123",
+			expectedTokenArg:    "token-123",
+			expectTokenCall:     true,
+			expectedReturnedIPs: []string{"10.0.0.10"},
+		},
+		{
+			name:                "with_client_token_and_rate_limit_uses_token_method",
+			enableRateLimit:     true,
+			clientToken:         "token-789",
+			expectedTokenArg:    "token-789",
+			expectTokenCall:     true,
+			expectedReturnedIPs: []string{"10.0.0.10"},
+		},
+		{
+			name:                "without_client_token_still_uses_token_method",
+			enableRateLimit:     true,
+			clientToken:         "",
+			expectedTokenArg:    "",
+			expectTokenCall:     true,
+			expectedReturnedIPs: []string{"10.0.0.10"},
+		},
+		{
+			name:                "without_client_token_and_without_rate_limit_still_uses_token_method",
+			enableRateLimit:     false,
+			clientToken:         "",
+			expectedTokenArg:    "",
+			expectTokenCall:     true,
+			expectedReturnedIPs: []string{"10.0.0.10"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalEnableRateLimit := option.Config.EnableAPIRateLimit
+			defer func() {
+				option.Config.EnableAPIRateLimit = originalEnableRateLimit
+			}()
+			option.Config.EnableAPIRateLimit = tt.enableRateLimit
+
+			tokenCalled := false
+			mock := &mockClient{
+				batchAddPrivateIpCrossSubnetWithClientTokenFunc: func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+					tokenCalled = true
+					ass.Equal(tt.expectedTokenArg, clientToken)
+					return []string{"10.0.0.10"}, nil
+				},
+				batchAddPrivateIpCrossSubnetFunc: func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
+					return []string{"10.0.0.20"}, nil
+				},
+			}
+
+			limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+				BatchAddPrivateIpCrossSubnet: {
+					RateLimit: grate.Limit(10),
+					RateBurst: 10,
+				},
+			}, nil)
+			ass.Nil(err, "failed to create rate limiter set")
+
+			limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			})
+
+			fc := &flowControlClient{
+				client:  mock,
+				limiter: limiter,
+			}
+
+			ret, err := fc.BatchAddPrivateIpCrossSubnetWithClientToken(
+				context.Background(), "eni-test", "sbn-test", []string{"10.0.0.100"}, 1, false, tt.clientToken,
+			)
+			ass.Nil(err)
+			ass.Equal(tt.expectedReturnedIPs, ret)
+			ass.Equal(tt.expectTokenCall, tokenCalled)
+		})
+	}
+}
+
+func TestFlowControlClient_BatchAddPrivateIpCrossSubnetWithClientToken_ErrorCases(t *testing.T) {
+	ass := assert.New(t)
+
+	t.Run("limiter_wait_error", func(t *testing.T) {
+		originalEnableRateLimit := option.Config.EnableAPIRateLimit
+		defer func() {
+			option.Config.EnableAPIRateLimit = originalEnableRateLimit
+		}()
+		option.Config.EnableAPIRateLimit = true
+
+		mock := &mockClient{}
+		limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+			BatchAddPrivateIpCrossSubnet: {
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			},
+		}, nil)
+		ass.Nil(err, "failed to create rate limiter set")
+		limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+			RateLimit: grate.Limit(10),
+			RateBurst: 10,
+		})
+
+		fc := &flowControlClient{
+			client:  mock,
+			limiter: limiter,
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = fc.BatchAddPrivateIpCrossSubnetWithClientToken(
+			ctx, "eni-test", "sbn-test", []string{"10.0.0.100"}, 1, false, "token-123",
+		)
+		ass.NotNil(err)
+		ass.Contains(err.Error(), "context canceled")
+	})
+
+	t.Run("client_error_from_token_method", func(t *testing.T) {
+		originalEnableRateLimit := option.Config.EnableAPIRateLimit
+		defer func() {
+			option.Config.EnableAPIRateLimit = originalEnableRateLimit
+		}()
+		option.Config.EnableAPIRateLimit = true
+
+		expectedErr := errors.New("mock cross subnet token error")
+		mock := &mockClient{
+			batchAddPrivateIpCrossSubnetWithClientTokenFunc: func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+				return nil, expectedErr
+			},
+		}
+
+		limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+			BatchAddPrivateIpCrossSubnet: {
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			},
+		}, nil)
+		ass.Nil(err, "failed to create rate limiter set")
+		limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+			RateLimit: grate.Limit(10),
+			RateBurst: 10,
+		})
+
+		fc := &flowControlClient{
+			client:  mock,
+			limiter: limiter,
+		}
+
+		_, err = fc.BatchAddPrivateIpCrossSubnetWithClientToken(
+			context.Background(), "eni-test", "sbn-test", []string{"10.0.0.100"}, 1, false, "token-123",
+		)
+		ass.Equal(expectedErr, err)
 	})
 }

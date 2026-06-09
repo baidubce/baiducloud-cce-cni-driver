@@ -30,6 +30,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
@@ -135,6 +136,8 @@ func NewRdmaDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 // agent startup to configure the local node based on the configuration options
 // passed to the agent. nodeName is the name to be used in the local agent.
 func (n *NodeDiscovery) StartDiscovery() {
+	n.waitForNodeAnnotation()
+
 	n.localNodeLock.Lock()
 	defer n.localNodeLock.Unlock()
 
@@ -160,6 +163,62 @@ func (n *NodeDiscovery) StartDiscovery() {
 	close(n.localStateInitialized)
 
 	n.updateLocalNode()
+}
+
+func (n *NodeDiscovery) waitForNodeAnnotation() {
+	if !option.Config.EnableNodeDiscoveryWaitAnnotation {
+		return
+	}
+	if !k8s.IsEnabled() {
+		log.Warning("Node discovery annotation wait is enabled but k8s is disabled, skipping wait")
+		return
+	}
+	if n.k8sNodeGetter == nil {
+		log.Warning("Node discovery annotation wait is enabled but k8s node getter is not set, skipping wait")
+		return
+	}
+
+	annotationKey := strings.TrimSpace(option.Config.NodeDiscoveryWaitAnnotationKey)
+	if annotationKey == "" {
+		log.Warning("Node discovery annotation wait is enabled but annotation key is empty, skipping wait")
+		return
+	}
+	nodeName := nodeTypes.GetName()
+
+	log.WithFields(logrus.Fields{
+		"node":          nodeName,
+		"annotationKey": annotationKey,
+	}).Info("Waiting for node annotation before starting node discovery")
+
+	err := wait.PollImmediate(200*time.Millisecond, defaults.NodeInitTimeout, func() (bool, error) {
+		k8sNode, err := n.k8sNodeGetter.GetK8sNode(context.TODO(), nodeName)
+		if err != nil {
+			log.WithError(err).Error("Failed to get k8s node from cache while waiting for annotation")
+			return false, nil
+		}
+		if k8sNode == nil {
+			log.Error("k8s node getter returned nil node while waiting for annotation")
+			return false, nil
+		}
+
+		if value, ok := k8sNode.Annotations[annotationKey]; ok {
+			log.WithFields(logrus.Fields{
+				"node":            nodeName,
+				"annotationKey":   annotationKey,
+				"annotationValue": value,
+			}).Info("Node annotation key is ready, starting node discovery")
+			return true, nil
+		}
+
+		log.WithFields(logrus.Fields{
+			"node":          nodeName,
+			"annotationKey": annotationKey,
+		}).Info("Node annotation is not set yet, waiting")
+		return false, nil
+	})
+	if err != nil {
+		log.Fatalf("Timed out waiting for node annotation key %s on node %s", annotationKey, nodeName)
+	}
 }
 
 // WaitForLocalNodeInit blocks until StartDiscovery() has been called.  This is used to block until

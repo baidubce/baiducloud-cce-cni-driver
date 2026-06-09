@@ -19,8 +19,8 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	cloudtesting "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud/testing"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -76,9 +76,9 @@ func setupBCCNodeTestEnv(t *testing.T) *bccNodeTestEnv {
 	k8sObj.Spec.ENI.MaxAllocateENI = 8
 	k8sObj.Spec.ENI.MaxIPsPerENI = 16
 
-	assert.NoError(t, ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj}))
+	ensureNrsInCacheForIP(t, []*ccev2.NetResourceSet{k8sObj})
 	k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-	assert.NoError(t, ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode}))
+	ensureNodesInCacheForIP(t, []*corev1.Node{k8sNode})
 	ensureSubnetIDsInCacheForIP(t, k8sObj.Spec.ENI.VpcID, k8sObj.Spec.ENI.SubnetIDs)
 
 	base := NewBCENetworkResourceSet(nil, k8sObj, manager)
@@ -117,9 +117,9 @@ func setupBCCNodeTestEnvWithoutSubnets(t *testing.T) *bccNodeTestEnv {
 	k8sObj.Spec.ENI.MaxAllocateENI = 8
 	k8sObj.Spec.ENI.MaxIPsPerENI = 16
 
-	assert.NoError(t, ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj}))
+	ensureNrsInCacheForIP(t, []*ccev2.NetResourceSet{k8sObj})
 	k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-	assert.NoError(t, ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode}))
+	ensureNodesInCacheForIP(t, []*corev1.Node{k8sNode})
 
 	base := NewBCENetworkResourceSet(nil, k8sObj, manager)
 	if base.eniQuota == nil {
@@ -176,6 +176,78 @@ func ensureSubnetIDsInCacheForIP(t *testing.T, vpcID string, subnetIDs []string)
 	ensureSubnetsInCacheForIP(t, subnets)
 }
 
+func ensureNrsInCacheForIP(t *testing.T, nrss []*ccev2.NetResourceSet) {
+	t.Helper()
+
+	ctx := context.Background()
+	informer := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer()
+	store := informer.GetStore()
+
+	for _, nrs := range nrss {
+		if nrs == nil {
+			continue
+		}
+		if _, err := k8s.CCEClient().CceV2().NetResourceSets().Get(ctx, nrs.Name, metav1.GetOptions{}); err != nil {
+			if _, err := k8s.CCEClient().CceV2().NetResourceSets().Create(ctx, nrs, metav1.CreateOptions{}); err != nil && !kerrors.IsAlreadyExists(err) {
+				t.Fatalf("create nrs failed: %v", err)
+			}
+		}
+		if err := store.Add(nrs); err != nil {
+			if err := store.Update(nrs); err != nil {
+				t.Fatalf("cache nrs failed: %v", err)
+			}
+		}
+	}
+}
+
+func ensureNodesInCacheForIP(t *testing.T, nodes []*corev1.Node) {
+	t.Helper()
+
+	ctx := context.Background()
+	informer := k8s.WatcherClient().Informers.Core().V1().Nodes().Informer()
+	store := informer.GetStore()
+
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		if _, err := k8s.Client().CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{}); err != nil {
+			if _, err := k8s.Client().CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil && !kerrors.IsAlreadyExists(err) {
+				t.Fatalf("create node failed: %v", err)
+			}
+		}
+		if err := store.Add(node); err != nil {
+			if err := store.Update(node); err != nil {
+				t.Fatalf("cache node failed: %v", err)
+			}
+		}
+	}
+}
+
+func ensureEnisInCacheForIP(t *testing.T, enis []*ccev2.ENI) {
+	t.Helper()
+
+	ctx := context.Background()
+	informer := k8s.CCEClient().Informers.Cce().V2().ENIs().Informer()
+	store := informer.GetStore()
+
+	for _, eni := range enis {
+		if eni == nil {
+			continue
+		}
+		if _, err := k8s.CCEClient().CceV2().ENIs().Get(ctx, eni.Name, metav1.GetOptions{}); err != nil {
+			if _, err := k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{}); err != nil && !kerrors.IsAlreadyExists(err) {
+				t.Fatalf("create eni failed: %v", err)
+			}
+		}
+		if err := store.Add(eni); err != nil {
+			if err := store.Update(eni); err != nil {
+				t.Fatalf("cache eni failed: %v", err)
+			}
+		}
+	}
+}
+
 func TestBCCNetworkResourceSetPrepareIPAllocation(t *testing.T) {
 	t.Run("secondary eni mode returns available ips", func(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
@@ -196,7 +268,7 @@ func TestBCCNetworkResourceSetPrepareIPAllocation(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{eni}))
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
 
 		action, err := env.node.prepareIPAllocation(env.node.log.WithField("test", "secondary"))
 		if assert.NoError(t, err) {
@@ -264,7 +336,7 @@ func TestBCCNetworkResourceSetPrepareIPAllocation(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{eni}))
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
 
 		action, err := env.node.prepareIPAllocation(env.node.log.WithField("test", "primary-existing-eni"))
 		if assert.NoError(t, err) {
@@ -507,7 +579,7 @@ func TestBCCNetworkResourceSetAllocateIPCrossSubnet(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{eni}))
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
 
 		env.mockCloud.EXPECT().
 			BatchAddPrivateIpCrossSubnet(gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-cross"), gomock.Any(), gomock.Eq(1), gomock.Eq(false)).
@@ -528,7 +600,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
 		env.node.usePrimaryENIWithSecondaryMode = true
 
-		_, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{{PrivateIPAddress: "10.0.0.40", SubnetID: "sbn-1"}}, "default/pod")
+		_, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{{PrivateIPAddress: "10.0.0.40", SubnetID: "sbn-1"}}, "default/pod", "")
 		assert.Error(t, err)
 	})
 
@@ -536,7 +608,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
 		env.node.usePrimaryENIWithSecondaryMode = false
 
-		_, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{}, "default/pod")
+		_, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{}, "default/pod", "")
 		assert.Error(t, err)
 	})
 
@@ -590,9 +662,9 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 				VPCStatus: ccev2.VPCENIStatusInuse,
 			},
 		}
-		assert.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{eni}))
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
 
-		eniID, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{{PrivateIPAddress: ip, SubnetID: "sbn-local"}}, "default/pod")
+		eniID, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{{PrivateIPAddress: ip, SubnetID: "sbn-local"}}, "default/pod", "")
 		assert.NoError(t, err)
 		assert.Equal(t, "eni-local", eniID)
 	})
@@ -636,16 +708,181 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{eni}))
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
 
 		env.mockCloud.EXPECT().
-			BatchAddPrivateIpCrossSubnet(gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc"), gomock.Eq([]string{reuseIP}), gomock.Eq(1), gomock.Eq(false)).
+			BatchAddPrivateIpCrossSubnetWithClientToken(
+				gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc"), gomock.Eq([]string{reuseIP}), gomock.Eq(1), gomock.Eq(false), gomock.Any(),
+			).
 			Return([]string{reuseIP}, nil)
 
 		ipset := []*models.PrivateIP{{PrivateIPAddress: reuseIP, SubnetID: "sbn-alloc"}}
-		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod")
+		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod", "")
 		assert.NoError(t, err)
 		assert.Equal(t, eni.Spec.ENI.ID, eniID)
+	})
+
+	t.Run("dual stack reuse uses family specific client tokens", func(t *testing.T) {
+		env := setupBCCNodeTestEnv(t)
+		reuseIPv4 := "10.0.6.11"
+		reuseIPv6 := "240c:4081:8008:c705::11"
+		rawClientToken := "raw-client-token"
+
+		prevIPv6 := operatorOption.Config.EnableIPv6
+		operatorOption.Config.EnableIPv6 = true
+		t.Cleanup(func() {
+			operatorOption.Config.EnableIPv6 = prevIPv6
+		})
+
+		endpoint := &ccev2.CCEEndpoint{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pod-dualstack",
+				Namespace: "default",
+			},
+			Status: ccev2.EndpointStatus{
+				Networking: &ccev2.EndpointNetworking{
+					Addressing: ccev2.AddressPairList{
+						&ccev2.AddressPair{IP: reuseIPv4},
+						&ccev2.AddressPair{IP: reuseIPv6},
+					},
+				},
+			},
+		}
+		assert.NoError(t, ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
+			result, err := k8s.CCEClient().CceV2().CCEEndpoints("default").Create(ctx, endpoint, metav1.CreateOptions{})
+			if err != nil {
+				return nil
+			}
+			return []metav1.Object{result}
+		}))
+
+		quota := newCustomerIPQuota(log, k8s.WatcherClient(), env.k8sObj.Name, env.k8sObj.Spec.InstanceID, env.manager.bceclientd)
+		quota.SetMaxENI(1)
+		quota.SetMaxIP(3)
+		env.base.eniQuota = quota
+		env.base.lastResyncEniQuotaTime = time.Now()
+
+		sbn := ccemock.NewMockSubnet("sbn-alloc-dualstack", "10.0.6.0/24")
+		sbn.Spec.VPCID = env.k8sObj.Spec.ENI.VpcID
+		assert.NoError(t, ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{sbn}))
+
+		eni, err := ccemock.NewMockEni(env.k8sObj.Name, env.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 1)
+		if !assert.NoError(t, err) {
+			return
+		}
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
+
+		var ipv4ClientToken string
+		gomock.InOrder(
+			env.mockCloud.EXPECT().
+				BatchAddPrivateIpCrossSubnetWithClientToken(
+					gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc-dualstack"),
+					gomock.Eq([]string{reuseIPv4}), gomock.Eq(1), gomock.Eq(false), gomock.Any(),
+				).
+				DoAndReturn(func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIPv6 bool, clientToken string) ([]string, error) {
+					ipv4ClientToken = clientToken
+					assert.NotEmpty(t, clientToken)
+					assert.NotEqual(t, rawClientToken, clientToken)
+					return []string{reuseIPv4}, nil
+				}),
+			env.mockCloud.EXPECT().
+				BatchAddPrivateIpCrossSubnetWithClientToken(
+					gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc-dualstack"),
+					gomock.Eq([]string{reuseIPv6}), gomock.Eq(1), gomock.Eq(true), gomock.Any(),
+				).
+				DoAndReturn(func(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIPv6 bool, clientToken string) ([]string, error) {
+					assert.NotEmpty(t, clientToken)
+					assert.NotEqual(t, rawClientToken, clientToken)
+					assert.NotEqual(t, ipv4ClientToken, clientToken)
+					return []string{reuseIPv6}, nil
+				}),
+		)
+
+		ipset := []*models.PrivateIP{
+			{PrivateIPAddress: reuseIPv4, SubnetID: "sbn-alloc-dualstack"},
+			{PrivateIPAddress: reuseIPv6, SubnetID: "sbn-alloc-dualstack"},
+		}
+		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod-dualstack", rawClientToken)
+		assert.NoError(t, err)
+		assert.Equal(t, eni.Spec.ENI.ID, eniID)
+	})
+
+	t.Run("rollback releases ipv4 and ipv6 separately when ipv6 allocation fails", func(t *testing.T) {
+		env := setupBCCNodeTestEnv(t)
+		reuseIPv4 := "10.0.6.12"
+		reuseIPv6 := "240c:4081:8008:c705::12"
+
+		prevIPv6 := operatorOption.Config.EnableIPv6
+		operatorOption.Config.EnableIPv6 = true
+		t.Cleanup(func() {
+			operatorOption.Config.EnableIPv6 = prevIPv6
+		})
+
+		endpoint := &ccev2.CCEEndpoint{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pod-rollback",
+				Namespace: "default",
+			},
+			Status: ccev2.EndpointStatus{
+				Networking: &ccev2.EndpointNetworking{
+					Addressing: ccev2.AddressPairList{
+						&ccev2.AddressPair{IP: reuseIPv4},
+						&ccev2.AddressPair{IP: reuseIPv6},
+					},
+				},
+			},
+		}
+		assert.NoError(t, ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
+			result, err := k8s.CCEClient().CceV2().CCEEndpoints("default").Create(ctx, endpoint, metav1.CreateOptions{})
+			if err != nil {
+				return nil
+			}
+			return []metav1.Object{result}
+		}))
+
+		quota := newCustomerIPQuota(log, k8s.WatcherClient(), env.k8sObj.Name, env.k8sObj.Spec.InstanceID, env.manager.bceclientd)
+		quota.SetMaxENI(1)
+		quota.SetMaxIP(3)
+		env.base.eniQuota = quota
+		env.base.lastResyncEniQuotaTime = time.Now()
+
+		sbn := ccemock.NewMockSubnet("sbn-alloc-rollback", "10.0.6.0/24")
+		sbn.Spec.VPCID = env.k8sObj.Spec.ENI.VpcID
+		assert.NoError(t, ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{sbn}))
+
+		eni, err := ccemock.NewMockEni(env.k8sObj.Name, env.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 1)
+		if !assert.NoError(t, err) {
+			return
+		}
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
+
+		gomock.InOrder(
+			env.mockCloud.EXPECT().
+				BatchAddPrivateIpCrossSubnetWithClientToken(
+					gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc-rollback"),
+					gomock.Eq([]string{reuseIPv4}), gomock.Eq(1), gomock.Eq(false), gomock.Any(),
+				).
+				Return([]string{reuseIPv4}, nil),
+			env.mockCloud.EXPECT().
+				BatchAddPrivateIpCrossSubnetWithClientToken(
+					gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-alloc-rollback"),
+					gomock.Eq([]string{reuseIPv6}), gomock.Eq(1), gomock.Eq(true), gomock.Any(),
+				).
+				Return(nil, errors.New("ipv6 alloc failed")),
+			env.mockCloud.EXPECT().
+				BatchDeletePrivateIP(gomock.Any(), gomock.Eq([]string{reuseIPv4}), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq(false)).
+				Return(nil),
+			env.mockCloud.EXPECT().
+				BatchDeletePrivateIP(gomock.Any(), gomock.Eq([]string{reuseIPv6}), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq(true)).
+				Return(nil),
+		)
+
+		ipset := []*models.PrivateIP{
+			{PrivateIPAddress: reuseIPv4, SubnetID: "sbn-alloc-rollback"},
+			{PrivateIPAddress: reuseIPv6, SubnetID: "sbn-alloc-rollback"},
+		}
+		_, err = env.node.reuseIPs(context.Background(), ipset, "default/pod-rollback", "raw-client-token")
+		assert.EqualError(t, err, "ipv6 alloc failed")
 	})
 }
 

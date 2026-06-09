@@ -99,8 +99,13 @@ func (provider *BCEAllocatorProvider) Start(ctx context.Context, getterUpdater i
 
 // StartEndpointManager implements endpoint.DirectAllocatorStarter
 func (provider *BCEAllocatorProvider) StartEndpointManager(ctx context.Context, getterUpdater endpoint.CCEEndpointGetterUpdater) (endpoint.EndpointEventHandler, error) {
+	// Get VPC client
+	vpcClient := bceoption.VPCClient()
+	if vpcClient == nil {
+		return nil, fmt.Errorf("failed to initialize VPC client")
+	}
 
-	endpointNanager := endpoint.NewEndpointManager(getterUpdater, provider.manager)
+	endpointNanager := endpoint.NewEndpointManager(getterUpdater, provider.manager, vpcClient)
 	endpointNanager.Start(ctx)
 	return endpointNanager, nil
 }

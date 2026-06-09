@@ -20,19 +20,27 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	ccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // mockMetadataClientForHPASID is a mock implementation for testing HPASID logic
@@ -150,6 +158,428 @@ type mockNrcsNodeGetter struct {
 
 func (m *mockNrcsNodeGetter) GetNodeNrcs(nodeName string) (*ccev2alpha1.NetResourceConfigSet, error) {
 	return m.nrcs, m.err
+}
+
+type waitForNodeAnnotationNodeGetter struct {
+	nodes []*corev1.Node
+	errs  []error
+	calls int
+}
+
+func (m *waitForNodeAnnotationNodeGetter) GetK8sNode(ctx context.Context, nodeName string) (*corev1.Node, error) {
+	m.calls++
+	maxLen := len(m.nodes)
+	if len(m.errs) > maxLen {
+		maxLen = len(m.errs)
+	}
+	if maxLen == 0 {
+		return nil, nil
+	}
+	idx := m.calls - 1
+	if idx >= maxLen {
+		idx = maxLen - 1
+	}
+	var node *corev1.Node
+	var err error
+	if len(m.nodes) > 0 {
+		if idx < len(m.nodes) {
+			node = m.nodes[idx]
+		} else {
+			node = m.nodes[len(m.nodes)-1]
+		}
+	}
+	if len(m.errs) > 0 {
+		if idx < len(m.errs) {
+			err = m.errs[idx]
+		} else {
+			err = m.errs[len(m.errs)-1]
+		}
+	}
+	return node, err
+}
+
+func TestWaitForNodeAnnotation_GivenConditions_WhenWait_ThenExpectedBehavior(t *testing.T) {
+	type TestFields struct {
+		NodeGetter *waitForNodeAnnotationNodeGetter
+		Node       *NodeDiscovery
+	}
+
+	type TestArgs struct {
+		EnableWait bool
+		K8sEnabled bool
+		NodeName   string
+		AnnoKey    string
+	}
+
+	type TestCase struct {
+		Name        string
+		TestSetup   func() *TestFields
+		TestPostRun func(fields *TestFields)
+		Args        TestArgs
+		WantErr     error
+	}
+
+	makeNode := func(name string, annotations map[string]string) *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        name,
+				Annotations: annotations,
+			},
+		}
+	}
+
+	cases := []TestCase{
+		{
+			Name: "TestWaitForNodeAnnotation_GivenDisabled_WhenWait_ThenReturnWithoutGetter",
+			TestSetup: func() *TestFields {
+				return &TestFields{Node: &NodeDiscovery{}}
+			},
+			TestPostRun: func(fields *TestFields) {
+				if fields.NodeGetter != nil {
+					assert.Equal(t, 0, fields.NodeGetter.calls)
+				}
+			},
+			Args: TestArgs{
+				EnableWait: false,
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenK8sDisabled_WhenWait_ThenReturnWithoutGetter",
+			TestSetup: func() *TestFields {
+				return &TestFields{Node: &NodeDiscovery{}}
+			},
+			TestPostRun: func(fields *TestFields) {
+				if fields.NodeGetter != nil {
+					assert.Equal(t, 0, fields.NodeGetter.calls)
+				}
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: false,
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenNilGetter_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				return &TestFields{Node: &NodeDiscovery{}}
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenEmptyKey_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{nodes: []*corev1.Node{makeNode("test-node", nil)}}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.Equal(t, 0, fields.NodeGetter.calls)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				AnnoKey:    "   ",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenAnyValueMatch_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "ready",
+						}),
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.Equal(t, 1, fields.NodeGetter.calls)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenTrimmedKey_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": " true ",
+						}),
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.Equal(t, 1, fields.NodeGetter.calls)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    " node.cce.baidubce.com/annotation-synced ",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenNotFoundThenMatch_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						nil,
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "true",
+						}),
+					},
+					errs: []error{
+						k8serrors.NewNotFound(schema.GroupResource{Group: "core", Resource: "nodes"}, "test-node"),
+						nil,
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.GreaterOrEqual(t, fields.NodeGetter.calls, 2)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenErrorThenMatch_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						nil,
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "true",
+						}),
+					},
+					errs: []error{
+						fmt.Errorf("request failed"),
+						nil,
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.GreaterOrEqual(t, fields.NodeGetter.calls, 2)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenEmptyValue_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "",
+						}),
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.Equal(t, 1, fields.NodeGetter.calls)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenMissingThenMatch_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						makeNode("test-node", map[string]string{}),
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "true",
+						}),
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.GreaterOrEqual(t, fields.NodeGetter.calls, 2)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+		{
+			Name: "TestWaitForNodeAnnotation_GivenNilNodeThenMatch_WhenWait_ThenReturn",
+			TestSetup: func() *TestFields {
+				getter := &waitForNodeAnnotationNodeGetter{
+					nodes: []*corev1.Node{
+						nil,
+						makeNode("test-node", map[string]string{
+							"node.cce.baidubce.com/annotation-synced": "true",
+						}),
+					},
+				}
+				return &TestFields{
+					NodeGetter: getter,
+					Node:       &NodeDiscovery{k8sNodeGetter: getter},
+				}
+			},
+			TestPostRun: func(fields *TestFields) {
+				assert.GreaterOrEqual(t, fields.NodeGetter.calls, 2)
+			},
+			Args: TestArgs{
+				EnableWait: true,
+				K8sEnabled: true,
+				NodeName:   "test-node",
+				AnnoKey:    "node.cce.baidubce.com/annotation-synced",
+			},
+			WantErr: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			fields := tc.TestSetup()
+
+			originalEnabled := option.Config.EnableNodeDiscoveryWaitAnnotation
+			originalKey := option.Config.NodeDiscoveryWaitAnnotationKey
+			originalNodeName := nodeTypes.GetName()
+			defer func() {
+				option.Config.EnableNodeDiscoveryWaitAnnotation = originalEnabled
+				option.Config.NodeDiscoveryWaitAnnotationKey = originalKey
+				nodeTypes.SetName(originalNodeName)
+			}()
+
+			if tc.Args.NodeName != "" {
+				nodeTypes.SetName(tc.Args.NodeName)
+			}
+			option.Config.EnableNodeDiscoveryWaitAnnotation = tc.Args.EnableWait
+			option.Config.NodeDiscoveryWaitAnnotationKey = tc.Args.AnnoKey
+
+			patches := gomonkey.NewPatches()
+			defer patches.Reset()
+			patches.ApplyFunc(k8s.IsEnabled, func() bool {
+				return tc.Args.K8sEnabled
+			})
+			pollInvocations := 0
+			pollMaxChecks := 5
+			patches.ApplyFunc(wait.PollImmediate, func(interval, timeout time.Duration, condition wait.ConditionFunc) error {
+				pollInvocations++
+				pollCalls := 0
+				for {
+					pollCalls++
+					done, err := condition()
+					if done || err != nil {
+						return err
+					}
+					if pollCalls >= pollMaxChecks {
+						return wait.ErrWaitTimeout
+					}
+				}
+			})
+
+			var gotErr error
+			fields.Node.waitForNodeAnnotation()
+			if !reflect.DeepEqual(gotErr, tc.WantErr) {
+				t.Errorf("got err %v, want %v", gotErr, tc.WantErr)
+			}
+			if tc.TestPostRun != nil {
+				tc.TestPostRun(fields)
+			}
+			if !tc.Args.EnableWait || !tc.Args.K8sEnabled || fields.Node.k8sNodeGetter == nil || strings.TrimSpace(tc.Args.AnnoKey) == "" {
+				assert.Equal(t, 0, pollInvocations)
+			}
+		})
+	}
+}
+
+func TestWaitForNodeAnnotation_GivenTimeout_WhenWait_ThenFatal(t *testing.T) {
+	if os.Getenv("GO_TEST_SUBPROCESS") == "1" {
+		patches := gomonkey.NewPatches()
+		defer patches.Reset()
+
+		patches.ApplyFunc(k8s.IsEnabled, func() bool {
+			return true
+		})
+		patches.ApplyFunc(wait.PollImmediate, func(interval, timeout time.Duration, condition wait.ConditionFunc) error {
+			return wait.ErrWaitTimeout
+		})
+
+		option.Config.EnableNodeDiscoveryWaitAnnotation = true
+		option.Config.NodeDiscoveryWaitAnnotationKey = "node.cce.baidubce.com/annotation-synced"
+		nodeTypes.SetName("test-node")
+
+		nd := &NodeDiscovery{
+			k8sNodeGetter: &mockK8sNodeGetter{
+				node: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-node",
+					},
+				},
+			},
+		}
+		nd.waitForNodeAnnotation()
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestWaitForNodeAnnotation_GivenTimeout_WhenWait_ThenFatal")
+	cmd.Env = append(os.Environ(), "GO_TEST_SUBPROCESS=1")
+	err := cmd.Run()
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		t.Log("timeout triggered log.Fatalf as expected")
+		return
+	}
+	t.Fatalf("Process ran with err %v, want exit status 1", err)
 }
 
 // TestValidateHPASIDLogic_GivenHPASTypeWithValidHPASID_WhenValidate_ThenSuccess tests HPAS type with valid HPASID

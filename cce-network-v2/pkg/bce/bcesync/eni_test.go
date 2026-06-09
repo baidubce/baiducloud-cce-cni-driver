@@ -30,8 +30,10 @@ import (
 	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	pkgOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 )
@@ -1180,6 +1182,42 @@ func TestVPCENISyncerRouter_Update_GivenENIForBBC_WhenCalled_ThenReturnNil(t *te
 	eni := &ccev2.ENI{
 		Spec: ccev2.ENISpec{
 			Type: ccev2.ENIForBBC,
+		},
+	}
+
+	err := router.Update(eni)
+	assert.NoError(t, err)
+}
+
+func TestVPCENISyncerRouter_Create_GivenVPCRouteAndENIForERI_WhenCalled_ThenReturnNil(t *testing.T) {
+	oldIPAM := pkgOption.Config.IPAM
+	defer func() {
+		pkgOption.Config.IPAM = oldIPAM
+	}()
+	pkgOption.Config.IPAM = ipamOption.IPAMVpcRoute
+
+	router := &VPCENISyncerRouter{}
+	eni := &ccev2.ENI{
+		Spec: ccev2.ENISpec{
+			Type: ccev2.ENIForERI,
+		},
+	}
+
+	err := router.Create(eni)
+	assert.NoError(t, err)
+}
+
+func TestVPCENISyncerRouter_Update_GivenVPCRouteAndENIForERI_WhenCalled_ThenReturnNil(t *testing.T) {
+	oldIPAM := pkgOption.Config.IPAM
+	defer func() {
+		pkgOption.Config.IPAM = oldIPAM
+	}()
+	pkgOption.Config.IPAM = ipamOption.IPAMVpcRoute
+
+	router := &VPCENISyncerRouter{}
+	eni := &ccev2.ENI{
+		Spec: ccev2.ENISpec{
+			Type: ccev2.ENIForERI,
 		},
 	}
 

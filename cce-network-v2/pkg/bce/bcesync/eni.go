@@ -25,11 +25,13 @@ import (
 	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/cm"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	pkgOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
@@ -99,12 +101,14 @@ func (es *VPCENISyncerRouter) StartENISyncer(ctx context.Context, updater syncer
 	return es
 }
 
+func shouldSkipENISyncInVPCRoute(eniType ccev2.ENIType) bool {
+	return pkgOption.Config.IPAMMode() == ipamOption.IPAMVpcRoute && eniType == ccev2.ENIForERI
+}
+
 // Create implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Create(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	// Remove "if types == ccev2.ENIForHPC || types == ccev2.ENIForERI return nil",
-	// because we need to support the case of RDMA ENI already have RDMA IPs
-	if types == ccev2.ENIForBBC {
+	if types == ccev2.ENIForBBC || shouldSkipENISyncInVPCRoute(types) {
 		return nil
 	}
 
@@ -124,9 +128,7 @@ func (es *VPCENISyncerRouter) ResyncENI(ctx context.Context) time.Duration {
 // Update implements syncer.ENIEventHandler
 func (es *VPCENISyncerRouter) Update(resource *ccev2.ENI) error {
 	types := resource.Spec.Type
-	// Remove "if types == ccev2.ENIForHPC || types == ccev2.ENIForERI return nil",
-	// because we need to support the case of RDMA ENI already have RDMA IPs
-	if types == ccev2.ENIForBBC {
+	if types == ccev2.ENIForBBC || shouldSkipENISyncInVPCRoute(types) {
 		return nil
 	}
 
@@ -686,6 +688,7 @@ func (esm *eniStateMachine) handlePreOption() (bool, error) {
 	// step2: If the eni current status is inuse, perform an atomic update of its spec and append the status.
 	if esm.vpceni.Status == string(ccev2.VPCENIStatusInuse) {
 		updateENISpecFromVPCENI(esm)
+
 		// Update spec
 		esm.resource, err = esm.es.updater.Update(esm.resource)
 		if err != nil {

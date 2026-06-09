@@ -1014,7 +1014,7 @@ func (e *TestEndpointAllocator) Restore() error {
 			"namespace": ep.Namespace,
 			"name":      ep.Name,
 		})
-		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
+		if IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
 		// skip the cceendpoint which is deleting or deleted

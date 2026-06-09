@@ -374,6 +374,37 @@ spec:
                     description: CrossSubnetUsed lists all IPs out of Spec.IPAM.Pool
                       which have been allocated
                     type: object
+                  pstsUsed:
+                    additionalProperties:
+                      description: AllocationIP is an IP which is available for allocation,
+                        or already has been allocated
+                      properties:
+                        isPrimary:
+                          description: IsPrimary is set to true if the IP is the primary
+                            IP of the eni
+                          type: boolean
+                        owner:
+                          description: "Owner is the owner of the IP. This field is
+                            set if the IP has been allocated. It will be set to the
+                            pod name or another identifier representing the usage
+                            of the IP \n The owner field is left blank for an entry
+                            in Spec.IPAM.Pool and filled out as the IP is used and
+                            also added to Status.IPAM.Used."
+                          type: string
+                        resource:
+                          description: Resource is set for both available and allocated
+                            IPs, it represents what resource the IP is associated
+                            with, e.g. in combination with AWS ENI, this will refer
+                            to the ID of the ENI
+                          type: string
+                        subnetID:
+                          description: SubnetID is the subnet ID of the IP. This field
+                            is set if the IP is use in cross subnet mode
+                          type: string
+                      type: object
+                    description: PSTSUsed lists all IPs allocated by PSTS and which
+                      pods are using them
+                    type: object
                   operator-status:
                     description: Operator is the Operator status of the node
                     properties:

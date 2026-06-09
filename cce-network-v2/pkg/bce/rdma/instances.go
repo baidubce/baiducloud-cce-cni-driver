@@ -142,9 +142,6 @@ func (m *rdmaInstancesManager) FindSubnetByIDs(vpcID, availabilityZone string, s
 			}
 		}
 
-		if sbn.Spec.Exclusive {
-			continue
-		}
 		if bestSubnet == nil || bestSubnet.Status.AvailableIPNum < sbn.Status.AvailableIPNum {
 			bestSubnet = sbn
 		}

@@ -101,7 +101,6 @@ spec:
                           running on. The IP must be reachable between nodes.
                         type: string
                       releaseStrategy:
-                        default: TTL
                         description: 'IP address recycling policy TTL: represents
                           the default dynamic IP address recycling policy,default.
                           Never: this policy can only be used in fixed IP scenarios'

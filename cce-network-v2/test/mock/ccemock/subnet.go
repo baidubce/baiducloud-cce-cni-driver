@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,7 +35,15 @@ func (m ExceptResourceVersionMap) Add(name, rv string) {
 
 func (m ExceptResourceVersionMap) Receive(name, rv string) bool {
 	if except, ok := m[name]; ok {
+		// In tests, object may be quickly updated by controllers before informer
+		// receives the initial Add event. Accept same or newer resourceVersion as received.
 		if except.ResourceVersion == rv {
+			except.Received = true
+			return true
+		}
+		expectedRV, expectedErr := strconv.ParseInt(except.ResourceVersion, 10, 64)
+		actualRV, actualErr := strconv.ParseInt(rv, 10, 64)
+		if expectedErr != nil || actualErr != nil || actualRV >= expectedRV {
 			except.Received = true
 		}
 		return true

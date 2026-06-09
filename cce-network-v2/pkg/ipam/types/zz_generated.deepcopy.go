@@ -103,6 +103,13 @@ func (in *IPAMStatus) DeepCopyInto(out *IPAMStatus) {
 			(*out)[key] = val
 		}
 	}
+	if in.PSTSUsed != nil {
+		in, out := &in.PSTSUsed, &out.PSTSUsed
+		*out = make(AllocationMap, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.PodCIDRs != nil {
 		in, out := &in.PodCIDRs, &out.PodCIDRs
 		*out = make(PodCIDRMap, len(*in))

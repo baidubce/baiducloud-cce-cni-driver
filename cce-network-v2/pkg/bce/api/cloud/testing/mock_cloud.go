@@ -220,6 +220,21 @@ func (mr *MockInterfaceMockRecorder) BatchAddPrivateIpCrossSubnet(ctx, eniID, su
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIpCrossSubnet", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIpCrossSubnet), ctx, eniID, subnetID, privateIPs, count, isIpv6)
 }
 
+// BatchAddPrivateIpCrossSubnetWithClientToken mocks base method.
+func (m *MockInterface) BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchAddPrivateIpCrossSubnetWithClientToken", ctx, eniID, subnetID, privateIPs, count, isIpv6, clientToken)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BatchAddPrivateIpCrossSubnetWithClientToken indicates an expected call of BatchAddPrivateIpCrossSubnetWithClientToken.
+func (mr *MockInterfaceMockRecorder) BatchAddPrivateIpCrossSubnetWithClientToken(ctx, eniID, subnetID, privateIPs, count, isIpv6, clientToken interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIpCrossSubnetWithClientToken", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIpCrossSubnetWithClientToken), ctx, eniID, subnetID, privateIPs, count, isIpv6, clientToken)
+}
+
 // BatchDeleteHpcEniPrivateIP mocks base method.
 func (m *MockInterface) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
 	m.ctrl.T.Helper()

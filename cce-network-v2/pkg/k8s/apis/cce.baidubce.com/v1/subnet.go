@@ -43,6 +43,9 @@ type SubnetSpec struct {
 	// WARN: Marking as an exclusive subnet only allows you to manually
 	// allocate IP. If the default subnet for IPAM is marked as an exclusive
 	// subnet, it may cause all pods to fail to allocate IP
+	//
+	// Deprecated: since 2.13.9 this field is no longer used by allocation logic.
+	// It is retained for backward compatibility only.
 	Exclusive bool `json:"exclusive,omitempty"`
 }
 

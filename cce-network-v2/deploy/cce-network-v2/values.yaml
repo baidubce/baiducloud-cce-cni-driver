@@ -121,6 +121,7 @@ apiserverServiceEnv:
   enable: false
   kubernetesServiceHost: ""
   kubernetesServicePort: ""
+kubeConfigConfigMapName: "kube-config-admin"
 
 imagePullSecrets: [ ]
 nameOverride: ""
@@ -210,6 +211,8 @@ ccedConfig:
   enable-ipv4: true
   enable-ipv6: false
   enable-rdma: false
+  enable-node-discovery-wait-annotation: true
+  node-discovery-wait-annotation-key: "kubernetes.io/cce.instance.labels"
   # api 限流配置
   default-api-burst: 100
   default-api-qps: 50

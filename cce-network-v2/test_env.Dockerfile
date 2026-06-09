@@ -11,7 +11,8 @@ COPY ${WORKDIR} ./cce-network-v2
 
 WORKDIR /go/src/cce-network-v2
 
-# Remove the conflicting centos.go file if it exists
-RUN rm -f pkg/os/centos.go
+# Set GOPROXY to use multiple proxies for better reliability
+ENV GOPROXY=https://goproxy.cn,https://goproxy.io,https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
 
 RUN go mod tidy

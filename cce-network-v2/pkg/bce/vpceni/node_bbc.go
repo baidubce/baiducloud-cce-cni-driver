@@ -334,7 +334,10 @@ func (n *bbcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 }
 
 // ReuseIPs implements realNodeInfipD
-func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner, clientToken string) (eniID string, err error) {
+	// Keep parameter for interface compatibility; BBC reuse path currently does not use clientToken.
+	_ = clientToken
+
 	if n.tryRefreshBBCENI() == nil {
 		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}

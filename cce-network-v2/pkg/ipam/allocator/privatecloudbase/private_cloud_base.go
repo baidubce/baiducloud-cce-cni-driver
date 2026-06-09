@@ -6,6 +6,7 @@ import (
 
 	operatorMetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/metrics"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	bceoption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/allocator"
@@ -68,6 +69,12 @@ func (a *AllocatorPrivateCloudBase) Start(ctx context.Context, getterUpdater ipa
 }
 
 func (a *AllocatorPrivateCloudBase) StartEndpointManager(ctx context.Context, getterUpdater endpoint.CCEEndpointGetterUpdater) (endpoint.EndpointEventHandler, error) {
-	em := endpoint.NewEndpointManager(getterUpdater, a.instances)
+	// Get VPC client
+	vpcClient := bceoption.VPCClient()
+	if vpcClient == nil {
+		return nil, fmt.Errorf("failed to initialize VPC client")
+	}
+
+	em := endpoint.NewEndpointManager(getterUpdater, a.instances, vpcClient)
 	return em, em.Start(ctx)
 }

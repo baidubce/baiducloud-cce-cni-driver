@@ -77,6 +77,12 @@ const (
 	// AnnotateK8sNode enables annotating a kubernetes node while bootstrapping
 	// the daemon, which can also be disbled using this option.
 	AnnotateK8sNode = "annotate-k8s-node"
+
+	// EnableNodeDiscoveryWaitAnnotation gates node discovery until the annotation is present.
+	EnableNodeDiscoveryWaitAnnotation = "enable-node-discovery-wait-annotation"
+
+	// NodeDiscoveryWaitAnnotationKey is the node annotation key to gate node discovery.
+	NodeDiscoveryWaitAnnotationKey = "node-discovery-wait-annotation-key"
 	// ConfigFile is the Configuration file (default "$HOME/cced.yaml")
 	ConfigFile = "config"
 
@@ -360,6 +366,9 @@ const (
 	// CRDWaitTimeout is the timeout in which CCE will exit if CRDs are not
 	// available.
 	CRDWaitTimeout = "crd-wait-timeout"
+
+	// NRSListTimeout is the timeout for listing NetResourceSets
+	NRSListTimeout = "nrs-list-timeout"
 
 	// CCEEndpointGCInterval interval of single machine recycling endpoint
 	CCEEndpointGCInterval = "cce-endpoint-gc-interval"
@@ -714,6 +723,12 @@ type DaemonConfig struct {
 	// Specifies wheather to annotate the kubernetes nodes or not
 	AnnotateK8sNode bool
 
+	// EnableNodeDiscoveryWaitAnnotation gates node discovery until the annotation is present.
+	EnableNodeDiscoveryWaitAnnotation bool
+
+	// NodeDiscoveryWaitAnnotationKey is the node annotation key to gate node discovery.
+	NodeDiscoveryWaitAnnotationKey string
+
 	// RunMonitorAgent indicates whether to run the monitor agent
 	RunMonitorAgent bool
 
@@ -805,6 +820,9 @@ type DaemonConfig struct {
 	// FixedIPTimeout Timeout for waiting for the fixed IP assignment to succeed
 	FixedIPTimeout time.Duration
 
+	// NRSListTimeout is the timeout for listing NetResourceSets
+	NRSListTimeout time.Duration
+
 	// For BCE CCE
 	// ResourceResyncInterval is the interval between attempts of the sync between Cloud and k8s
 	// like ENIs,Subnets
@@ -840,34 +858,37 @@ type DaemonConfig struct {
 var (
 	// Config represents the daemon configuration
 	Config = &DaemonConfig{
-		CreationTime:                     time.Now(),
-		Opts:                             NewIntOptions(&DaemonOptionLibrary),
-		Monitor:                          &models.MonitorStatus{Cpus: int64(runtime.NumCPU()), Npages: 64, Pagesize: int64(os.Getpagesize()), Lost: 0, Unknown: 0},
-		IPv6ClusterAllocCIDR:             defaults.IPv6ClusterAllocCIDR,
-		IPv6ClusterAllocCIDRBase:         defaults.IPv6ClusterAllocCIDRBase,
-		EnableHealthChecking:             defaults.EnableHealthChecking,
-		EnableEndpointHealthChecking:     defaults.EnableEndpointHealthChecking,
-		EnableHealthCheckNodePort:        defaults.EnableHealthCheckNodePort,
-		EnableIPv4:                       defaults.EnableIPv4,
-		EnableIPv6:                       defaults.EnableIPv6,
-		EnableIPv6NDP:                    defaults.EnableIPv6NDP,
-		EnableRDMA:                       defaults.EnableRDMA,
-		EnableERIManagement:              defaults.EnableERIManagement,
-		RDMAResourceTypeForHPC:           defaults.RDMAResourceTypeForHPC,
-		RDMAResourceTypeForERI:           defaults.RDMAResourceTypeForERI,
-		LogOpt:                           make(map[string]string),
-		LoopbackIPv4:                     defaults.LoopbackIPv4,
-		ForceLocalPolicyEvalAtSource:     defaults.ForceLocalPolicyEvalAtSource,
-		EnableEndpointRoutes:             defaults.EnableEndpointRoutes,
-		AnnotateK8sNode:                  defaults.AnnotateK8sNode,
-		K8sServiceCacheSize:              defaults.K8sServiceCacheSize,
-		AutoCreateNetResourceSetResource: defaults.AutoCreateNetResourceSetResource,
-		K8sEnableAPIDiscovery:            defaults.K8sEnableAPIDiscovery,
+		CreationTime:                      time.Now(),
+		Opts:                              NewIntOptions(&DaemonOptionLibrary),
+		Monitor:                           &models.MonitorStatus{Cpus: int64(runtime.NumCPU()), Npages: 64, Pagesize: int64(os.Getpagesize()), Lost: 0, Unknown: 0},
+		IPv6ClusterAllocCIDR:              defaults.IPv6ClusterAllocCIDR,
+		IPv6ClusterAllocCIDRBase:          defaults.IPv6ClusterAllocCIDRBase,
+		EnableHealthChecking:              defaults.EnableHealthChecking,
+		EnableEndpointHealthChecking:      defaults.EnableEndpointHealthChecking,
+		EnableHealthCheckNodePort:         defaults.EnableHealthCheckNodePort,
+		EnableIPv4:                        defaults.EnableIPv4,
+		EnableIPv6:                        defaults.EnableIPv6,
+		EnableIPv6NDP:                     defaults.EnableIPv6NDP,
+		EnableRDMA:                        defaults.EnableRDMA,
+		EnableERIManagement:               defaults.EnableERIManagement,
+		RDMAResourceTypeForHPC:            defaults.RDMAResourceTypeForHPC,
+		RDMAResourceTypeForERI:            defaults.RDMAResourceTypeForERI,
+		LogOpt:                            make(map[string]string),
+		LoopbackIPv4:                      defaults.LoopbackIPv4,
+		ForceLocalPolicyEvalAtSource:      defaults.ForceLocalPolicyEvalAtSource,
+		EnableEndpointRoutes:              defaults.EnableEndpointRoutes,
+		AnnotateK8sNode:                   defaults.AnnotateK8sNode,
+		EnableNodeDiscoveryWaitAnnotation: defaults.EnableNodeDiscoveryWaitAnnotation,
+		NodeDiscoveryWaitAnnotationKey:    defaults.NodeDiscoveryWaitAnnotationKey,
+		K8sServiceCacheSize:               defaults.K8sServiceCacheSize,
+		AutoCreateNetResourceSetResource:  defaults.AutoCreateNetResourceSetResource,
+		K8sEnableAPIDiscovery:             defaults.K8sEnableAPIDiscovery,
 
 		K8sEnableLeasesFallbackDiscovery: defaults.K8sEnableLeasesFallbackDiscovery,
 		APIRateLimit:                     make(map[string]string),
 		FixedIPTimeout:                   defaults.CCEEndpointGCInterval,
 		CCEEndpointGC:                    defaults.CCEEndpointGCInterval,
+		NRSListTimeout:                   defaults.NRSListTimeout,
 		MetaAPIRetryCount:                defaults.APIRetryCount,
 		MetaAPIRetryMaxDelay:             defaults.APIRetryMaxDelay,
 		MetaAPIRetryBaseInterval:         defaults.APIRetryBaseInterval,
@@ -1172,6 +1193,8 @@ func (c *DaemonConfig) Populate() {
 	c.AgentLabels = viper.GetStringSlice(AgentLabels)
 	c.AllowLocalhost = viper.GetString(AllowLocalhost)
 	c.AnnotateK8sNode = viper.GetBool(AnnotateK8sNode)
+	c.EnableNodeDiscoveryWaitAnnotation = viper.GetBool(EnableNodeDiscoveryWaitAnnotation)
+	c.NodeDiscoveryWaitAnnotationKey = viper.GetString(NodeDiscoveryWaitAnnotationKey)
 	c.AutoCreateNetResourceSetResource = viper.GetBool(AutoCreateNetResourceSetResource)
 	c.ClusterID = viper.GetString(ClusterID)
 	c.Debug = viper.GetBool(DebugArg)
@@ -1245,6 +1268,12 @@ func (c *DaemonConfig) Populate() {
 	// for cce
 	c.CCEEndpointGC = viper.GetDuration(CCEEndpointGCInterval)
 	c.FixedIPTimeout = viper.GetDuration(FixedIPTimeout)
+	c.NRSListTimeout = viper.GetDuration(NRSListTimeout)
+	if c.NRSListTimeout <= 0 {
+		log.WithField("configuredNRSListTimeout", c.NRSListTimeout).
+			Warnf("invalid nrs list timeout, fallback to default: %s", defaults.NRSListTimeout)
+		c.NRSListTimeout = defaults.NRSListTimeout
+	}
 
 	ipv4NativeRoutingCIDR := viper.GetString(IPv4NativeRoutingCIDR)
 

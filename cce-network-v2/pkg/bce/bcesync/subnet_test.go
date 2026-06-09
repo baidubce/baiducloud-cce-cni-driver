@@ -427,6 +427,10 @@ func (m *mockBCEClient4Subnet) BatchAddPrivateIpCrossSubnet(ctx context.Context,
 	return nil, nil
 }
 
+func (m *mockBCEClient4Subnet) BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockBCEClient4Subnet) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
 	return nil, nil
 }

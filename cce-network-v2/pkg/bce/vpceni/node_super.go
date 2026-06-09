@@ -91,13 +91,21 @@ const (
 	errUnableToAttachENI          = "unable to attach ENI"
 	errCrurrentlyCreatingENI      = "the node currently being created by ENI should have only one"
 	errUnableToMarkENIForDeletion = "unable to mark ENI for deletion"
-	errUnableToFindSubnet         = "unable to find matching subnet"
+	errNoAvailableSubnet          = "no available subnet for ENI creation"
 
 	retryDuration = 500 * time.Millisecond
 	retryTimeout  = 15 * time.Second
 	retryDelay    = 15 * time.Second
 
 	vpcENISubsys = "vpc-eni-node-allocator"
+
+	// createInterfaceCooldownPeriod is the cooldown period after CreateInterface
+	// encounters a non-retryable error (e.g., no available subnet or subnet IP exhaustion).
+	// During this period, subsequent calls will fail fast without making API requests,
+	// reducing unnecessary QPS to the VPC API when the underlying issue cannot be resolved
+	// by retrying. The cooldown automatically expires after this duration, allowing the
+	// system to retry when conditions may have changed (e.g., new subnet added, IPs freed).
+	createInterfaceCooldownPeriod = 5 * time.Minute
 )
 
 type realNodeInf interface {
@@ -117,7 +125,7 @@ type realNodeInf interface {
 	// direct ip allocation
 	allocateIPCrossSubnet(ctx context.Context, sbnID string) ([]*models.PrivateIP, string, error)
 	// ReuseIPs is called to reuse the IPs that are not used by any pods
-	reuseIPs(ctx context.Context, ips []*models.PrivateIP, Owner string) (eniID string, err error)
+	reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner, clientToken string) (eniID string, err error)
 }
 
 // bceNetworkResourceSet represents a Kubernetes node running CCE with an associated
@@ -151,6 +159,12 @@ type bceNetworkResourceSet struct {
 
 	// nextCreateENITime not allow create eni before this time
 	nextCreateENITime *time.Time
+
+	// lastCreateInterfaceFailureTime records the last time CreateInterface failed with non-retryable error
+	// (e.g., subnet IP exhaustion). Used to implement cooldown period to reduce QPS to VPC API.
+	lastCreateInterfaceFailureTime *time.Time
+	// lastCreateInterfaceFailureError records the last non-retryable error from CreateInterface
+	lastCreateInterfaceFailureError error
 
 	// clientTokens stores client tokens for ENI creation and IP allocation idempotency
 	clientTokens *bceutils.ClientTokenSet
@@ -444,9 +458,6 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 			allENIId = append(allENIId, e.Name)
 
-			// eni is not ready to use
-			eniSubnet := e.Spec.ENI.SubnetID
-
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse &&
 				(e.Spec.Type == ccev2.ENIForBBC || e.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP) {
 
@@ -491,18 +502,13 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 			addAllocationIP := func(ips []*models.PrivateIP, isIPv6 bool) {
 				for _, addr := range ips {
-					// Only resolve primary IP addresses while ENI is primary mode
-					if e.Spec.UseMode != ccev2.ENIUseModePrimaryIP && addr.Primary {
+					// Skip IPv4 primary IP in secondary mode — it's the ENI management address.
+					// IPv6 primary IP is just a tag, it can be assigned to pods, so let it into pool.
+					if !isIPv6 && e.Spec.UseMode != ccev2.ENIUseModePrimaryIP && addr.Primary {
 						continue
 					}
 					if !isIPv6 {
 						availableIPsNumber++
-					}
-					// filter cross subnet private ip
-					if addr.SubnetID != eniSubnet &&
-						// only bbc enable cross subnet ip to ippool
-						(n.instanceType != string(metadata.InstanceTypeExBBC) || !n.enableNodeAnnotationSubnet()) {
-						continue
 					}
 
 					a[addr.PrivateIPAddress] = ipamTypes.AllocationIP{
@@ -708,28 +714,20 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 		Name:       fmt.Sprintf("%s/", option.Config.ClusterID),
 	}
 
-	var (
-		eniList []enisdk.Eni
-		listErr error
-	)
-	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
-		// 这里不需要判断是否使用hpas-client，因为bceclient的定义的时候就确认了是 hpas client 还是 bce client
-		eniList, listErr = n.bceclient.ListENIs(ctx, args)
-
-		if listErr != nil {
-			scopedLog.Warningf("failed to get eni: %v, retry after %s", listErr, eniSyncPeriod)
-			return false, nil
-		}
-		return true, nil
-	}); err != nil {
-		scopedLog.WithError(err).Errorf("failed to get eni")
-		return 0, "", err
+	// Call ListENIs directly without retry - rely on VPC API's built-in retry mechanism
+	eniList, listErr := n.bceclient.ListENIs(ctx, args)
+	if listErr != nil {
+		scopedLog.WithError(listErr).Error("Failed to list ENIs from VPC")
+		return 0, "", fmt.Errorf("failed to list ENIs: %w", listErr)
 	}
+
 	scopedLog.WithField("CostTime", time.Since(startTime)).Infof("Force get ENI from IaaS, eniList length: %d", len(eniList))
 
 	if len(eniList) == 0 {
-		return 0, "", fmt.Errorf("no eni found")
+		scopedLog.Info("No ENI found in VPC")
+		return 0, "no ENI found in VPC", nil
 	}
+
 	createExternalENINum := 0
 	for _, eniObj := range eniList {
 		newENI := &ccev2.ENI{
@@ -779,11 +777,75 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "CreateENISuccess", "create external ENI %s from IaaS on NRS %s success", newENI.Name, n.k8sObj.Name)
 		scopedLog = scopedLog.WithField("ENIID", newENI.Name)
 	}
+
 	return createExternalENINum, "", nil
+}
+
+// isInCooldownPeriod checks if we are currently in cooldown period
+// Returns true if in cooldown, along with remaining time and last error
+func (n *bceNetworkResourceSet) isInCooldownPeriod() (inCooldown bool, remaining time.Duration, lastErr error) {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+
+	if n.lastCreateInterfaceFailureTime == nil {
+		return false, 0, nil
+	}
+
+	timeSinceFailure := time.Since(*n.lastCreateInterfaceFailureTime)
+	if timeSinceFailure < createInterfaceCooldownPeriod {
+		return true, createInterfaceCooldownPeriod - timeSinceFailure, n.lastCreateInterfaceFailureError
+	}
+
+	return false, 0, nil
+}
+
+// clearCooldown clears the cooldown state
+// This should only be called after isInCooldownPeriod() returns false
+func (n *bceNetworkResourceSet) clearCooldown(scopedLog *logrus.Entry) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	if n.lastCreateInterfaceFailureTime != nil {
+		scopedLog.WithField("lastFailureTime", n.lastCreateInterfaceFailureTime.Format(time.RFC3339)).Debug("Cooldown period expired, clearing failure state")
+		n.lastCreateInterfaceFailureTime = nil
+		n.lastCreateInterfaceFailureError = nil
+	}
+}
+
+// enterCooldown enters cooldown period due to non-retryable error
+func (n *bceNetworkResourceSet) enterCooldown(err error, msg string, scopedLog *logrus.Entry) {
+	now := time.Now()
+	n.mutex.Lock()
+	n.lastCreateInterfaceFailureTime = &now
+	n.lastCreateInterfaceFailureError = err
+	n.mutex.Unlock()
+
+	scopedLog.WithFields(logrus.Fields{
+		"error":          err,
+		"msg":            msg,
+		"cooldownPeriod": createInterfaceCooldownPeriod,
+	}).Warning("CreateInterface failed with non-retryable error, entering cooldown period")
+}
+
+// isNonRetryableError checks if the error is non-retryable (subnet IP exhaustion or no available subnet)
+func isNonRetryableError(err error, msg string) bool {
+	return cloud.IsErrorSubnetHasNoMoreIP(err) || msg == errNoAvailableSubnet
 }
 
 // CreateInterface create a new ENI
 func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
+	// Check if we are in cooldown period due to previous non-retryable failure
+	if inCooldown, remaining, lastErr := n.isInCooldownPeriod(); inCooldown {
+		scopedLog.WithFields(logrus.Fields{
+			"cooldownRemaining": remaining,
+			"lastError":         lastErr,
+		}).Info("Skipping CreateInterface due to cooldown period after non-retryable error")
+		return 0, "", fmt.Errorf("in cooldown period after non-retryable error (remaining: %v): %w", remaining, lastErr)
+	}
+
+	// Clear cooldown state since we passed the cooldown period
+	n.clearCooldown(scopedLog)
+
 	var (
 		availableENICount int
 		allENIId          []string
@@ -833,21 +895,42 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 	inums, msg, err := n.real.createInterface(ctx, allocation, scopedLog)
 	n.creatingEni.add(-1)
 
+	// Handle errors from the first createInterface call
+	if err != nil {
+		// Check if this is a non-retryable error
+		if isNonRetryableError(err, msg) {
+			// Enter cooldown period and return immediately
+			n.enterCooldown(err, msg, scopedLog)
+		}
+		// For other errors, return the error but don't enter cooldown
+		return 0, msg, err
+	}
+
+	// Success: proceed to create additional ENIs in background
+
 	preAllocateENINum := math.IntMin(eniQuota.GetMaxENI(), n.k8sObj.Spec.ENI.PreAllocateENI)
 	preAllocateENINum = preAllocateENINum - availableENICount - 1
 	retryTimes := preAllocateENINum * 2
+
 	for i := 0; i < preAllocateENINum; i++ {
 		inums++
 		go func() {
 			retry := 0
 			for retry < retryTimes {
 				n.creatingEni.add(1)
-				_, _, e := n.real.createInterface(ctx, allocation, scopedLog)
+				_, msg, e := n.real.createInterface(ctx, allocation, scopedLog)
 				n.creatingEni.add(-1)
 				if e == nil {
 					scopedLog.Infof("create addition interface success")
 					return
 				}
+
+				// Check if this is a non-retryable error
+				if isNonRetryableError(e, msg) {
+					n.enterCooldown(e, msg, scopedLog)
+					return
+				}
+
 				scopedLog.WithError(e).Warnf("create addition interface failed, retry later for %ds(%d/%d)", retryDelay, retry+1, retryTimes)
 				retry++
 				// attaching ENI is need to wait serveral seconds (<15s) for the ENI to be attached,
@@ -864,7 +947,6 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 // to populate any implementation specific fields in NetResourceSet.Status.
 func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	eniStatusMap := make(map[string]ccev2.SimpleENIStatus)
-	crossSubnetUsed := make(ipamTypes.AllocationMap, 0)
 	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
 	if err != nil {
 		return
@@ -887,7 +969,6 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 		if enis[i].Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
 			continue
 		}
-		allocatedCrossSubnetIPNum := 0
 		// add eni statistics
 		simple := ccev2.SimpleENIStatus{
 			ID:                        enis[i].Spec.ENI.ID,
@@ -897,36 +978,12 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 			IsMoreAvailableIPInSubnet: false,
 		}
 
-		addCrossSubnetAddr := func(addr *models.PrivateIP) {
-			allocationIP := ipamTypes.AllocationIP{
-				Resource:  enis[i].Name,
-				IsPrimary: addr.Primary,
-				SubnetID:  addr.SubnetID,
-			}
-			ceps, _ := n.manager.cepClient.GetByIP(addr.PrivateIPAddress)
-			if len(ceps) > 0 {
-				allocationIP.Owner = ceps[0].Namespace + "/" + ceps[0].Name
-			}
-			if addr.SubnetID != enis[i].Spec.ENI.SubnetID {
-				crossSubnetUsed[addr.PrivateIPAddress] = allocationIP
-				allocatedCrossSubnetIPNum++
-			}
-		}
-
-		for _, addr := range enis[i].Spec.PrivateIPSet {
-			addCrossSubnetAddr(addr)
-		}
-		for _, addr := range enis[i].Spec.IPV6PrivateIPSet {
-			addCrossSubnetAddr(addr)
-		}
-
 		// eni quota may be nil
 		if eniQuota := n.getENIQuota(); eniQuota != nil {
 			capacity := eniQuota.GetMaxIP()
 			simple.AvailableIPNum = capacity - len(enis[i].Spec.PrivateIPSet)
 		}
 
-		simple.AllocatedCrossSubnetIPNum = allocatedCrossSubnetIPNum
 		simple.AllocatedIPNum = len(enis[i].Spec.PrivateIPSet)
 
 		for j := range n.availableSubnets {
@@ -937,10 +994,42 @@ func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 		eniStatusMap[enis[i].Name] = simple
 	}
 	resource.Status.ENIs = eniStatusMap
-	if len(crossSubnetUsed) > 0 {
-		resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
+
+	// populate PSTSUsed: scan all IPs on all ENIs, find those used by PSTS pods
+	pstsUsed := make(ipamTypes.AllocationMap)
+	for i := 0; i < len(enis); i++ {
+		if enis[i].Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
+			continue
+		}
+		addPSTSUsedIP := func(addr *models.PrivateIP) {
+			if addr.Primary {
+				return
+			}
+			ceps, _ := n.manager.cepClient.GetByIP(addr.PrivateIPAddress)
+			if len(ceps) == 0 {
+				return
+			}
+			cep := ceps[0]
+			if cep.Spec.Network.IPAllocation == nil || cep.Spec.Network.IPAllocation.PSTSName == "" {
+				return
+			}
+			pstsUsed[addr.PrivateIPAddress] = ipamTypes.AllocationIP{
+				Resource: enis[i].Name,
+				SubnetID: addr.SubnetID,
+				Owner:    cep.Namespace + "/" + cep.Name,
+			}
+		}
+		for _, addr := range enis[i].Spec.PrivateIPSet {
+			addPSTSUsedIP(addr)
+		}
+		for _, addr := range enis[i].Spec.IPV6PrivateIPSet {
+			addPSTSUsedIP(addr)
+		}
+	}
+	if len(pstsUsed) > 0 {
+		resource.Status.IPAM.PSTSUsed = pstsUsed
 	} else {
-		resource.Status.IPAM.CrossSubnetUsed = nil
+		resource.Status.IPAM.PSTSUsed = nil
 	}
 
 	// update available subnet ids
@@ -1567,9 +1656,6 @@ func searchMaxAvailableSubnet(subnets []*bcesync.BorrowedSubnet) *bcesync.Borrow
 				continue
 			}
 		}
-		if sbn.Spec.Exclusive {
-			continue
-		}
 		if bestSubnet == nil || bestSubnet.BorrowedAvailableIPsCount < sbn.BorrowedAvailableIPsCount {
 			bestSubnet = sbn
 		}
@@ -1610,7 +1696,7 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 				SubnetID:         action.SubnetID,
 			})
 		}
-		interfaceID, err = n.real.reuseIPs(ctx, ipset, action.Owner)
+		interfaceID, err = n.real.reuseIPs(ctx, ipset, action.Owner, action.ClientToken)
 		if err != nil {
 			return err
 		}
@@ -1645,7 +1731,8 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 	if err != nil {
 		return fmt.Errorf("get eni %s failed: %v", interfaceID, err)
 	}
-	return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
+
+	updateErr := n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 		for index := range ipset {
 			address := ipset[index]
 			if address.PrivateIPAddress == "" {
@@ -1653,13 +1740,14 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 			}
 			ip := net.ParseIP(address.PrivateIPAddress)
 			if ip.To4() == nil {
-				eni.Spec.ENI.PrivateIPSet = appenUniqueElement(eni.Spec.IPV6PrivateIPSet, []*models.PrivateIP{address})
+				eni.Spec.ENI.IPV6PrivateIPSet = appenUniqueElement(eni.Spec.IPV6PrivateIPSet, []*models.PrivateIP{address})
 			} else {
 				eni.Spec.ENI.PrivateIPSet = appenUniqueElement(eni.Spec.PrivateIPSet, []*models.PrivateIP{address})
 			}
 		}
 		return eni
 	})
+	return updateErr
 }
 
 // DeleteIP implements endpoint.DirectEndpointOperation

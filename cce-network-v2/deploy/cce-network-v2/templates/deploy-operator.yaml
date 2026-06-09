@@ -168,7 +168,7 @@ spec:
             items:
               - key: config
                 path: kubeconfig
-            name: kube-config-admin
+            name: {{ .Values.kubeConfigConfigMapName | default "kube-config-admin" }}
           name: cce-cni-v2
         {{- end }}
         {{- if .Values.network.operator.webhook.enable }}

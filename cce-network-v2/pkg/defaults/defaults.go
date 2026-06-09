@@ -260,6 +260,9 @@ const (
 	// initial allocator state from kvstore before exiting.
 	AllocatorListTimeout = 3 * time.Minute
 
+	// NRSListTimeout specifies the timeout for listing NetResourceSets
+	NRSListTimeout = 60 * time.Second
+
 	// K8sWatcherEndpointSelector specifies the k8s endpoints that CCE
 	// should watch for.
 	K8sWatcherEndpointSelector = "metadata.name!=kube-scheduler,metadata.name!=kube-controller-manager,metadata.name!=etcd-operator,metadata.name!=gcp-controller-manager"
@@ -286,6 +289,12 @@ const (
 	// enabled by default to annotate kubernetes node and can be disabled using
 	// the provided option.
 	AnnotateK8sNode = false
+
+	// EnableNodeDiscoveryWaitAnnotation is the default value for option.EnableNodeDiscoveryWaitAnnotation.
+	EnableNodeDiscoveryWaitAnnotation = false
+
+	// NodeDiscoveryWaitAnnotationKey is the default annotation key that gates node discovery.
+	NodeDiscoveryWaitAnnotationKey = "node.cce.baidubce.com/annotation-synced"
 
 	// MonitorBufferPages is the default number of pages to use for the
 	// ring buffer interacting with the kernel

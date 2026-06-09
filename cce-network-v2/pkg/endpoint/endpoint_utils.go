@@ -100,13 +100,18 @@ func IsSameContainerID(ep *ccev2.CCEEndpoint, containerID string) bool {
 
 // AppendEndpointStatus appends node status to given pod endpoint status
 func AppendEndpointStatus(newStatus *ccev2.EndpointStatus, status models.EndpointState, code string) bool {
+	return AppendEndpointStatusWithMessage(newStatus, status, code, "")
+}
+
+// AppendEndpointStatusWithMessage appends node status with a detailed message to given pod endpoint status
+func AppendEndpointStatusWithMessage(newStatus *ccev2.EndpointStatus, status models.EndpointState, code string, message string) bool {
 	update := newStatus.State != string(status)
-	// update state and log
 	newStatus.State = string(status)
 	newLog := &models.EndpointStatusChange{
 		Code:      code,
 		State:     status,
 		Timestamp: time.Now().Format(time.RFC3339),
+		Message:   message,
 	}
 	if len(newStatus.Log) == 0 {
 		newStatus.Log = append(newStatus.Log, newLog)
@@ -125,10 +130,6 @@ func AppendEndpointStatus(newStatus *ccev2.EndpointStatus, status models.Endpoin
 		update = true
 	}
 	return update
-}
-
-func IsFixedIPEndpoint(resource *ccev2.CCEEndpoint) bool {
-	return resource.Spec.Network.IPAllocation != nil && resource.Spec.Network.IPAllocation.Type == ccev2.IPAllocTypeFixed
 }
 
 func IsPSTSEndpoint(resource *ccev2.CCEEndpoint) bool {

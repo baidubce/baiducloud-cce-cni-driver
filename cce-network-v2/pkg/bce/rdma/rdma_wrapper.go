@@ -627,9 +627,6 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 func (n *rdmaNetResourceSetWrapper) searchMaxAvailableSubnet(subnets []*bcesync.BorrowedSubnet) *bcesync.BorrowedSubnet {
 	var bestSubnet *bcesync.BorrowedSubnet
 	for _, sbn := range subnets {
-		if sbn.Spec.Exclusive {
-			continue
-		}
 		if bestSubnet == nil || bestSubnet.BorrowedAvailableIPsCount < sbn.BorrowedAvailableIPsCount {
 			bestSubnet = sbn
 		}

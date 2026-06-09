@@ -194,7 +194,7 @@ type SimpleENIStatus struct {
 	// AllocatedIPNum Number of IPs assigned to eni
 	AllocatedIPNum int `json:"allocatedIPNum,omitempty"`
 
-	// AllocatedCrossSubnetIPNum number of IPs assigned to eni across subnet
+	// AllocatedCrossSubnetIPNum number of IPs assigned to eni across subnet (deprecated)
 	AllocatedCrossSubnetIPNum int `json:"allocatedCrossSubnetIPNum,omitempty"`
 
 	// SubnetID the subnet id of eni primary ip

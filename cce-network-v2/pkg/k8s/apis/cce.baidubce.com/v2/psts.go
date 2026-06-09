@@ -113,6 +113,17 @@ type PodSubnetTopologySpreadSpec struct {
 
 type CustomAllocationList []CustomAllocation
 
+// HasRangeOrCIDRs returns true if any allocation in the list has Range or CIDRs specified.
+// A list with only family (e.g. [{family:4}]) is considered as no range — subnet-level random allocation.
+func (l CustomAllocationList) HasRangeOrCIDRs() bool {
+	for _, alloc := range l {
+		if len(alloc.Range) > 0 || len(alloc.CIDRs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 type UnsatisfiableConstraintAction string
 
 const (
@@ -129,14 +140,14 @@ type IPAllocationStrategy struct {
 	// If the type is empty, the subnet type is used
 	Type IPAllocType `json:"type,omitempty"`
 
-	// +kubebuilder:default:=TTL
-
 	// IP address recycling policy
 	// TTL: represents the default dynamic IP address recycling policy,default.
 	// Never: this policy can only be used in fixed IP scenarios
+	// !!! abandoned since 2.13.9
 	ReleaseStrategy ReleaseStrategy `json:"releaseStrategy,omitempty"`
 
 	// ReuseIPAddress Whether to enable address reuse with the same pod name
+	// !!! abandoned since 2.13.9
 	EnableReuseIPAddress bool `json:"enableReuseIPAddress,omitempty"`
 
 	// TTL How long after the pod is deleted, the IP will be deleted, regardless of whether the IP reuse mode is enabled
@@ -151,6 +162,9 @@ type CustomAllocation struct {
 	// Range User defined IP address range. Note that this range must be smaller than the subnet range
 	// Note that the definitions of multiple ranges cannot be duplicate
 	Range []CustomIPRange `json:"range,omitempty"`
+	// CIDRs User defined CIDR blocks. Note that these CIDRs must be within the subnet range
+	// Note that CIDRs cannot overlap with Range definitions
+	CIDRs []string `json:"cidrs,omitempty"`
 }
 
 // CustomIPRange User defined IP address range. Note that this range must be smaller than the subnet range
@@ -190,10 +204,8 @@ type PodSubnetTopologySpreadStatus struct {
 	SchedulableSubnetsNum   int32                      `json:"availableSubnetsNum,omitempty"`
 	UnSchedulableSubnetsNum int32                      `json:"unavailableSubnetsNum,omitempty"`
 	AvailableSubnets        map[string]SubnetPodStatus `json:"availableSubnets,omitempty"`
-	// total number of pods match label selector
-	PodMatchedCount int32 `json:"podMatchedCount,omitempty"`
-	// Total pod expected to be affected
-	PodAffectedCount   int32                      `json:"podAffectedCount,omitempty"`
+	// total number of pods bound to this PSTS (counted by CEPs where Spec.Network.IPAllocation.PSTSName == this PSTS name)
+	PodMatchedCount    int32                      `json:"podMatchedCount,omitempty"`
 	UnavailableSubnets map[string]SubnetPodStatus `json:"unavailableSubnets,omitempty"`
 }
 

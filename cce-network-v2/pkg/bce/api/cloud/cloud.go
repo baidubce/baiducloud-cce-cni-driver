@@ -414,12 +414,18 @@ func (c *Client) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIP
 }
 
 func (c *Client) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
+	return c.BatchAddPrivateIpCrossSubnetWithClientToken(ctx, eniID, subnetID, privateIPs, count, isIpv6, "")
+}
+
+// BatchAddPrivateIpCrossSubnetWithClientToken adds private IPs to an ENI across subnets with client token for idempotency
+func (c *Client) BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
 	t := time.Now()
 
 	var ips []eni.PrivateIpArgs
 	arg := &eni.EniBatchAddPrivateIpCrossSubnetArgs{
-		EniId:  eniID,
-		IsIpv6: isIpv6,
+		EniId:       eniID,
+		ClientToken: clientToken,
+		IsIpv6:      isIpv6,
 	}
 	if len(privateIPs) != 0 {
 		for _, ip := range privateIPs {

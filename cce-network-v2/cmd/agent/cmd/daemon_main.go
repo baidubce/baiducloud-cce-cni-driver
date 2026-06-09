@@ -190,6 +190,12 @@ func initializeFlags() {
 	flags.Bool(option.AnnotateK8sNode, defaults.AnnotateK8sNode, "Annotate Kubernetes node")
 	option.BindEnv(option.AnnotateK8sNode)
 
+	flags.Bool(option.EnableNodeDiscoveryWaitAnnotation, defaults.EnableNodeDiscoveryWaitAnnotation, "Wait for node annotation before starting node discovery")
+	option.BindEnv(option.EnableNodeDiscoveryWaitAnnotation)
+
+	flags.String(option.NodeDiscoveryWaitAnnotationKey, defaults.NodeDiscoveryWaitAnnotationKey, "Node annotation key to gate node discovery")
+	option.BindEnv(option.NodeDiscoveryWaitAnnotationKey)
+
 	flags.Bool(option.AutoCreateNetResourceSetResource, defaults.AutoCreateNetResourceSetResource, "Automatically create NetResourceSet resource for own node on startup")
 	option.BindEnv(option.AutoCreateNetResourceSetResource)
 
@@ -481,6 +487,9 @@ func initializeFlags() {
 
 	flags.Duration(option.FixedIPTimeout, defaults.CCEEndpointGCInterval, "Timeout for waiting for the fixed IP assignment to succeed")
 	option.BindEnv(option.FixedIPTimeout)
+
+	flags.Duration(option.NRSListTimeout, defaults.NRSListTimeout, "NetResourceSets list timeout")
+	option.BindEnv(option.NRSListTimeout)
 
 	flags.Bool(option.EnableCCEEndpointSlice, false, "If set to true, CCEEndpointSlice feature is enabled and cce agent watch for CCEEndpointSlice instead of CCEEndpoint to update the IPCache.")
 	option.BindEnv(option.EnableCCEEndpointSlice)

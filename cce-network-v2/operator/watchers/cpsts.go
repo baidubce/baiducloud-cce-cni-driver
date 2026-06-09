@@ -216,7 +216,6 @@ func (s *cpstsSyncher) Update(resource *ccev2alpha1.ClusterPodSubnetTopologySpre
 			newStatus.SubStatus[affectNamespaces[i].Name] = psts.Status
 			newStatus.SubObjectCount++
 			newStatus.Status.PodMatchedCount += psts.Status.PodMatchedCount
-			newStatus.Status.PodAffectedCount += psts.Status.PodAffectedCount
 		}
 	}
 

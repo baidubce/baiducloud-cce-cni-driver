@@ -117,6 +117,8 @@ type RdmaDiscovery struct {
 // agent startup to configure the local node based on the configuration options
 // passed to the agent. nodeName is the name to be used in the local agent.
 func (rd *RdmaDiscovery) StartDiscovery() {
+	rd.waitForNodeAnnotation()
+
 	k8sNode, err := rd.k8sNodeGetter.GetK8sNode(
 		context.TODO(),
 		nodeTypes.GetName(),
@@ -264,6 +266,15 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 	canReturn := false
 	hasNonERIManagedInterfaces := false
 	for macAddress, rii := range rdmaIFs {
+		// In vpc-route mode, ERI should follow ENI path, so skip RDMA NRS processing.
+		if bceutils.ShouldSkipERIInVPCRoute(rii.VifFeatures) {
+			rdLog.WithFields(logrus.Fields{
+				"macAddress": macAddress,
+				"nrsName":    rii.NetResourceSetName,
+			}).Info("Skipping ERI interface in vpc-route mode")
+			continue
+		}
+
 		// Check if it is an ERI interface and ERI management is enabled, if so, agent should exit
 		if rd.shouldExitOnRegularERINRS(rii) {
 			rd.exitOnRegularERINRS(rii, macAddress)
@@ -638,7 +649,7 @@ func (rd *RdmaDiscovery) cleanupStaleRdmaNRS(currentRdmaIfs map[string]bceutils.
 // Queries API server directly to avoid informer cache filtering issues
 func (rd *RdmaDiscovery) getInstanceNetResourceSets(instanceID string) ([]*ccev2.NetResourceSet, error) {
 	hostname := nodeTypes.GetName()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), option.Config.NRSListTimeout)
 	defer cancel()
 
 	// Only list nrs for this node

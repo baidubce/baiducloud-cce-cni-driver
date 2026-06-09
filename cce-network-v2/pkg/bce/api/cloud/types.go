@@ -49,6 +49,7 @@ type Interface interface {
 	// Note that this feature needs to initiate a work order in advance to
 	// enable the cross subnet IP allocation function
 	BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error)
+	BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error)
 	BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error)
 	BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error)
 	BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string, isIpv6 bool) error

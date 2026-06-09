@@ -122,7 +122,6 @@ spec:
                       the same pod name
                     type: boolean
                   releaseStrategy:
-                    default: TTL
                     description: 'IP address recycling policy TTL: represents the
                       default dynamic IP address recycling policy,default. Never:
                       this policy can only be used in fixed IP scenarios'
@@ -152,6 +151,13 @@ spec:
                     description: CustomAllocation User defined IP address management
                       policy
                     properties:
+                      cidrs:
+                        description: CIDRs User defined CIDR blocks. Note that these
+                          CIDRs must be within the subnet range Note that CIDRs cannot
+                          overlap with Range definitions
+                        items:
+                          type: string
+                        type: array
                       family:
                         default: 4
                         description: Family of IP Address. 4 or 6

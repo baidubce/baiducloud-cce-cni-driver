@@ -121,12 +121,12 @@ func (m *mockMetadataClient) GetInstanceName() (string, error) { return "", m.ge
 func (m *mockMetadataClient) GetAvailabilityZone() (string, error) {
 	return m.availabilityZone, m.genericErr
 }
-func (m *mockMetadataClient) GetRegion() (string, error)     { return "", m.genericErr }
-func (m *mockMetadataClient) GetLocalIPv4() (string, error)  { return "", m.genericErr }
-func (m *mockMetadataClient) GetInstanceID() (string, error) { return m.instanceID, m.genericErr }
-func (m *mockMetadataClient) GetResourceID() (string, error) { return m.resourceID, m.genericErr }
-func (m *mockMetadataClient) GetSubnetID() (string, error)   { return m.subnetID, m.genericErr }
-func (m *mockMetadataClient) GetInstanceSpecs() (string, error)    { return m.instanceSpecs, m.genericErr }
+func (m *mockMetadataClient) GetRegion() (string, error)        { return "", m.genericErr }
+func (m *mockMetadataClient) GetLocalIPv4() (string, error)     { return "", m.genericErr }
+func (m *mockMetadataClient) GetInstanceID() (string, error)    { return m.instanceID, m.genericErr }
+func (m *mockMetadataClient) GetResourceID() (string, error)    { return m.resourceID, m.genericErr }
+func (m *mockMetadataClient) GetSubnetID() (string, error)      { return m.subnetID, m.genericErr }
+func (m *mockMetadataClient) GetInstanceSpecs() (string, error) { return m.instanceSpecs, m.genericErr }
 
 func (m *mockMetadataClient) GetLinkPrimaryIP(macAddress string) (string, error) {
 	if m.primaryIP != "" {

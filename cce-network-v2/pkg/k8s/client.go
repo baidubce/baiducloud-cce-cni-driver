@@ -80,6 +80,8 @@ func WatcherClient() *K8sClient {
 }
 
 // CCEClient returns the default CCE Kubernetes client.
+//
+//go:noinline
 func CCEClient() *K8sCCEClient {
 	return k8sCCECLI
 }
@@ -324,6 +326,7 @@ var (
 	eventBroadcaster record.EventBroadcaster
 )
 
+//go:noinline
 func EventBroadcaster() record.EventBroadcaster {
 	if eventBroadcaster != nil {
 		return eventBroadcaster

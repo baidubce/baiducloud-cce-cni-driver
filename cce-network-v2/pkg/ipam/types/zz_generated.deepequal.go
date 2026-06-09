@@ -141,6 +141,13 @@ func (in *IPAMStatus) DeepEqual(other *IPAMStatus) bool {
 		}
 	}
 
+	if ((in.PSTSUsed != nil) && (other.PSTSUsed != nil)) || ((in.PSTSUsed == nil) != (other.PSTSUsed == nil)) {
+		in, other := &in.PSTSUsed, &other.PSTSUsed
+		if other == nil || !in.DeepEqual(other) {
+			return false
+		}
+	}
+
 	if ((in.PodCIDRs != nil) && (other.PodCIDRs != nil)) || ((in.PodCIDRs == nil) != (other.PodCIDRs == nil)) {
 		in, other := &in.PodCIDRs, &other.PodCIDRs
 		if other == nil {

@@ -17,7 +17,6 @@ package watchers
 
 import (
 	"context"
-	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -88,7 +87,7 @@ func (c *subnetUpdaterImpl) UpdateStatus(newResource *ccev1.Subnet) (*ccev1.Subn
 	return k8s.CCEClient().CceV1().Subnets().UpdateStatus(context.TODO(), newResource, metav1.UpdateOptions{})
 }
 
-func (c *subnetUpdaterImpl) EnsureSubnet(vpcID, sbnID string, exclusive bool) (*ccev1.Subnet, error) {
+func (c *subnetUpdaterImpl) EnsureSubnet(vpcID, sbnID string) (*ccev1.Subnet, error) {
 	sbn, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().Get(sbnID)
 	if err != nil {
 		newSubnet := ccev1.Subnet{
@@ -96,9 +95,8 @@ func (c *subnetUpdaterImpl) EnsureSubnet(vpcID, sbnID string, exclusive bool) (*
 				Name: sbnID,
 			},
 			Spec: ccev1.SubnetSpec{
-				ID:        sbnID,
-				VPCID:     vpcID,
-				Exclusive: exclusive,
+				ID:    sbnID,
+				VPCID: vpcID,
 			},
 			Status: ccev1.SubnetStatus{
 				Enable: false,
@@ -108,9 +106,6 @@ func (c *subnetUpdaterImpl) EnsureSubnet(vpcID, sbnID string, exclusive bool) (*
 		if err != nil {
 			return nil, err
 		}
-	}
-	if sbn != nil && sbn.Spec.Exclusive != exclusive {
-		return nil, fmt.Errorf("subnet %s exclusive %t not match", sbnID, exclusive)
 	}
 	return sbn, nil
 }

@@ -20,9 +20,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"sort"
 	"time"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -310,7 +311,7 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 	bestSubnet := searchMaxAvailableSubnet(n.availableSubnets)
 
 	if bestSubnet == nil {
-		msg = errUnableToFindSubnet
+		msg = errNoAvailableSubnet
 		err = fmt.Errorf(
 			"no matching subnet available for interface creation (VPC=%s AZ=%s SubnetIDs=%v)",
 			resource.Spec.ENI.VpcID,

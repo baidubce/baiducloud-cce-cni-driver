@@ -15,6 +15,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhook"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhook/podmutating"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhook/pstsmutating"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhookcontroller"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -34,6 +35,9 @@ func NewRootCommand() *cobra.Command {
 			_, _, err := k8s.InitNewK8sClient()
 			if err != nil {
 				klog.Fatalf("create k8s client failed: %v", err)
+			}
+			if err := pstsmutating.Init(); err != nil {
+				klog.Fatalf("init psts webhook failed: %v", err)
 			}
 			go runMetricServer()
 
@@ -57,7 +61,7 @@ func runMetricServer() {
 	http.Handle("/metrics", promhttp.Handler())
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
-		klog.Fatalf("failed to run webhook metrics server: %v", err)
+		klog.Errorf("failed to run webhook metrics server: %v", err)
 	}
 }
 

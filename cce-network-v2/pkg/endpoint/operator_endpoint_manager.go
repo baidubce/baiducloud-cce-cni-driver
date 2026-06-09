@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
@@ -33,7 +32,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorMetrics "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/metrics"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	operatorWatchers "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -44,6 +43,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/bce-sdk-go/services/vpc"
 )
 
 var (
@@ -59,10 +59,14 @@ type EndpointManager struct {
 
 	remoteIPPool map[string]ipamTypes.AllocationMap
 
-	fixedIPProvider       EndpointMunalAllocatorProvider
 	pstsAllocatorProvider EndpointMunalAllocatorProvider
 
+	// localPool manages all PSTS local IP pools globally.
+	// Each EndpointManager instance has exactly one localPool instance (singleton per operator).
 	localPool *localPool
+
+	// VPC client for IP reserve operations
+	vpcClient *vpc.Client
 
 	// k8sAPI is used to access the Kubernetes API
 	k8sAPI        CCEEndpointGetterUpdater
@@ -73,12 +77,13 @@ type EndpointManager struct {
 	syncedPool    sync.Map // key: string, value: string (revision)
 }
 
-func NewEndpointManager(getterUpdater CCEEndpointGetterUpdater, reuseIPImplement DirectIPAllocator) *EndpointManager {
+func NewEndpointManager(getterUpdater CCEEndpointGetterUpdater, reuseIPImplement DirectIPAllocator, vpcClient *vpc.Client) *EndpointManager {
 	manager := &EndpointManager{
 		directIPAllocator:      reuseIPImplement,
 		fixedIPPoolEndpointMap: make(map[string]map[string]*ccev2.CCEEndpoint),
 		localPool:              newLocalPool(),
 		remoteIPPool:           make(map[string]ipamTypes.AllocationMap),
+		vpcClient:              vpcClient,
 
 		k8sAPI:        getterUpdater,
 		pstsLister:    k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Lister(),
@@ -87,7 +92,6 @@ func NewEndpointManager(getterUpdater CCEEndpointGetterUpdater, reuseIPImplement
 		eventRecorder: k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: operatorName}),
 	}
 
-	manager.fixedIPProvider = &reuseIPAllocatorProvider{manager}
 	manager.pstsAllocatorProvider = &pstsAllocatorProvider{EndpointManager: manager}
 	return manager
 }
@@ -125,6 +129,39 @@ func (manager *EndpointManager) Start(ctx context.Context) error {
 		manager.localPool.updateSubnet(nil, sbn)
 	}
 
+	// Watch PSTS resources to maintain local IP pools for PSTS allocations
+	// Note: This watch is separate from operator/watchers/psts.go which handles PSTS lifecycle.
+	// Here we only care about PSTS annotation changes (IPReserve info) to sync local pools.
+	// TODO: Consider moving this to a dedicated PSTS pool manager to separate concerns.
+	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer().AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				manager.localPool.updatePSTS(nil, obj)
+			},
+			UpdateFunc: manager.localPool.updatePSTS,
+			DeleteFunc: manager.localPool.deletePSTS,
+		},
+	)
+
+	// Initialize existing PSTS pools
+	pstsList, err := manager.pstsLister.List(labels.Everything())
+	if err != nil {
+		managerLog.WithError(err).Error("Failed to list PSTS resources")
+	} else {
+		for _, psts := range pstsList {
+			manager.localPool.updatePSTS(nil, psts)
+		}
+	}
+
+	// Restore realOccupied state in PSTS local pools from existing CEPs.
+	ceps, err := manager.k8sAPI.Lister().List(labels.Everything())
+	if err != nil {
+		managerLog.WithError(err).Error("Failed to list CCEEndpoints for local pool restore")
+	} else {
+		totalIPs, marked := manager.localPool.restoreOccupiedFromCEPs(ceps)
+		managerLog.Infof("Restored PSTS local pool occupancy from CEPs: totalIPs=%d, marked=%d", totalIPs, marked)
+	}
+
 	return nil
 }
 
@@ -134,7 +171,7 @@ func (manager *EndpointManager) Create(resource *ccev2.CCEEndpoint) error {
 
 func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 	// not managed endpoint
-	if !IsFixedIPEndpoint(resource) && !IsPSTSEndpoint(resource) {
+	if !IsPSTSEndpoint(resource) {
 		return nil
 	}
 
@@ -193,12 +230,26 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 		}
 	}
 
-	// reuse ip when pod rescheduler or recreate
-	if (resource.Status.Networking != nil &&
-		resource.Status.Networking.NodeIP == newNodeName &&
-		len(resource.Status.Networking.Addressing) != 0) &&
-		(resource.Status.ExternalIdentifiers != nil &&
-			resource.Status.ExternalIdentifiers.K8sObjectID == resource.Spec.ExternalIdentifiers.K8sObjectID) {
+	// Check if Pod has been deleted (status changed to PodDeleted)
+	// This must be checked BEFORE the reuse short-circuit below,
+	// because a PodDeleted CEP still has valid Networking/Addressing/K8sObjectID.
+	// For PSTS Fixed mode endpoints, release IP from ENI when Pod is deleted
+	// Note: Elastic mode endpoints are deleted immediately by Agent, so they won't reach here
+	if newStatus.State == string(models.EndpointStatePodDeleted) && IsPSTSEndpoint(resource) {
+		err = manager.handlePodDeletedIPRelease(ctx, resource, logEntry)
+		if err != nil {
+			// Return error to trigger retry - critical operations must succeed
+			logEntry.WithError(err).Error("Failed to handle Pod deleted IP release, will retry")
+			return err
+		}
+		// Don't allocate new IP, just update status
+		goto update
+	}
+
+	// Reuse IP when pod rescheduler or recreate.
+	// Do not short-circuit when CEP is in "restoring" state, otherwise state cannot
+	// progress to "ip-allocated" and may get stuck.
+	if shouldSkipReuseUpdate(resource, newNodeName) {
 		return nil
 	}
 
@@ -209,14 +260,15 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 			NodeIP: newNodeName,
 		}
 	}
-	if IsPSTSEndpoint(resource) {
-		err = manager.pstsAllocatorProvider.AllocateIP(ctx, logEntry, newObj)
-	} else if IsFixedIPEndpoint(resource) {
-		err = manager.fixedIPProvider.AllocateIP(ctx, logEntry, newObj)
-	}
 
+	// Allocate IP for PSTS Fixed mode endpoints
+	err = manager.pstsAllocatorProvider.AllocateIP(ctx, logEntry, newObj)
 	if err != nil || newStatus.Networking == nil || len(newStatus.Networking.Addressing) == 0 {
-		AppendEndpointStatus(newStatus, models.EndpointStateInvalid, models.EndpointStatusChangeCodeFailed)
+		errMsg := "IP allocation failed"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		AppendEndpointStatusWithMessage(newStatus, models.EndpointStateInvalid, models.EndpointStatusChangeCodeFailed, errMsg)
 		goto update
 	}
 
@@ -268,59 +320,28 @@ update:
 	return apiError
 }
 
-// handlerUpdateResult 是EndpointManager结构体的一个方法，用于处理更新结果的回调函数
-func (manager *EndpointManager) handlerUpdateResult(ctx context.Context, start time.Time, logEntry *logrus.Entry, err error, newObj, oldObj *ccev2.CCEEndpoint) {
-	// case 1: successfully assigned IP, and the new and old IPs are different
-	// The remote IP has been released, so the local IP is directly released
-	if err == nil {
-		manager.localPool.addEndpointAddress(newObj)
-
-		if oldObj.Status.Networking != nil && len(oldObj.Status.Networking.Addressing) > 0 {
-			var oldIPs = map[string]*ccev2.AddressPair{}
-			for i := range oldObj.Status.Networking.Addressing {
-				oldIPs[oldObj.Status.Networking.Addressing[i].IP] = oldObj.Status.Networking.Addressing[i]
-			}
-			for _, existingAddr := range newObj.Status.Networking.Addressing {
-				if _, ok := oldIPs[existingAddr.IP]; ok {
-					delete(oldIPs, existingAddr.IP)
-				}
-			}
-			for _, oldAddr := range oldIPs {
-				manager.localPool.releaseLocalIPs(oldAddr)
-			}
-		}
-	} else {
-		logEntry.WithError(err).Errorf("failed to handle cep update, try to release the allocated IPs")
-		// case 2: failed to assign the new IP, just release the new IPs
-		if oldObj.Status.Networking == nil || len(oldObj.Status.Networking.Addressing) == 0 {
-			if oldObj.Status.Networking == nil || len(oldObj.Status.Networking.Addressing) == 0 {
-				logEntry.Info("cep is not allocated, no need to release the IP")
-				return
-			}
-			operation, err := manager.directIPAllocator.NodeEndpoint(newObj)
-			if err != nil {
-				logEntry.Errorf("can not gc the allocated failture, failed to get node endpoint %v", err)
-			}
-			action := &DirectIPAction{
-				NodeName:   newObj.Spec.Network.IPAllocation.NodeName,
-				Owner:      newObj.Namespace + "/" + newObj.Name,
-				Addressing: newObj.Status.Networking.Addressing,
-			}
-			err = operation.DeleteIP(ctx, action)
-			if err != nil {
-				logEntry.WithField("addrs", logfields.Repr(newObj.Status.Networking.Addressing)).
-					WithError(err).
-					Errorf("release the allocated IPs failed")
-			}
-
-			logEntry.WithField("addrs", logfields.Repr(newObj.Status.Networking.Addressing)).Info("release the allocated IPs success")
-			if newObj.Status.Networking != nil && len(newObj.Status.Networking.Addressing) > 0 {
-				for _, newAddr := range newObj.Status.Networking.Addressing {
-					manager.localPool.releaseLocalIPs(newAddr)
-				}
-			}
-		}
+func shouldSkipReuseUpdate(resource *ccev2.CCEEndpoint, newNodeName string) bool {
+	if resource == nil {
+		return false
 	}
+	if resource.Status.State == string(models.EndpointStateRestoring) {
+		return false
+	}
+	return (resource.Status.Networking != nil &&
+		resource.Status.Networking.NodeIP == newNodeName &&
+		len(resource.Status.Networking.Addressing) != 0) &&
+		(resource.Status.ExternalIdentifiers != nil &&
+			resource.Spec.ExternalIdentifiers != nil &&
+			resource.Status.ExternalIdentifiers.K8sObjectID == resource.Spec.ExternalIdentifiers.K8sObjectID)
+}
+
+// handlerUpdateResult handles the result of CEP update operation
+// Only records metrics - local pool state is managed by Informer (addEndpointAddress/deleteEndpointAddress)
+func (manager *EndpointManager) handlerUpdateResult(ctx context.Context, start time.Time, logEntry *logrus.Entry, err error, newObj, oldObj *ccev2.CCEEndpoint) {
+	if err != nil {
+		logEntry.WithError(err).Error("Failed to handle CEP update")
+	}
+	// Record metrics for monitoring
 	manager.recordEvent(metrics.LabelEventMethodUpdate, start, err, newObj)
 }
 
@@ -360,7 +381,7 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 		manager.recordEvent(metrics.LabelEventMethodDelete, start, err, cep)
 	}()
 
-	if !IsFixedIPEndpoint(newCEP) && !IsPSTSEndpoint(newCEP) {
+	if !IsPSTSEndpoint(newCEP) {
 		// if the node of cep is not exist, we should delete this cep immediately,
 		// else if the node of cep is exist, we should wait for the agent to gc this cep
 		if newCEP != nil && newCEP.Spec.Network.IPAllocation != nil {
@@ -380,10 +401,19 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 		goto removeFinalizer
 	}
 
+	// Release IP from ENI - critical to free ENI resources
 	operation, err = manager.directIPAllocator.NodeEndpoint(newCEP)
-	if err != nil && !errors.IsNotFound(err) || operation == nil {
+	if err != nil {
+		if errors.IsNotFound(err) {
+			log.WithError(err).Warn("node endpoint not found while deleting CEP, treat as success and remove finalizer")
+			goto removeFinalizer
+		}
 		log.Errorf("failed to get node endpoint %v", err)
 		return err
+	}
+	if operation == nil {
+		log.Warn("node endpoint operation is nil while deleting CEP, skip release and remove finalizer")
+		goto removeFinalizer
 	}
 	action = &DirectIPAction{
 		NodeName:   newCEP.Spec.Network.IPAllocation.NodeName,
@@ -392,8 +422,8 @@ func (manager *EndpointManager) Delete(namespace, name string) error {
 	}
 	err = operation.DeleteIP(ctx, action)
 	// if err is eni not found, it means that the ip has been released, just ignore it and continue to remove finalizer
-	if err != nil && !errors.IsNotFound(err) {
-		log.Errorf("failed to delete ip: %v", err)
+	if err != nil && !errors.IsNotFound(err) && !cloud.IsIPAlreadyDeleted(err) {
+		log.Errorf("failed to delete IP from ENI, will retry: %v", err)
 		return err
 	}
 
@@ -411,136 +441,9 @@ removeFinalizer:
 }
 
 func (manager *EndpointManager) Resync(ctx context.Context) error {
-	manager.gcReusedEndpointTTL()
+	// Note: PSTS Fixed mode CEP TTL-based GC is handled by Agent's pstsFixedIPEndpointsGC()
+	// Operator only handles finalizer removal when CEP is deleted
 	return nil
-}
-
-// gcReusedEndpointTTL delete fixed ip endpoint when ttl is expired
-func (manager *EndpointManager) gcReusedEndpointTTL() {
-	var (
-		logEntry = managerLog.WithFields(logrus.Fields{
-			logfields.LogSubsys: "EndpointManager",
-			"event":             "gcFixedEndpoint",
-		})
-		epToDelete []*ccev2.CCEEndpoint
-	)
-	// for each all endpoints to check endpoint ttl
-	ceps, err := manager.k8sAPI.Lister().CCEEndpoints(metav1.NamespaceAll).List(labels.Everything())
-	if err != nil {
-		logEntry.WithError(err).Error("failed to get ceps")
-		return
-	}
-	for _, cep := range ceps {
-		if !IsFixedIPEndpoint(cep) && !IsPSTSEndpoint(cep) {
-			continue
-		}
-		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL {
-			continue
-		}
-
-		// if endpoint is not fixed ip mode, skip it
-		if cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeElastic &&
-			cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeFixed {
-			continue
-		}
-
-		log := logEntry.WithFields(logrus.Fields{
-			"namespace": cep.Namespace,
-			"name":      cep.Name,
-			"step":      "gcFixedIPEndpoint",
-		})
-		// repair endpoint status for endpoint is 'deleted' while pod is 'running'
-		// BUG: may cause by operator and agent update endpoint currently
-		if manager.repairEPState(cep, log) {
-			continue
-		}
-
-		if cep.Spec.Network.IPAllocation.ReleaseStrategy != ccev2.ReleaseStrategyTTL ||
-			cep.Spec.Network.IPAllocation.Type != ccev2.IPAllocTypeElastic {
-			continue
-		}
-
-		// if endpoint is not reused ip mode, skip it
-		if cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted == nil {
-			expireDuration := int64(operatorOption.Config.FixedIPTTL.Seconds())
-			cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &expireDuration
-		}
-
-		if cep.Status.State == string(models.EndpointStatePodDeleted) {
-			if len(cep.Status.Log) == 0 {
-				log.Warningf("gc fixed ip failed, no controller log in endpoint status")
-				continue
-			}
-
-			expireDuration := operatorOption.Config.FixedIPTTL
-			if cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted != nil {
-				userTTL := *cep.Spec.Network.IPAllocation.TTLSecondsAfterDeleted
-				if userTTL != 0 {
-					expireDuration = time.Duration(userTTL) * time.Second
-				}
-			}
-			podDeletedTime, err := time.Parse(time.RFC3339, cep.Status.Log[len(cep.Status.Log)-1].Timestamp)
-			if err != nil {
-				log.WithError(err).Error("gc fixed ip failed")
-				continue
-			}
-			if time.Now().After(podDeletedTime.Add(expireDuration)) {
-				log.Infof("fixed ip endpoint is expired after delete %s, prepare to delete", expireDuration.String())
-				epToDelete = append(epToDelete, cep)
-			}
-		}
-
-	}
-
-	// delete ip in cloud provider and endpoint in k8s
-	for _, cep := range epToDelete {
-		err := manager.k8sAPI.Delete(cep.Namespace, cep.Name)
-		logEntry.WithFields(logrus.Fields{
-			"namespace": cep.Namespace,
-			"name":      cep.Name,
-			"step":      "repair",
-		}).WithError(err).Info("try to delete cep")
-	}
-}
-
-// repairEPState repair endpoint state
-func (manager *EndpointManager) repairEPState(old *ccev2.CCEEndpoint, log *logrus.Entry) bool {
-	log = log.WithFields(logrus.Fields{
-		"step": "repair",
-	})
-	needUpdate := false
-	newStatus := models.EndpointStateIPAllocated
-	pod, err := operatorWatchers.PodClient.Lister().Pods(old.Namespace).Get(old.Name)
-	if err == nil && pod != nil {
-		if pod.DeletionTimestamp != nil {
-			return false
-		}
-		if old.Status.State == string(models.EndpointStatePodDeleted) {
-			needUpdate = true
-			if pod.Status.Phase == corev1.PodPending {
-				newStatus = models.EndpointStateRestoring
-			}
-		} else if old.Status.State == string(models.EndpointStateRestoring) {
-			if old.Status.ExternalIdentifiers != nil &&
-				old.Status.ExternalIdentifiers.K8sObjectID == old.Spec.ExternalIdentifiers.K8sObjectID &&
-				old.Status.Networking != nil && len(old.Status.Networking.Addressing) > 0 {
-				needUpdate = true
-			}
-		}
-		// pod have been deleted
-	} else if errors.IsNotFound(err) && old.Status.State != string(models.EndpointStatePodDeleted) {
-		newStatus = models.EndpointStatePodDeleted
-		needUpdate = true
-	}
-	if needUpdate {
-		newE := old.DeepCopy()
-		if !AppendEndpointStatus(&newE.Status, newStatus, models.EndpointStatusChangeCodeOk) {
-			return false
-		}
-		_, err := manager.k8sAPI.Update(newE)
-		log.WithError(err).Info("try to repair fixed endpoint")
-	}
-	return needUpdate
 }
 
 func (manager *EndpointManager) recordEvent(op string, start time.Time, err error, obj *ccev2.CCEEndpoint) {
@@ -585,6 +488,52 @@ func (manager *EndpointManager) getSyncedPoolRevision(key string) string {
 		}
 	}
 	return ""
+}
+
+// handlePodDeletedIPRelease handles IP release when Pod is deleted (PSTS Fixed mode)
+// Returns error to trigger retry if critical operations fail.
+func (manager *EndpointManager) handlePodDeletedIPRelease(ctx context.Context, cep *ccev2.CCEEndpoint, logEntry *logrus.Entry) error {
+	if cep.Status.Networking == nil || len(cep.Status.Networking.Addressing) == 0 {
+		return nil
+	}
+
+	logEntry.Info("Pod deleted (Fixed mode), handling IP release")
+
+	// Release IP from ENI
+	// This is critical to free ENI resources, should retry on failure
+	if manager.directIPAllocator == nil {
+		return fmt.Errorf("direct IP allocator is nil")
+	}
+	operation, err := manager.directIPAllocator.NodeEndpoint(cep)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logEntry.WithError(err).Warn("Node endpoint not found on Pod deletion, treat as success")
+			return nil
+		}
+		logEntry.WithError(err).Error("Failed to get direct IP operation on Pod deletion, will retry")
+		return fmt.Errorf("failed to get direct IP operation: %w", err)
+	}
+	if operation == nil {
+		logEntry.Error("Direct IP operation is nil on Pod deletion, will retry")
+		return fmt.Errorf("direct IP operation is nil")
+	}
+
+	action := &DirectIPAction{
+		NodeName:   cep.Spec.Network.IPAllocation.NodeName,
+		Owner:      cep.Namespace + "/" + cep.Name,
+		Addressing: cep.Status.Networking.Addressing,
+	}
+	if err := operation.DeleteIP(ctx, action); err != nil {
+		if errors.IsNotFound(err) || cloud.IsIPAlreadyDeleted(err) {
+			logEntry.WithError(err).Warn("IP already deleted or ENI not found, treat as success")
+		} else {
+			logEntry.WithError(err).Error("Failed to release IP from ENI on Pod deletion, will retry")
+			return fmt.Errorf("failed to release IP from ENI: %w", err)
+		}
+	}
+	logEntry.Info("Successfully released IP from ENI on Pod deletion")
+
+	return nil
 }
 
 // compareResourceVersions compares two resourceVersion strings and returns true if current is newer than stored.

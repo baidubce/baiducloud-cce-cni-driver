@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	flag "github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -137,6 +138,10 @@ func (s *OptionSuite) TestReadDirConfig(c *C) {
 			name: "empty configuration",
 			preTestRun: func() {
 				dirName = c.MkDir()
+
+				// Clean up any keys that might have been set by other tests
+				viper.Set(FixedIPTimeout, nil)
+				viper.Set(NRSListTimeout, nil)
 
 				fs := flag.NewFlagSet("empty configuration", flag.ContinueOnError)
 				viper.BindPFlags(fs)
@@ -372,4 +377,41 @@ func (s *OptionSuite) Test_backupFiles(c *C) {
 	c.Assert(len(files), Equals, 2)
 	c.Assert(files[0].Name(), Equals, "test-1.json")
 	c.Assert(files[1].Name(), Equals, "test-2.json")
+}
+
+func (s *OptionSuite) TestPopulateFixedIPTimeoutAndNRSListTimeout(c *C) {
+	// Save original viper state and check if keys exist
+	originalFixedIPTimeout := viper.GetDuration(FixedIPTimeout)
+	originalNRSListTimeout := viper.GetDuration(NRSListTimeout)
+	hadFixedIPTimeout := viper.IsSet(FixedIPTimeout)
+	hadNRSListTimeout := viper.IsSet(NRSListTimeout)
+
+	defer func() {
+		// Restore original state: if key didn't exist, remove it; otherwise restore the value
+		if hadFixedIPTimeout {
+			viper.Set(FixedIPTimeout, originalFixedIPTimeout)
+		} else {
+			viper.Set(FixedIPTimeout, nil)
+		}
+		if hadNRSListTimeout {
+			viper.Set(NRSListTimeout, originalNRSListTimeout)
+		} else {
+			viper.Set(NRSListTimeout, nil)
+		}
+	}()
+
+	// Test both FixedIPTimeout and NRSListTimeout together.
+	// Note: We only call Populate() once to avoid metrics re-registration panic.
+	testFixedIPTimeout := 45 * time.Second
+	testNRSListTimeout := time.Duration(0)
+	viper.Set(FixedIPTimeout, testFixedIPTimeout)
+	viper.Set(NRSListTimeout, testNRSListTimeout)
+
+	config := &DaemonConfig{}
+	config.Populate()
+
+	// FixedIPTimeout should use configured value.
+	c.Assert(config.FixedIPTimeout, Equals, testFixedIPTimeout, Commentf("FixedIPTimeout should be set from viper via Populate()"))
+	// NRSListTimeout should fallback to default when configured with invalid (<=0) value.
+	c.Assert(config.NRSListTimeout, Equals, defaults.NRSListTimeout, Commentf("NRSListTimeout should fallback to default when configured value is <= 0"))
 }

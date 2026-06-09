@@ -8,7 +8,16 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.8[20260302]
+#### 2.13.9 [未发布]
+1. [Feature] psts 支持任意子网复用与使用体验优化
+2. [Feature] 支持 agent 在等待节点上有了可配置的标签再启动
+3. [Optimize] 支持 agent list nrs 的超时时间可配置
+4. [Bug] 修复虚机重启时偶发 eni 和 eri 使用相同的 index，导致路由规则冲突的问题
+5. [Bug] 修复vpc-route网络模式，节点预绑定eri导致节点不ready的问题
+6. [Feature] 容器网络组件参数适配 5k 产品规格
+7. [Optimize] 降低子网无 IP 场景下无效查询 ENI 请求
+
+#### 2.13.8[20260306]
 1. [Bug] 修复 rdma 场景下误校验 bccinfo 中预期为空字段导致节点无法就绪问题
 2. [Bug] 修复 VPC-Route 模式下兼容 RDMA 时误开启 ENI manager 导致普通节点无法就绪的问题：仅在探测到 RDMA 网卡时启用；若 meta-data 接口返回 `ErrorNotImplemented` 则默认关闭，其他探测错误直接退出并报错
 3. [Feature] 支持 bzz3 机型

@@ -59,14 +59,48 @@ ccedConfig:
   {{- end }}
   {{- end }}
 
-  k8s-client-burst: 300
-  k8s-client-qps: 200
+  {{- with .K8SClientBurst }}
+  {{- if gt . 0 }}
+  k8s-client-burst: {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- with .K8SClientQPS }}
+  {{- if gt . 0 }}
+  k8s-client-qps: {{ . }}
+  {{- end }}
+  {{- end }}
 
-  resource-resync-workers: 64
-  nrs-resource-resync-workers: 1000
-  rdma-resource-resync-workers: 1000
-  eni-resource-resync-workers: 1000
-  subnet-resource-resync-workers: 10
+  {{- with .ResourceResyncInterval }}
+  resource-resync-interval: {{ . }}
+  {{- end }}
+  {{- with .ResourceEniResyncInterval }}
+  resource-eni-resync-interval: {{ . }}
+  {{- end }}
+  {{- with .ResourceResyncWorkers }}
+  {{- if gt . 0 }}
+  resource-resync-workers: {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- with .NrsResourceResyncWorkers }}
+  {{- if gt . 0 }}
+  nrs-resource-resync-workers: {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- with .RdmaResourceResyncWorkers }}
+  {{- if gt . 0 }}
+  rdma-resource-resync-workers: {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- with .EniResourceResyncWorkers }}
+  {{- if gt . 0 }}
+  eni-resource-resync-workers: {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- with .SubnetResourceResyncWorkers }}
+  {{- if gt . 0 }}
+  subnet-resource-resync-workers: {{ . }}
+  {{- end }}
+  {{- end }}
 
   burstable-mehrfach-eni: 0
   # ippool 优化配置
@@ -126,7 +160,7 @@ ccedConfig:
   {{- end }}
   {{- end }}
   # 扩展插件配置
-  {{- if gt (len .ExtPlugins) 0 }}
+  {{- if .ExtPlugins }}
   ext-cni-plugins:
   {{- range .ExtPlugins }}
   - {{ . }}
@@ -135,6 +169,15 @@ ccedConfig:
 
 network:
   imageSuffix: {{ .ImageSuffix }}
+  {{- with .AgentRollingUpdateMaxUnavailable }}
+  {{- if gt . 0 }}
+  agent:
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: {{ . }}
+  {{- end }}
+  {{- end }}
   operator:  
     webhook: 
       enable: {{ .EnableWebhook}}
@@ -142,3 +185,7 @@ network:
 # 大规格集群Apiserver做网络组件拆分才会用到的配置
 apiServerBLBVPCIP: {{ .ApiServerBLBVPCIP }}
 apiServerBLBVPCPort: {{ .ApiServerBLBVPCPort }}
+
+{{- if .KubeConfigConfigMapName }}
+kubeConfigConfigMapName: "{{ .KubeConfigConfigMapName }}"
+{{- end }}

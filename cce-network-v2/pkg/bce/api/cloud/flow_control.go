@@ -622,6 +622,30 @@ func (fc *flowControlClient) BatchAddPrivateIpCrossSubnet(ctx context.Context, e
 	return ret, err
 }
 
+// BatchAddPrivateIpCrossSubnetWithClientToken implements idempotent allocation with client token when supported.
+func (fc *flowControlClient) BatchAddPrivateIpCrossSubnetWithClientToken(ctx context.Context, eniID string, subnetID string, privateIPs []string, count int, isIpv6 bool, clientToken string) ([]string, error) {
+	var (
+		req rate.LimitedRequest
+		ret []string
+		err error
+	)
+	if option.Config.EnableAPIRateLimit {
+		req, err = fc.limiter.Wait(ctx, BatchAddPrivateIpCrossSubnet)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				req.Error(err)
+			} else {
+				req.Done()
+			}
+		}()
+	}
+	ret, err = fc.client.BatchAddPrivateIpCrossSubnetWithClientToken(ctx, eniID, subnetID, privateIPs, count, isIpv6, clientToken)
+	return ret, err
+}
+
 // BatchDeleteHpcEniPrivateIP implements Interface
 func (fc *flowControlClient) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatchDeleteIPArgs) error {
 	var (

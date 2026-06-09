@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
@@ -697,7 +698,7 @@ func (e *EndpointAllocator) Restore() {
 			"namespace": ep.Namespace,
 			"name":      ep.Name,
 		})
-		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
+		if IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
 		ips, err := e.extractEndpointIPs(ep)
@@ -789,6 +790,19 @@ func (e *EndpointAllocator) waitEndpointIPAllocated(ctx context.Context, newEP *
 		if err != nil {
 			return false, nil
 		}
+
+		// Check if operator reported allocation failure — return error immediately instead of waiting for timeout
+		if ep.Status.State == string(models.EndpointStateInvalid) && len(ep.Status.Log) > 0 {
+			lastLog := ep.Status.Log[len(ep.Status.Log)-1]
+			if lastLog.Code == models.EndpointStatusChangeCodeFailed {
+				errMsg := lastLog.Message
+				if errMsg == "" {
+					errMsg = "operator failed to allocate IP"
+				}
+				return false, fmt.Errorf("IP allocation failed: %s", errMsg)
+			}
+		}
+
 		// The ID of the spec is the same as that of the status,
 		//indicating that the synchronization is already in progress
 		if ep.Status.ExternalIdentifiers != nil &&
@@ -819,33 +833,38 @@ func (e *EndpointAllocator) waitEndpointIPAllocated(ctx context.Context, newEP *
 // if the spec of the old object is different from that of the new object,
 // the new object should be used as the standard to update the old object.
 func (e *EndpointAllocator) createDelegateEndpoint(ctx context.Context, psts *ccev2.PodSubnetTopologySpread, newEP, oldEP *ccev2.CCEEndpoint) (ep *ccev2.CCEEndpoint, err error) {
-	if psts != nil {
-		newEP.Spec.Network.IPAllocation.PSTSName = psts.Name
-		if psts.Spec.Strategy != nil {
-			newEP.Spec.Network.IPAllocation.ReleaseStrategy = psts.Spec.Strategy.ReleaseStrategy
-			newEP.Spec.Network.IPAllocation.Type = psts.Spec.Strategy.Type
-			if psts.Spec.Strategy.Type == ccev2.IPAllocTypeFixed {
-				newEP.Spec.Network.IPAllocation.ReleaseStrategy = ccev2.ReleaseStrategyNever
-			} else if psts.Spec.Strategy.EnableReuseIPAddress && psts.Spec.Strategy.TTL != nil {
-				seconds := psts.Spec.Strategy.TTL.Seconds()
-				if seconds > 0 {
-					ttl := int64(seconds)
-					newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &ttl
-				}
-			}
-
-		}
+	// All endpoints must use PSTS
+	if psts == nil {
+		return nil, fmt.Errorf("endpoint must use PSTS, please check pod labels and PSTS configuration")
 	}
 
-	// fixed ip endpoint is not use psts
-	if psts == nil {
-		if !k8s.HaveFixedIPLabel(oldEP) {
-			return nil, fmt.Errorf("endpoint is not use fixed ip, please clean it")
+	newEP.Spec.Network.IPAllocation.PSTSName = psts.Name
+	if psts.Spec.Strategy != nil {
+		newEP.Spec.Network.IPAllocation.Type = psts.Spec.Strategy.Type
+
+		// Only Fixed mode uses TTL field; Elastic mode ignores TTL
+		if psts.Spec.Strategy.Type == ccev2.IPAllocTypeFixed {
+			// Fixed mode: set TTL if specified (nil means permanent retention)
+			if psts.Spec.Strategy.TTL != nil && psts.Spec.Strategy.TTL.Seconds() > 0 {
+				ttl := int64(psts.Spec.Strategy.TTL.Seconds())
+				newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = &ttl
+			} else {
+				// TTL nil or not set: permanent retention
+				newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = nil
+			}
+		} else {
+			// Elastic mode: ignore TTL, CEP will be deleted immediately when pod is deleted
+			newEP.Spec.Network.IPAllocation.TTLSecondsAfterDeleted = nil
 		}
-		newEP.Spec.Network.IPAllocation.Type = ccev2.IPAllocTypeFixed
-		newEP.Spec.Network.IPAllocation.ReleaseStrategy = ccev2.ReleaseStrategyNever
-		return e.createReuseIPEndpoint(ctx, newEP, oldEP)
-	} else if pststrategy.EnableReuseIPPSTS(psts) && oldEP != nil {
+
+		// Note: ReleaseStrategy field is deprecated since 2.13.9, do not set it
+	}
+
+	// PSTS endpoint: check if IP reuse is needed
+	// IP reuse is needed only for Fixed mode
+	needIPReuse := psts.Spec.Strategy != nil && psts.Spec.Strategy.Type == ccev2.IPAllocTypeFixed
+
+	if needIPReuse && oldEP != nil {
 		// reuse ip psts
 		if oldEP.Spec.Network.IPAllocation == nil || oldEP.Spec.Network.IPAllocation.PSTSName != psts.Name {
 			return nil, fmt.Errorf("psts name is not equal for reuse ip mode, old: %s, new: %s, please delete this cep object", oldEP.Spec.Network.IPAllocation.PSTSName, psts.Name)
@@ -989,25 +1008,51 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		ips []string
 	)
 
-	if IsFixedIPEndpoint(ep) {
-		return nil
-	}
-
-	// if the endpoint is psts, it should be deleted
-	if ep.Spec.Network.IPAllocation.PSTSName != "" {
+	// For PSTS endpoints, mark CEP as PodDeleted but don't delete it yet
+	// Operator will handle IP release when it detects PodDeleted status
+	// CEP deletion is handled based on PSTS strategy:
+	// - Elastic mode: Agent deletes CEP immediately (no IP retention)
+	// - Fixed mode with TTL: Agent GC deletes CEP after TTL expires
+	// - Fixed mode without TTL: CEP is never deleted automatically
+	if IsPSTSEndpoint(ep) {
 		psts, err := e.pstsLister.PodSubnetTopologySpreads(ep.Namespace).Get(ep.Spec.Network.IPAllocation.PSTSName)
 		if kerrors.IsNotFound(err) {
-			logEntry.Warnf("cep will be deleted when psts %s not found", ep.Spec.Network.IPAllocation.PSTSName)
+			logEntry.Warnf("CEP will be deleted when PSTS %s not found", ep.Spec.Network.IPAllocation.PSTSName)
 			return e.deleteEndpointSafely(ep)
 		}
 		if err != nil {
-			logEntry.WithError(err).Errorf("failed to get psts %s", ep.Spec.Network.IPAllocation.PSTSName)
+			logEntry.WithError(err).Errorf("Failed to get PSTS %s", ep.Spec.Network.IPAllocation.PSTSName)
 			return err
 		}
-		// ignored if psts is enable reuse ip
-		if pststrategy.EnableReuseIPPSTS(psts) {
-			return nil
+
+		// Check PSTS strategy to decide CEP deletion
+		if psts.Spec.Strategy != nil {
+			// Elastic mode: delete CEP immediately (no IP retention, no need to mark PodDeleted)
+			if psts.Spec.Strategy.Type == ccev2.IPAllocTypeElastic {
+				logEntry.Info("PSTS Elastic mode: deleting CEP immediately (Operator will release IP in Delete method)")
+				return e.deleteEndpointSafely(ep)
+			}
+
+			// Fixed mode: mark as PodDeleted first, then decide based on TTL
+			if psts.Spec.Strategy.Type == ccev2.IPAllocTypeFixed {
+				// Mark CEP as PodDeleted (Operator will release IP from ENI when it sees this status)
+				if err := e.markEndpointAsPodDeleted(ep); err != nil {
+					logEntry.WithError(err).Error("Failed to mark CEP as PodDeleted")
+					return err
+				}
+
+				if psts.Spec.Strategy.TTL != nil && psts.Spec.Strategy.TTL.Seconds() > 0 {
+					logEntry.Infof("PSTS Fixed mode with TTL=%v: CEP marked as PodDeleted, will be deleted by GC after TTL expires", psts.Spec.Strategy.TTL)
+					return nil
+				}
+				// TTL is nil or 0: never delete CEP automatically
+				logEntry.Info("PSTS Fixed mode without TTL: CEP marked as PodDeleted, will not be deleted automatically")
+				return nil
+			}
 		}
+
+		// Fallback: delete CEP immediately if strategy is not set
+		logEntry.Warn("PSTS strategy not set, deleting CEP immediately")
 		return e.deleteEndpointSafely(ep)
 	}
 
@@ -1063,4 +1108,37 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 	}
 	logEntry.WithField("step", "delete").Info("maker endpoint deleted")
 	return e.deleteEndpointSafely(ep)
+}
+
+// markEndpointAsPodDeleted marks the CEP status as PodDeleted
+// This signals to Operator that it should release the IP from ENI
+func (e *EndpointAllocator) markEndpointAsPodDeleted(ep *ccev2.CCEEndpoint) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest, err := e.cceEndpointClient.CCEEndpoints(ep.Namespace).Get(
+			context.TODO(),
+			ep.Name,
+			metav1.GetOptions{},
+		)
+		if err != nil {
+			return err
+		}
+		copyCEP := latest.DeepCopy()
+		// Update CEP status to PodDeleted and append status log
+		AppendEndpointStatusWithMessage(&copyCEP.Status, models.EndpointStatePodDeleted, models.EndpointStatusChangeCodeOk,
+			"Pod deleted, IP will be released by Operator")
+
+		// Update CEP in K8s
+		// Note: CCEEndpoint CRD does not have status subresource enabled (subresources: {}),
+		// so we must use Update() instead of UpdateStatus(). UpdateStatus() would return
+		// "not found" because the /status subresource path does not exist.
+		_, err = e.cceEndpointClient.CCEEndpoints(copyCEP.Namespace).Update(
+			context.TODO(),
+			copyCEP,
+			metav1.UpdateOptions{},
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update CEP status to PodDeleted: %w", err)
+		}
+		return nil
+	})
 }

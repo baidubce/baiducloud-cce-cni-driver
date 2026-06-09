@@ -1,83 +1,75 @@
-/*
- * Copyright (c) 2021 Baidu, Inc. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
- * except in compliance with the License. You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the
- * License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
- * either express or implied. See the License for the specific language governing permissions
- * and limitations under the License.
- *
- */
-
 package cloud
 
 import (
-	"fmt"
+	"errors"
+	"net/http"
 	"testing"
+
+	"github.com/baidubce/bce-sdk-go/bce"
+	"github.com/stretchr/testify/require"
 )
 
-func TestIsENINotFound(t *testing.T) {
-	type args struct {
-		err error
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
+func TestReasonForError(t *testing.T) {
+	cases := []struct {
+		msg      string
+		expected ErrorReason
 	}{
-		{
-			args: args{
-				err: nil,
-			},
-			want: false,
-		},
-		{
-			args: args{
-				err: fmt.Errorf("Error Message: \"The param eniId is invalid\", Error Code: \"EniIdException\", Status Code: 400, Request Id: \"03de3d24-be9b-42ee-9f0f-d42304cdf60d\""),
-			},
-			want: true,
-		},
+		{"PrivateIPNotExistException", ErrorReasonENIPrivateIPNotFound},
+		{"EniIdException", ErrorReasonENINotFound},
+		{"SubnetHasNoMoreIpException", ErrorReasonSubnetHasNoMoreIP},
+		{"RateLimit", ErrorReasonRateLimit},
+		{"NoSuchObject", ErrorReasonNoSuchObject},
+		{"IpReserve.IpReserveIdInvalid", ErrorReasonIPReserveNotFound},
+		{"VmMemoryCanNotAttachMoreIpException", ErrorReasonVmMemoryCanNotAttachMoreIpException},
+		{"ExceedLimitException", ErrorReasonBBCENIPrivateIPExceedLimit},
+		{"PrivateIpInUseException", ErrorReasonPrivateIPInUse},
+		{"RouteRuleRepeated", ErrorReasonRouteRuleRepeated},
+		{"QuotaLimitExceeded", ErrorReasonQuotaLimitExceeded},
+		{"RouteRuleExceedQuota", ErrorReasonNoSRouteRuleExceedQuota},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsErrorENINotFound(tt.args.err); got != tt.want {
-				t.Errorf("IsErrorENINotFound() = %v, want %v", got, tt.want)
-			}
-		})
+	for _, tc := range cases {
+		require.Equal(t, tc.expected, ReasonForError(errors.New(tc.msg)))
 	}
+	// case-insensitive match
+	require.Equal(t, ErrorReasonENIPrivateIPNotFound, ReasonForError(errors.New("privateipnotexistexception")))
+	// unknown
+	require.Equal(t, ErrorReasonUnknown, ReasonForError(errors.New("something else")))
+	// nil
+	require.Equal(t, ErrorReasonUnknown, ReasonForError(nil))
 }
 
-func TestIsErrorBBCENIPrivateIPNotFound(t *testing.T) {
-	type args struct {
-		err error
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			args: args{
-				err: fmt.Errorf("Error Message: \"The ips [192.168.24.51] is invalid\", Error Code: \"NoSuchObject\", Status Code: 400, Request Id: \"4a3e96c4-e57c-42bc-b479-bf96f4ac12c9\""),
-			},
-			want: true,
-		},
-		{
-			args: args{
-				err: fmt.Errorf("Error Message: \"The param eniId is invalid\", Error Code: \"EniIdException\", Status Code: 400, Request Id: \"03de3d24-be9b-42ee-9f0f-d42304cdf60d\""),
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsErrorReasonNoSuchObject(tt.args.err); got != tt.want {
-				t.Errorf("IsErrorBBCENIPrivateIPNotFound() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+func TestIsIPAlreadyDeleted(t *testing.T) {
+	require.False(t, IsIPAlreadyDeleted(nil))
+	require.True(t, IsIPAlreadyDeleted(errors.New("NoSuchObject")))
+	require.True(t, IsIPAlreadyDeleted(errors.New("eni not found")))
+	require.True(t, IsIPAlreadyDeleted(errors.New("PrivateIPNotExistException")))
+	require.False(t, IsIPAlreadyDeleted(errors.New("other error")))
+}
+
+func TestCaseInsensitiveContains(t *testing.T) {
+	require.True(t, caseInsensitiveContains("HelloWorld", "world"))
+	require.False(t, caseInsensitiveContains("HelloWorld", "abc"))
+}
+
+func TestIsErrorPSTSCrossSubnetCandidateConflict(t *testing.T) {
+	require.False(t, IsErrorPSTSCrossSubnetCandidateConflict(nil))
+	require.True(t, IsErrorPSTSCrossSubnetCandidateConflict(errors.New("[Code: BadRequest; Message: Bad request parameters or illegal request.; RequestId: 123]")))
+	require.False(t, IsErrorPSTSCrossSubnetCandidateConflict(errors.New("[Code: BadRequest; Message: invalid parameter.]")))
+	require.False(t, IsErrorPSTSCrossSubnetCandidateConflict(errors.New("BadRequest")))
+	require.False(t, IsErrorPSTSCrossSubnetCandidateConflict(errors.New("PrivateIpInUseException")))
+
+	require.True(t, IsErrorPSTSCrossSubnetCandidateConflict(&bce.BceServiceError{
+		Code:    "BadRequest",
+		Message: "Bad request parameters or illegal request.",
+	}))
+	require.False(t, IsErrorPSTSCrossSubnetCandidateConflict(&bce.BceServiceError{
+		Code:    "BadRequest",
+		Message: "invalid parameter",
+	}))
+}
+
+func TestBceServiceErrorToHTTPCode(t *testing.T) {
+	require.Equal(t, http.StatusOK, BceServiceErrorToHTTPCode(nil))
+	require.Equal(t, 0, BceServiceErrorToHTTPCode(errors.New("not bce error")))
+	require.Equal(t, http.StatusNotFound, BceServiceErrorToHTTPCode(&bce.BceServiceError{StatusCode: http.StatusNotFound}))
 }

@@ -422,7 +422,6 @@ func (n *bceRDMANetResourceSet) refreshENIAllocatedIPErrors(resource *ccev2.NetR
 // to populate any implementation specific fields in NetResourceSet.Status.
 func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	eniStatusMap := make(map[string]ccev2.SimpleENIStatus)
-	crossSubnetUsed := make(ipamTypes.AllocationMap, 0)
 
 	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
@@ -436,37 +435,10 @@ func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 				CCEStatus: string(eni.Status.CCEStatus),
 			}
 			eniStatusMap[eni.Name] = simple
-
-			var addCrossSubnetAddr = func(addr *models.PrivateIP) {
-				allocationIP := ipamTypes.AllocationIP{
-					Resource:  eni.Name,
-					IsPrimary: addr.Primary,
-					SubnetID:  addr.SubnetID,
-				}
-				ceps, _ := n.manager.cepClient.GetByIP(addr.PrivateIPAddress)
-				if len(ceps) > 0 {
-					allocationIP.Owner = ceps[0].Namespace + "/" + ceps[0].Name
-				}
-				if addr.SubnetID != eni.Spec.ENI.SubnetID {
-					crossSubnetUsed[addr.PrivateIPAddress] = allocationIP
-				}
-			}
-
-			for _, addr := range eni.Spec.PrivateIPSet {
-				addCrossSubnetAddr(addr)
-			}
-			for _, addr := range eni.Spec.IPV6PrivateIPSet {
-				addCrossSubnetAddr(addr)
-			}
 			return nil
 		})
 
 	resource.Status.ENIs = eniStatusMap
-	if len(crossSubnetUsed) > 0 {
-		resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
-	} else {
-		resource.Status.IPAM.CrossSubnetUsed = nil
-	}
 	n.refreshENIAllocatedIPErrors(resource)
 
 	// PopulateStatusFields should only populate Status fields and not modify Annotations

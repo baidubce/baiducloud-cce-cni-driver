@@ -158,10 +158,16 @@ type IPAMStatus struct {
 	// +optional
 	Used AllocationMap `json:"used,omitempty"`
 
-	// CrossSubnetUsed lists all IPs out of Spec.IPAM.Pool which have been allocated
+	// CrossSubnetUsed is deprecated since 2.14. Use PSTSUsed instead.
 	//
 	// +optional
 	CrossSubnetUsed AllocationMap `json:"crossSubnetUsed,omitempty"`
+
+	// PSTSUsed lists all IPs allocated by PSTS (PodSubnetTopologySpread) and
+	// which pods are using them. Written by operator on each PSTS IP allocation/release.
+	//
+	// +optional
+	PSTSUsed AllocationMap `json:"pstsUsed,omitempty"`
 
 	// PodCIDRs lists the status of each pod CIDR allocated to this node.
 	//

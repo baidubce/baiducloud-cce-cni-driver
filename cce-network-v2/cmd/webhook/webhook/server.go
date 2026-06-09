@@ -159,6 +159,7 @@ func initializeInformers() error {
 		return nil
 	}
 	k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer()
+	k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Informer()
 	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
 	k8s.CCEClient().Informers.Cce().V1().Subnets().Informer()
 	k8s.CCEClient().Informers.Start(wait.NeverStop)

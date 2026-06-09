@@ -20,7 +20,10 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +34,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
@@ -304,6 +309,94 @@ func TestValidateHPASIDRequirement_EdgeCases(t *testing.T) {
 
 		assert.NoError(t, validationErr, "HPASID with spaces should pass validation")
 	})
+}
+
+func TestShouldSkipERIInVPCRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		ipamMode   string
+		vifFeature string
+		expected   bool
+	}{
+		{
+			name:       "Given_VPCRoute_And_ERI_When_Check_Then_ReturnTrue",
+			ipamMode:   ipamOption.IPAMVpcRoute,
+			vifFeature: string(ccev2.ENIForERI),
+			expected:   true,
+		},
+		{
+			name:       "Given_VPCRouteCaseInsensitive_And_ERI_When_Check_Then_ReturnTrue",
+			ipamMode:   "VPC-ROUTE",
+			vifFeature: string(ccev2.ENIForERI),
+			expected:   true,
+		},
+		{
+			name:       "Given_VPCRoute_And_HPC_When_Check_Then_ReturnFalse",
+			ipamMode:   ipamOption.IPAMVpcRoute,
+			vifFeature: string(ccev2.ENIForHPC),
+			expected:   false,
+		},
+		{
+			name:       "Given_VPCENI_And_ERI_When_Check_Then_ReturnFalse",
+			ipamMode:   ipamOption.IPAMVpcEni,
+			vifFeature: string(ccev2.ENIForERI),
+			expected:   false,
+		},
+	}
+
+	originalIPAM := option.Config.IPAM
+	defer func() {
+		option.Config.IPAM = originalIPAM
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			option.Config.IPAM = tt.ipamMode
+			assert.Equal(t, tt.expected, bceutils.ShouldSkipERIInVPCRoute(tt.vifFeature))
+		})
+	}
+}
+
+func TestUpdateNetResourceSetResource_GivenVPCRouteAndERIOnly_WhenUpdate_ThenSkipRDMANRSCreate(t *testing.T) {
+	originalAutoCreate := option.Config.AutoCreateNetResourceSetResource
+	originalIPAM := option.Config.IPAM
+	originalCleanupExecuted := cleanupExecuted
+	originalNodeName := nodeTypes.GetName()
+	defer func() {
+		option.Config.AutoCreateNetResourceSetResource = originalAutoCreate
+		option.Config.IPAM = originalIPAM
+		cleanupExecuted = originalCleanupExecuted
+		nodeTypes.SetName(originalNodeName)
+	}()
+
+	option.Config.AutoCreateNetResourceSetResource = true
+	option.Config.IPAM = ipamOption.IPAMVpcRoute
+	cleanupExecuted = true // Skip cleanup flow to focus on the ERI skip branch.
+	nodeTypes.SetName("test-node")
+
+	rd := &RdmaDiscovery{}
+	cceClientCalled := false
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyFunc(bceutils.GetRdmaIFsInfoAll, func(nodeName string, scopedLog *logrus.Entry) (map[string]bceutils.RdmaIfInfo, error) {
+		return map[string]bceutils.RdmaIfInfo{
+			"fa:20:20:37:0f:f2": {
+				MacAddress:         "fa:20:20:37:0f:f2",
+				NetResourceSetName: "test-node-fa2020370ff2-elasticrdma",
+				LabelSelectorValue: "test-node-i-xxx-fa2020370ff2-elasticrdma",
+				VifFeatures:        string(ccev2.ENIForERI),
+			},
+		}, nil
+	})
+	patches.ApplyFunc(k8s.CCEClient, func() *k8s.K8sCCEClient {
+		cceClientCalled = true
+		panic("CCEClient should not be called when ERI is skipped in vpc-route mode")
+	})
+
+	rd.UpdateNetResourceSetResource()
+
+	assert.False(t, cceClientCalled, "ERI should be skipped in vpc-route mode and must not reach RDMA NRS create/update path")
 }
 
 // TestShouldExitOnRegularERINRS tests the shouldExitOnRegularERINRS function
@@ -819,12 +912,19 @@ func TestRdmaDiscovery_deleteStaleNRS(t *testing.T) {
 }
 
 func TestRdmaDiscovery_getInstanceNetResourceSets(t *testing.T) {
+	// Save original timeout value
+	originalTimeout := option.Config.NRSListTimeout
+	defer func() {
+		option.Config.NRSListTimeout = originalTimeout
+	}()
+
 	tests := []struct {
 		name        string
 		instanceID  string
 		nrsList     []ccev2.NetResourceSet
 		expectedNRS int
 		expectError bool
+		timeout     time.Duration
 	}{
 		{
 			name:       "successful retrieval with matching instance",
@@ -860,6 +960,7 @@ func TestRdmaDiscovery_getInstanceNetResourceSets(t *testing.T) {
 			},
 			expectedNRS: 2,
 			expectError: false,
+			timeout:     defaults.NRSListTimeout,
 		},
 		{
 			name:        "no matching instances",
@@ -867,11 +968,33 @@ func TestRdmaDiscovery_getInstanceNetResourceSets(t *testing.T) {
 			nrsList:     []ccev2.NetResourceSet{},
 			expectedNRS: 0,
 			expectError: false,
+			timeout:     defaults.NRSListTimeout,
+		},
+		{
+			name:       "successful retrieval with custom timeout",
+			instanceID: "i-test123",
+			nrsList: []ccev2.NetResourceSet{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "nrs-custom-1",
+						Labels: map[string]string{
+							"kubernetes.io/hostname": nodeTypes.GetName(),
+						},
+					},
+					Spec: ccev2.NetResourceSpec{InstanceID: "i-test123"},
+				},
+			},
+			expectedNRS: 1,
+			expectError: false,
+			timeout:     60 * time.Second,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Set timeout for this test case
+			option.Config.NRSListTimeout = tt.timeout
+
 			ccemock.InitMockEnv()
 			for _, nrs := range tt.nrsList {
 				_, err := k8s.CCEClient().CceV2().NetResourceSets().Create(

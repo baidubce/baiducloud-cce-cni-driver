@@ -164,7 +164,6 @@ func (eem *eniEndpointAllocator) allocateENI(
 	ep = endpoint.NewEndpointTemplate(containerID, netnsPath, pod)
 	ep.Finalizers = append(ep.Finalizers, FinalizerPrimaryENIEndpoint)
 	ep.Spec.Network.IPAllocation.Type = ccev2.IPAllocTypeENIPrimary
-	ep.Spec.Network.IPAllocation.ReleaseStrategy = ccev2.ReleaseStrategyTTL
 
 	logEntry.WithField(logfields.Step, "1").Debug("try to create endpoint on k8s")
 	ep, err = eem.cceEndpointClient.CCEEndpoints(ep.Namespace).Create(ctx, ep, metav1.CreateOptions{})

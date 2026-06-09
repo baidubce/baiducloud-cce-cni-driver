@@ -38,6 +38,7 @@ const (
 	ErrorReasonQuotaLimitExceeded                  ErrorReason = "QuotaLimitExceeded"
 	ErrorReasonNoSuchObject                        ErrorReason = "NoSuchObject"
 	ErrorReasonNoSRouteRuleExceedQuota             ErrorReason = "RouteRuleExceedQuota"
+	ErrorReasonIPReserveNotFound                   ErrorReason = "IPReserveNotFound"
 )
 
 func ReasonForError(err error) ErrorReason {
@@ -54,6 +55,8 @@ func ReasonForError(err error) ErrorReason {
 			return ErrorReasonRateLimit
 		case caseInsensitiveContains(errMsg, "NoSuchObject"):
 			return ErrorReasonNoSuchObject
+		case caseInsensitiveContains(errMsg, "IpReserve.IpReserveIdInvalid"):
+			return ErrorReasonIPReserveNotFound
 		case caseInsensitiveContains(errMsg, "is invalid"):
 			// TODO: remove BadRequest when IaaS fixes their API
 			return ErrorReasonBBCENIPrivateIPNotFound
@@ -114,6 +117,29 @@ func IsErrorBBCENIPrivateIPExceedLimit(err error) bool {
 	return ReasonForError(err) == ErrorReasonBBCENIPrivateIPExceedLimit
 }
 
+// IsErrorPSTSCrossSubnetCandidateConflict checks the known VPC error shape for
+// PSTS fixed-mode cross-subnet candidate IP conflicts.
+//
+// IMPORTANT:
+// This helper is intentionally narrow and should only be used in PSTS
+// "local pool candidate -> cross-subnet batchAdd" allocation path.
+// Do NOT treat all BadRequest as conflicts in generic call sites.
+func IsErrorPSTSCrossSubnetCandidateConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	const conflictMessage = "Bad request parameters or illegal request."
+
+	if bceErr, ok := err.(*bce.BceServiceError); ok {
+		return caseInsensitiveContains(bceErr.Code, "BadRequest") &&
+			caseInsensitiveContains(bceErr.Message, conflictMessage)
+	}
+
+	errMsg := err.Error()
+	return caseInsensitiveContains(errMsg, "Code: BadRequest") &&
+		caseInsensitiveContains(errMsg, conflictMessage)
+}
+
 func IsErrorRouteRuleRepeated(err error) bool {
 	return ReasonForError(err) == ErrorReasonRouteRuleRepeated
 }
@@ -124,6 +150,26 @@ func IsErrorQuotaLimitExceeded(err error) bool {
 
 func IsErrorCreateRouteRuleExceededQuota(err error) bool {
 	return ReasonForError(err) == ErrorReasonNoSRouteRuleExceedQuota
+}
+
+func IsErrorIPReserveNotFound(err error) bool {
+	return ReasonForError(err) == ErrorReasonIPReserveNotFound
+}
+
+// IsIPAlreadyDeleted returns true if delete IP should be treated as success.
+func IsIPAlreadyDeleted(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsErrorReasonNoSuchObject(err) ||
+		IsErrorENINotFound(err) ||
+		IsErrorENIPrivateIPNotFound(err) ||
+		IsErrorBBCENIPrivateIPNotFound(err) {
+		return true
+	}
+	errLower := strings.ToLower(err.Error())
+	return strings.Contains(errLower, "eni not found") ||
+		strings.Contains(errLower, "privateipinvalid")
 }
 
 func caseInsensitiveContains(s, substr string) bool {

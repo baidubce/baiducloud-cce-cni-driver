@@ -17,6 +17,8 @@
 package vpc
 
 import (
+	"encoding/json"
+
 	"github.com/baidubce/bce-sdk-go/model"
 )
 
@@ -268,13 +270,13 @@ type ListIpeserveArgs struct {
 }
 
 type ipReserve struct {
-	IpReserveId string `json:"ipReserveId"`
-	SubnetId    string `json:"subnetId"`
-	IpCidr      string `json:"ipCidr"`
-	IpVersion   int32  `json:"ipVersion"`
-	Description string `json:"description"`
-	CreatedTime string `json:"createdTime"`
-	UpdatedTime string `json:"updatedTime"`
+	IpReserveId string      `json:"ipReserveId"`
+	SubnetId    string      `json:"subnetId"`
+	IpCidr      string      `json:"ipCidr"`
+	IpVersion   json.Number `json:"ipVersion"`
+	Description string      `json:"description"`
+	CreatedTime string      `json:"createdTime"`
+	UpdatedTime string      `json:"updatedTime"`
 }
 
 // ListIpeserveResult - result of listing reserved CIDRs

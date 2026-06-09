@@ -24,6 +24,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
@@ -221,15 +222,14 @@ func getPrimaryMacFromCCERdmaEndpointName(cepName string) (macAddress string, er
 
 func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIfInfo, error) {
 	var ris = map[string]RdmaIfInfo{}
+	if scopedLog == nil {
+		scopedLog = log.WithField("nodeName", nodeName)
+	}
 
 	// list network interface macs
 	macList, macErr := metadata.DefaultMetaClient.ListMacs()
 	if macErr != nil {
-		if scopedLog != nil {
-			scopedLog.WithError(macErr).Errorf("list mac failed")
-		} else {
-			log.WithError(macErr).Errorf("list mac failed")
-		}
+		scopedLog.WithError(macErr).Errorf("list mac failed")
 		return ris, macErr
 	}
 
@@ -237,31 +237,25 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 	for _, macAddress := range macList {
 		vifFeatures, vifErr := metadata.DefaultMetaClient.GetVifFeatures(macAddress)
 		if vifErr != nil {
-			if scopedLog != nil {
-				scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
-			} else {
-				log.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
-			}
+			scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
 			return nil, vifErr
 		}
 		if _, ok := roceVFs[vifFeatures]; ok {
+			if ShouldSkipERIInVPCRoute(vifFeatures) {
+				scopedLog.WithField("macAddress", macAddress).Info("Skipping ERI interface in vpc-route mode")
+				continue
+			}
 			// Skip processing if ERI management is enabled and current is ERI interface
 			// ERI interfaces will be handled separately through ERI management mechanism
 			if option.Config.EnableERIManagement && vifFeatures == string(ccev2.ENIForERI) {
-				if scopedLog != nil {
-					scopedLog.WithField("macAddress", macAddress).Info("Skipping ERI interface due to ERI management enabled")
-				}
+				scopedLog.WithField("macAddress", macAddress).Info("Skipping ERI interface due to ERI management enabled")
 				continue
 			}
 
 			var rdmaIfInfo RdmaIfInfo
 			nodeInstanceID, metaAPIErr := metadata.DefaultMetaClient.GetInstanceID()
 			if metaAPIErr != nil {
-				if scopedLog != nil {
-					scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
-				} else {
-					log.WithError(macErr).Errorf("get node InstanceID from meta-data api failed")
-				}
+				scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
 				return ris, metaAPIErr
 			}
 			netResourceSetName := generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeatures)
@@ -275,6 +269,11 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 	}
 
 	return ris, nil
+}
+
+// ShouldSkipERIInVPCRoute returns true if ERI (elastic_rdma) should be skipped in vpc-route mode.
+func ShouldSkipERIInVPCRoute(vifFeatures string) bool {
+	return option.Config.IPAMMode() == ipamOption.IPAMVpcRoute && vifFeatures == string(ccev2.ENIForERI)
 }
 
 func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIfInfo, error) {

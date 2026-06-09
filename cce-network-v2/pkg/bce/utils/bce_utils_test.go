@@ -10,6 +10,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
@@ -539,11 +540,13 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 	// Save original values
 	originalMetaClient := metadata.DefaultMetaClient
 	originalEnableERIManagement := option.Config.EnableERIManagement
+	originalIPAMMode := option.Config.IPAM
 
 	// Restore after test
 	defer func() {
 		metadata.DefaultMetaClient = originalMetaClient
 		option.Config.EnableERIManagement = originalEnableERIManagement
+		option.Config.IPAM = originalIPAMMode
 	}()
 
 	tests := []struct {
@@ -551,6 +554,7 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 		nodeName                     string
 		mockClient                   *enhancedMockMetaClient
 		enableERIManagement          bool
+		ipamMode                     string
 		expectedRdmaIfInfoCount      int
 		expectedError                bool
 		expectedMacAddressesInResult []string
@@ -606,6 +610,24 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 			expectedError:                false,
 			expectedMacAddressesInResult: []string{"fa:27:00:07:83:02"},
 			description:                  "When ERI management is enabled, should skip ERI interface",
+		},
+		{
+			name:     "TestGetRdmaIFsInfo_GivenElasticRdmaInterfaceInVPCRoute_WhenGettingRdmaIFsInfo_ThenSkipERIInterface",
+			nodeName: "test-node",
+			mockClient: &enhancedMockMetaClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "elastic_rdma",
+					"fa:27:00:07:83:02": "rdma_roce",
+				},
+			},
+			enableERIManagement:          false,
+			ipamMode:                     ipamOption.IPAMVpcRoute,
+			expectedRdmaIfInfoCount:      1,
+			expectedError:                false,
+			expectedMacAddressesInResult: []string{"fa:27:00:07:83:02"},
+			description:                  "When in vpc-route mode, should skip ERI interface even if ERI management is disabled",
 		},
 		{
 			name:     "TestGetRdmaIFsInfo_GivenMixedInterfaces_WhenGettingRdmaIFsInfo_ThenReturnOnlyRdmaInterfaces",
@@ -693,6 +715,11 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 			// Set up mock client
 			metadata.DefaultMetaClient = tt.mockClient
 			option.Config.EnableERIManagement = tt.enableERIManagement
+			if tt.ipamMode != "" {
+				option.Config.IPAM = tt.ipamMode
+			} else {
+				option.Config.IPAM = originalIPAMMode
+			}
 
 			// Call the function
 			result, err := GetRdmaIFsInfo(tt.nodeName, nil)

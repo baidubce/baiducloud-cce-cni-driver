@@ -331,7 +331,18 @@ func (es *remoteVpcEniSyncher) validateAndSyncENIIPs(existingENI *ccev2.ENI, iaa
 	}
 
 	// 记录不一致并进行同步
-	scopeLog.WithField("inconsistencies", inconsistencies).Warning("ENI IP inconsistencies detected, syncing from IaaS")
+	var k8sIPList, iaasIPList []string
+	for ip := range k8sIPs {
+		k8sIPList = append(k8sIPList, ip)
+	}
+	for ip := range iaasIPs {
+		iaasIPList = append(iaasIPList, ip)
+	}
+	scopeLog.WithFields(logrus.Fields{
+		"inconsistencies": inconsistencies,
+		"k8sIPs":          k8sIPList,
+		"iaasIPs":         iaasIPList,
+	}).Warning("validateAndSyncENIIPs: inconsistencies detected, will overwrite K8s ENI from IaaS")
 
 	// 更新ENI CRD，使用IaaS数据作为权威数据源
 	updatedENI := existingENI.DeepCopy()

@@ -1,7 +1,6 @@
 package bcesync
 
 import (
-	"context"
 	"testing"
 
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
@@ -10,7 +9,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
+	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 )
 
 // Mock ENI updater for testing
@@ -20,7 +23,15 @@ type mockENIUpdater struct {
 
 func (m *mockENIUpdater) Update(eni *ccev2.ENI) (*ccev2.ENI, error) {
 	args := m.Called(eni)
-	return args.Get(0).(*ccev2.ENI), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	// If the return value is the ENI itself (from mock.Anything), return the input ENI
+	if returnedENI, ok := args.Get(0).(*ccev2.ENI); ok {
+		return returnedENI, args.Error(1)
+	}
+	// Otherwise return the input ENI (for cases where we just want to validate)
+	return eni, args.Error(1)
 }
 
 func (m *mockENIUpdater) Create(eni *ccev2.ENI) (*ccev2.ENI, error) {
@@ -28,14 +39,19 @@ func (m *mockENIUpdater) Create(eni *ccev2.ENI) (*ccev2.ENI, error) {
 	return args.Get(0).(*ccev2.ENI), args.Error(1)
 }
 
-func (m *mockENIUpdater) Delete(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
+func (m *mockENIUpdater) Delete(name string) error {
+	args := m.Called(name)
 	return args.Error(0)
 }
 
 func (m *mockENIUpdater) Get(name string) (*ccev2.ENI, error) {
 	args := m.Called(name)
 	return args.Get(0).(*ccev2.ENI), args.Error(1)
+}
+
+func (m *mockENIUpdater) Lister() v2.ENILister {
+	args := m.Called()
+	return args.Get(0).(v2.ENILister)
 }
 
 func (m *mockENIUpdater) UpdateStatus(eni *ccev2.ENI) (*ccev2.ENI, error) {
@@ -81,7 +97,10 @@ func TestValidateAndSyncENIIPs_GivenConsistentIPs_WhenValidate_ThenReturnFalse(t
 	}
 
 	// When
-	result := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	result, err := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 
 	// Then
 	assert.False(t, result, "Should return false when IPs are consistent")
@@ -89,6 +108,30 @@ func TestValidateAndSyncENIIPs_GivenConsistentIPs_WhenValidate_ThenReturnFalse(t
 
 // TestValidateAndSyncENIIPs_GivenInconsistentIPs_WhenValidate_ThenReturnTrueAndSync 测试IP不一致的情况
 func TestValidateAndSyncENIIPs_GivenInconsistentIPs_WhenValidate_ThenReturnTrueAndSync(t *testing.T) {
+	// Initialize mock environment
+	ccemock.NewMockClient()
+
+	// Create mock subnet for IP validation
+	subnet := &ccev1.Subnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "subnet-test456",
+			Labels: map[string]string{
+				k8s.VPCIDLabel: "vpc-test456",
+			},
+		},
+		Spec: ccev1.SubnetSpec{
+			ID:               "subnet-test456",
+			CIDR:             "192.168.1.0/24",
+			IPv6CIDR:         "2001:db8::/64",
+			VPCID:            "vpc-test456",
+			AvailabilityZone: "zone-a",
+		},
+	}
+	err := ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{subnet})
+	if !assert.NoError(t, err, "ensure subnet to informer failed") {
+		return
+	}
+
 	// Given
 	mockUpdater := &mockENIUpdater{}
 	syncer := &remoteVpcEniSyncher{
@@ -127,21 +170,20 @@ func TestValidateAndSyncENIIPs_GivenInconsistentIPs_WhenValidate_ThenReturnTrueA
 	}
 
 	// 设置mock期望
-	mockUpdater.On("Update", mock.AnythingOfType("*v2.ENI")).Return(
-		func(eni *ccev2.ENI) *ccev2.ENI {
-			// 验证更新的ENI包含了IaaS的数据
-			assert.Len(t, eni.Spec.ENI.PrivateIPSet, 2)
-			assert.Equal(t, "192.168.1.11", eni.Spec.ENI.PrivateIPSet[0].PrivateIPAddress)
-			assert.Equal(t, "192.168.1.12", eni.Spec.ENI.PrivateIPSet[1].PrivateIPAddress)
-
-			assert.Len(t, eni.Spec.ENI.IPV6PrivateIPSet, 1)
+	mockUpdater.On("Update", mock.MatchedBy(func(eni *ccev2.ENI) bool {
+		// 验证更新的ENI包含了IaaS的数据
+		return assert.Len(t, eni.Spec.ENI.PrivateIPSet, 2) &&
+			assert.Equal(t, "192.168.1.11", eni.Spec.ENI.PrivateIPSet[0].PrivateIPAddress) &&
+			assert.Equal(t, "192.168.1.12", eni.Spec.ENI.PrivateIPSet[1].PrivateIPAddress) &&
+			assert.Len(t, eni.Spec.ENI.IPV6PrivateIPSet, 1) &&
 			assert.Equal(t, "2001:db8::2", eni.Spec.ENI.IPV6PrivateIPSet[0].PrivateIPAddress)
-
-			return eni
-		}, nil)
+	})).Return(existingENI, nil)
 
 	// When
-	result := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	result, err := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 
 	// Then
 	assert.True(t, result, "Should return true when IPs are inconsistent")
@@ -150,6 +192,29 @@ func TestValidateAndSyncENIIPs_GivenInconsistentIPs_WhenValidate_ThenReturnTrueA
 
 // TestValidateAndSyncENIIPs_GivenEmptyK8sIPs_WhenValidate_ThenSyncFromIaaS 测试K8s为空IP的情况
 func TestValidateAndSyncENIIPs_GivenEmptyK8sIPs_WhenValidate_ThenSyncFromIaaS(t *testing.T) {
+	// Initialize mock environment
+	ccemock.NewMockClient()
+
+	// Create mock subnet for IP validation
+	subnet := &ccev1.Subnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "subnet-empty",
+			Labels: map[string]string{
+				k8s.VPCIDLabel: "vpc-empty",
+			},
+		},
+		Spec: ccev1.SubnetSpec{
+			ID:               "subnet-empty",
+			CIDR:             "192.168.2.0/24",
+			VPCID:            "vpc-empty",
+			AvailabilityZone: "zone-a",
+		},
+	}
+	err := ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{subnet})
+	if !assert.NoError(t, err, "ensure subnet to informer failed") {
+		return
+	}
+
 	// Given
 	mockUpdater := &mockENIUpdater{}
 	syncer := &remoteVpcEniSyncher{
@@ -183,16 +248,17 @@ func TestValidateAndSyncENIIPs_GivenEmptyK8sIPs_WhenValidate_ThenSyncFromIaaS(t 
 	}
 
 	// 设置mock期望
-	mockUpdater.On("Update", mock.AnythingOfType("*v2.ENI")).Return(
-		func(eni *ccev2.ENI) *ccev2.ENI {
-			// 验证更新的ENI包含了IaaS的IP
-			assert.Len(t, eni.Spec.ENI.PrivateIPSet, 1)
+	mockUpdater.On("Update", mock.MatchedBy(func(eni *ccev2.ENI) bool {
+		// 验证更新的ENI包含了IaaS的IP
+		return assert.Len(t, eni.Spec.ENI.PrivateIPSet, 1) &&
 			assert.Equal(t, "192.168.2.10", eni.Spec.ENI.PrivateIPSet[0].PrivateIPAddress)
-			return eni
-		}, nil)
+	})).Return(existingENI, nil)
 
 	// When
-	result := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	result, err := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 
 	// Then
 	assert.True(t, result, "Should return true when K8s has no IPs but IaaS has IPs")
@@ -201,6 +267,29 @@ func TestValidateAndSyncENIIPs_GivenEmptyK8sIPs_WhenValidate_ThenSyncFromIaaS(t 
 
 // TestValidateAndSyncENIIPs_GivenEmptyIaaSIPs_WhenValidate_ThenSyncToEmpty 测试IaaS为空IP的情况
 func TestValidateAndSyncENIIPs_GivenEmptyIaaSIPs_WhenValidate_ThenSyncToEmpty(t *testing.T) {
+	// Initialize mock environment
+	ccemock.NewMockClient()
+
+	// Create mock subnet for IP validation
+	subnet := &ccev1.Subnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "subnet-k8s-has-ip",
+			Labels: map[string]string{
+				k8s.VPCIDLabel: "vpc-k8s-has-ip",
+			},
+		},
+		Spec: ccev1.SubnetSpec{
+			ID:               "subnet-k8s-has-ip",
+			CIDR:             "192.168.3.0/24",
+			VPCID:            "vpc-k8s-has-ip",
+			AvailabilityZone: "zone-a",
+		},
+	}
+	err := ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{subnet})
+	if !assert.NoError(t, err, "ensure subnet to informer failed") {
+		return
+	}
+
 	// Given
 	mockUpdater := &mockENIUpdater{}
 	syncer := &remoteVpcEniSyncher{
@@ -234,16 +323,17 @@ func TestValidateAndSyncENIIPs_GivenEmptyIaaSIPs_WhenValidate_ThenSyncToEmpty(t 
 	}
 
 	// 设置mock期望
-	mockUpdater.On("Update", mock.AnythingOfType("*v2.ENI")).Return(
-		func(eni *ccev2.ENI) *ccev2.ENI {
-			// 验证更新的ENI清空了IP（同步IaaS的空状态）
-			assert.Len(t, eni.Spec.ENI.PrivateIPSet, 0)
+	mockUpdater.On("Update", mock.MatchedBy(func(eni *ccev2.ENI) bool {
+		// 验证更新的ENI清空了IP（同步IaaS的空状态）
+		return assert.Len(t, eni.Spec.ENI.PrivateIPSet, 0) &&
 			assert.Len(t, eni.Spec.ENI.IPV6PrivateIPSet, 0)
-			return eni
-		}, nil)
+	})).Return(existingENI, nil)
 
 	// When
-	result := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	result, err := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 
 	// Then
 	assert.True(t, result, "Should return true when K8s has IPs but IaaS has no IPs")
@@ -252,6 +342,29 @@ func TestValidateAndSyncENIIPs_GivenEmptyIaaSIPs_WhenValidate_ThenSyncToEmpty(t 
 
 // TestValidateAndSyncENIIPs_GivenUpdateError_WhenValidate_ThenHandleError 测试更新失败的情况
 func TestValidateAndSyncENIIPs_GivenUpdateError_WhenValidate_ThenHandleError(t *testing.T) {
+	// Initialize mock environment
+	ccemock.NewMockClient()
+
+	// Create mock subnet for IP validation
+	subnet := &ccev1.Subnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "subnet-update-error",
+			Labels: map[string]string{
+				k8s.VPCIDLabel: "vpc-update-error",
+			},
+		},
+		Spec: ccev1.SubnetSpec{
+			ID:               "subnet-update-error",
+			CIDR:             "192.168.4.0/24",
+			VPCID:            "vpc-update-error",
+			AvailabilityZone: "zone-a",
+		},
+	}
+	err := ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{subnet})
+	if !assert.NoError(t, err, "ensure subnet to informer failed") {
+		return
+	}
+
 	// Given
 	mockUpdater := &mockENIUpdater{}
 	syncer := &remoteVpcEniSyncher{
@@ -288,9 +401,10 @@ func TestValidateAndSyncENIIPs_GivenUpdateError_WhenValidate_ThenHandleError(t *
 	mockUpdater.On("Update", mock.AnythingOfType("*v2.ENI")).Return((*ccev2.ENI)(nil), expectedError)
 
 	// When
-	result := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
+	result, err := syncer.validateAndSyncENIIPs(existingENI, iaasENI)
 
-	// Then - 即使更新失败，函数仍然返回true表示检测到了不一致
-	assert.True(t, result, "Should return true even when update fails")
+	// Then - 更新失败时应该返回错误
+	assert.False(t, result, "Should return false when update fails")
+	assert.Error(t, err, "Should return error when update fails")
 	mockUpdater.AssertExpectations(t)
 }

@@ -152,7 +152,7 @@ func (p *rocePlugin) cmdAdd(args *skel.CmdArgs) error {
 	}
 	if n.PrevResult == nil {
 		logger.Errorf("unable to get previous network result.")
-		return fmt.Errorf("unable to get previous network result.")
+		return fmt.Errorf("unable to get previous network result")
 	}
 
 	netns, err := ns.GetNS(args.Netns)
@@ -169,7 +169,7 @@ func (p *rocePlugin) cmdAdd(args *skel.CmdArgs) error {
 	ipConfigs, err := AllocateIP(string(k8sArgs.K8S_POD_NAMESPACE), string(k8sArgs.K8S_POD_NAME), args, logger)
 	if err != nil {
 		logger.Errorf("AllocateIP failed: %v", err)
-		return fmt.Errorf("AllocateIP failed:%v", err)
+		return fmt.Errorf("AllocateIP failed: %v", err)
 	}
 
 	if len(ipConfigs) == 0 {
@@ -185,34 +185,43 @@ func (p *rocePlugin) cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	l, err := GrabFileLock(fileLock)
-	defer l.Close()
 	if err != nil {
 		logger.Errorf("grad file lock error: %s", err.Error())
 		return fmt.Errorf("grad file lock error: %s", err.Error())
 	}
+	defer l.Close()
+
+	// conditional rollback on error within ipConfigs loop only
+	var loopErr error
+	defer func() {
+		if loopErr == nil {
+			return
+		}
+		cleanupErr := netns.Do(func(_ ns.NetNS) error {
+			ip2devMap := make(map[string]string)
+			return p.delAllIPVlanDevices(ip2devMap, logger)
+		})
+		if cleanupErr != nil {
+			logger.Errorf("rollback error: %v", cleanupErr)
+		}
+	}()
 
 	idx := 1
 	for _, ipconf := range ipConfigs {
 		roceDevName := fmt.Sprintf("%s%d", roceDevicePrefix, idx)
 		ipvlanInterface, err := p.createIPvlan(n, ipconf.MasterMac, roceDevName, netns, logger)
 		if err != nil {
-			logger.Errorf("create ipvlan error: %v", err)
+			logger.WithFields(logrus.Fields{"roceDevName": roceDevName, "masterMac": ipconf.MasterMac, "idx": idx}).Errorf("create ipvlan failed: %v", err)
+			loopErr = err
 			return err
 		}
 		err = p.setupIPvlan(n, ipconf.MasterMac, roceDevName, netns, ipconf.Address, ipvlanInterface, ipconf.VifFeatures, logger)
 		if err != nil {
-			logger.Errorf("setup ipvlan error: %v", err)
-			break
+			logger.WithFields(logrus.Fields{"roceDevName": roceDevName, "masterMac": ipconf.MasterMac, "address": ipconf.Address, "idx": idx}).Errorf("setup ipvlan failed: %v", err)
+			loopErr = err
+			return err
 		}
 		idx++
-	}
-
-	if err != nil {
-		ip2devMap := make(map[string]string)
-		_ = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-			return p.delAllIPVlanDevices(ip2devMap, logger)
-		})
-		return err
 	}
 
 	return types.PrintResult(n.PrevResult, cniVersion)

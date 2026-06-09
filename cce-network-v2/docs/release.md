@@ -8,7 +8,13 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.4[暂未发布]
+#### 2.13.5[暂未发布]
+1. [Bug] 修复在 rdma 网卡子设备配置错误时 POD 依然正常就绪导致缺卡的问题
+2. [Bug] 修复 centos7 rule list不全导致 ENI 状态为 erroronnode 从而导致节点不 Ready 的问题
+3. [Bug] 修复 IPv6 模式下重复设置 ENI 网卡 IPv6 地址的问题
+4. [Bug] 解决 DEL 请求误删除不属于自身的 IP 的问题
+
+#### 2.13.4[20251028]
 1. [Oprimize] 支持 RDMA 场景下，在申请 rdmaroce 类型网卡 ip 时遭遇 cce-network-operator 意外重启，导致 RDMA 网卡 ip 泄露与其网卡所在节点的 cce-network-agent 无法就绪问题
 2. [Bug] 修复 eni 异常状态下由于状态码不一致导致下无法写入 nrs 的status的情况
 3. [Optimize] 支持 RDMA 场景下，在 RDMA 网卡意外掉卡时，弹性网卡 ENI 的使用在重启节点或者重启节点操作系统网络守护进程时不受影响
@@ -22,7 +28,7 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 8. [Bug] 修复 ERI 全生命周期管理全局开关不生效的问题
 
 
-#### 2.13.3 [2024/09/24]
+#### 2.13.3 [20250924]
 1. [Feature] VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 2. [Feature] VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 3. [Optimize] 为节点设置 ccesubnetUnavailable 的状态以描述当前节点子网资源状态
@@ -36,7 +42,7 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 #### 2.13.1 [20250821]
 1. [Bug] 修改 veth pair 名称生成规则，从使用容器ID变回使用pod名生成veth名，解决 calico 使用 network policy 不通的问题
 
-#### 2.13.0 (2024/08/01)
+#### 2.13.0 [20240801]
 1. [Feature]支持 eri 全生命周期管理
 2. [Feature]支持使用 rdma 的容器通过申请的资源来决定选择使用 HPC 或 ERI 子设备
 

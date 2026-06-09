@@ -17,7 +17,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
-	os "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/sysctl"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -129,29 +129,6 @@ func getOrCreateENIConfigState(eniID, macAddress string, eni *ccev2.ENI) (*eniCo
 	return state, nil
 }
 
-// isIPOnInterface quickly checks if an IP address is configured on the interface
-func isIPOnInterface(link netlink.Link, expectedIP string) bool {
-	if link == nil || expectedIP == "" {
-		return false
-	}
-
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
-	if err != nil {
-		logrus.WithError(err).WithFields(logrus.Fields{
-			"interface":  link.Attrs().Name,
-			"expectedIP": expectedIP,
-		}).Warning("Failed to list addresses on interface, assuming IP changed")
-		return false // Assume changed if we can't check
-	}
-
-	for _, addr := range addrs {
-		if addr.IP.String() == expectedIP {
-			return true
-		}
-	}
-	return false
-}
-
 // checkAndFixNetworkConfiguration checks and fixes network configuration
 // 1. Check IP configuration - fix if wrong (add missing, remove extra)
 // 2. Check MTU - log warning if wrong (don't fix to avoid disruption)
@@ -209,13 +186,14 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 	}).Info("Ensuring correct IP configuration from MetaAPI")
 
 	// Get current IP addresses on the interface
-	currentAddrs, err := netlink.AddrList(ec.link, netlink.FAMILY_ALL)
+	actualAddrs, err := netlink.AddrList(ec.link, netlink.FAMILY_ALL)
 	if err != nil {
 		return fmt.Errorf("failed to list current addresses: %w", err)
 	}
 
+	actualIPs := make(map[string]struct{})
 	// Step 1: Remove incorrect/extra IP addresses
-	for _, addr := range currentAddrs {
+	for _, addr := range actualAddrs {
 		ipStr := addr.IP.String()
 
 		// Skip link-local and loopback addresses (these are system managed)
@@ -228,6 +206,7 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 			continue
 		}
 
+		actualIPs[ipStr] = struct{}{}
 		// If this IP is not in our expected set, remove it
 		if !expectedIPs[ipStr] {
 			ec.log.WithFields(logrus.Fields{
@@ -247,55 +226,57 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 
 	// Step 2: Ensure correct IP addresses are present
 	for expectedIP := range expectedIPs {
-		if !isIPOnInterface(ec.link, expectedIP) {
+		if _, ok := actualIPs[expectedIP]; ok {
+			continue
+		}
+
+		ec.log.WithFields(logrus.Fields{
+			"interface": linkName,
+			"ip":        expectedIP,
+		}).Info("Adding missing correct IP address to interface")
+
+		// Parse IP and determine subnet mask from config
+		ipObj := net.ParseIP(expectedIP)
+		if ipObj == nil {
 			ec.log.WithFields(logrus.Fields{
 				"interface": linkName,
 				"ip":        expectedIP,
-			}).Info("Adding missing correct IP address to interface")
+			}).Error("Failed to parse expected IP address")
+			continue
+		}
 
-			// Parse IP and determine subnet mask from config
-			ip := net.ParseIP(expectedIP)
-			if ip == nil {
-				ec.log.WithFields(logrus.Fields{
-					"interface": linkName,
-					"ip":        expectedIP,
-				}).Error("Failed to parse expected IP address")
-				continue
+		// Get subnet mask from ENI spec
+		var mask net.IPMask
+		var err error
+		if ipObj.To4() != nil {
+			// IPv4: get subnet mask from ENI spec
+			mask, err = ec.getSubnetMaskFromENI(ipObj.String())
+			if err != nil {
+				ec.log.WithError(err).WithField("ip", ipObj.String()).Error("Failed to get IPv4 subnet mask from ENI")
+				continue // Skip this IP if we can't get the subnet mask
 			}
+		} else {
+			// IPv6: get subnet mask from ENI spec
+			mask, err = ec.getIPv6SubnetMaskFromENI(ipObj.String())
+			if err != nil {
+				ec.log.WithError(err).WithField("ip", ipObj.String()).Error("Failed to get IPv6 subnet mask from ENI")
+				continue // Skip this IP if we can't get the subnet mask
+			}
+		}
 
-			// Get subnet mask from ENI spec
-			var mask net.IPMask
-			var err error
-			if ip.To4() != nil {
-				// IPv4: get subnet mask from ENI spec
-				mask, err = ec.getSubnetMaskFromENI(ip.String())
-				if err != nil {
-					ec.log.WithError(err).WithField("ip", ip.String()).Error("Failed to get IPv4 subnet mask from ENI")
-					continue // Skip this IP if we can't get the subnet mask
-				}
-			} else {
-				// IPv6: get subnet mask from ENI spec
-				mask, err = ec.getIPv6SubnetMaskFromENI(ip.String())
-				if err != nil {
-					ec.log.WithError(err).WithField("ip", ip.String()).Error("Failed to get IPv6 subnet mask from ENI")
-					continue // Skip this IP if we can't get the subnet mask
-				}
-			}
+		addr := &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   ipObj,
+				Mask: mask,
+			},
+		}
 
-			addr := &netlink.Addr{
-				IPNet: &net.IPNet{
-					IP:   ip,
-					Mask: mask,
-				},
-			}
-
-			if err := netlink.AddrAdd(ec.link, addr); err != nil {
-				ec.log.WithError(err).WithFields(logrus.Fields{
-					"interface": linkName,
-					"ip":        expectedIP,
-				}).Warning("Failed to add correct IP address")
-				// Continue with other IPs even if one fails
-			}
+		if err := netlink.AddrAdd(ec.link, addr); err != nil {
+			ec.log.WithError(err).WithFields(logrus.Fields{
+				"interface": linkName,
+				"ip":        expectedIP,
+			}).Warning("Failed to add correct IP address")
+			// Continue with other IPs even if one fails
 		}
 	}
 

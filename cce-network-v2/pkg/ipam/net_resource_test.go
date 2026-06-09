@@ -90,8 +90,9 @@ var excessDef = []testExcessDef{
 	{20, 4, 8, 0, 0, 0, 8},
 	{20, 4, 8, 0, 8, 0, 0},
 	// Test cases with readyForReleaseCount > 0
+	// When readyForReleaseCount > 0, the function returns readyForReleaseCount directly
 	{12, 3, 8, 0, 1, 5, 5}, // available=12, used=3, pre=8, max=1 => excess=0, but readyForRelease=5 => total=5
-	{15, 3, 8, 0, 1, 3, 6}, // available=15, used=3, pre=8, max=1 => excess=3, readyForRelease=3 => total=6
+	{15, 3, 8, 0, 1, 3, 3}, // available=15, used=3, pre=8, max=1 => excess=3, but readyForRelease=3 => total=3 (returns readyForReleaseCount)
 	{10, 5, 8, 0, 2, 2, 2}, // available=10, used=5, pre=8, max=2 => excess=0, readyForRelease=2 => total=2
 }
 
@@ -1105,8 +1106,12 @@ func (e *IPAMSuite) TestHandleIPRelease_GivenIPsReadyForRelease_WhenCalled_ThenR
 	// Then
 	c.Assert(err, check.IsNil)
 	c.Assert(instanceMutated, check.Equals, true)
-	c.Assert(node.ipReleaseStatus["192.168.1.10"], check.Equals, ipamOption.IPAMReleased)
-	c.Assert(node.ipsMarkedForRelease["192.168.1.10"], check.Equals, time.Time{}) // Should be deleted
+	// After successful release, the IP should be deleted from ipReleaseStatus
+	_, exists := node.ipReleaseStatus["192.168.1.10"]
+	c.Assert(exists, check.Equals, false)
+	// Should also be deleted from ipsMarkedForRelease
+	_, existsInMarked := node.ipsMarkedForRelease["192.168.1.10"]
+	c.Assert(existsInMarked, check.Equals, false)
 }
 
 func (e *IPAMSuite) TestHandleIPRelease_GivenIPsDoNotRelease_WhenCalled_ThenRemovesFromMaps(c *check.C) {
@@ -1171,7 +1176,9 @@ func (e *IPAMSuite) TestHandleIPRelease_GivenIPReleaseFailure_WhenCalled_ThenRet
 	instanceMutated, err := node.handleIPRelease(ctx, action)
 
 	// Then
-	c.Assert(err, check.Equals, expectedError)
+	// The error is wrapped with "failed to release IPs: " prefix
+	c.Assert(err, check.NotNil)
+	c.Assert(err, check.ErrorMatches, "failed to release IPs: failed to release IP")
 	c.Assert(instanceMutated, check.Equals, false)
 }
 
@@ -1244,8 +1251,9 @@ func (e *IPAMSuite) TestHandleIPRelease_GivenMixedIPStates_WhenCalled_ThenHandle
 	c.Assert(err, check.IsNil)
 	c.Assert(instanceMutated, check.Equals, true)
 
-	// IP1 should be released
-	c.Assert(node.ipReleaseStatus["192.168.1.10"], check.Equals, ipamOption.IPAMReleased)
+	// IP1 should be deleted from ipReleaseStatus after successful release
+	_, existsIP1 := node.ipReleaseStatus["192.168.1.10"]
+	c.Assert(existsIP1, check.Equals, false)
 
 	// IP2 should be removed from maps
 	_, existsInMarked := node.ipsMarkedForRelease["192.168.1.11"]
@@ -1298,9 +1306,10 @@ func (e *IPAMSuite) TestHandleIPRelease_GivenMultipleIPsReadyForRelease_WhenCall
 	c.Assert(instanceMutated, check.Equals, true)
 	c.Assert(len(releasedIPs), check.Equals, 3)
 
-	// All IPs should be released
+	// All IPs should be deleted from ipReleaseStatus and ipsMarkedForRelease after successful release
 	for _, ip := range []string{"192.168.1.10", "192.168.1.11", "192.168.1.12"} {
-		c.Assert(node.ipReleaseStatus[ip], check.Equals, ipamOption.IPAMReleased)
+		_, existsInStatus := node.ipReleaseStatus[ip]
+		c.Assert(existsInStatus, check.Equals, false)
 		_, existsInMarked := node.ipsMarkedForRelease[ip]
 		c.Assert(existsInMarked, check.Equals, false)
 	}

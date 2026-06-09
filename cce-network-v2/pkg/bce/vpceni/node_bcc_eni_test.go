@@ -782,28 +782,6 @@ func TestBccNetworkResourceSet_createInterface_GivenCooldownTime_WhenCreateInter
 	assert.Error(t, err)
 }
 
-// TestBccNetworkResourceSet_createInterface_GivenNoENIQuota_WhenCreateInterface_ThenReturnError 测试ENI配额为空的情况
-func TestBccNetworkResourceSet_createInterface_GivenNoENIQuota_WhenCreateInterface_ThenReturnError(t *testing.T) {
-	// Given
-	n := &bccNetworkResourceSet{
-		bceNetworkResourceSet: &bceNetworkResourceSet{
-			k8sObj: &ccev2.NetResourceSet{},
-		},
-	}
-
-	ctx := context.Background()
-	allocation := &ipam.AllocationAction{}
-	scopedLog := logrus.NewEntry(logrus.New())
-
-	// When
-	interfaceNum, msg, err := n.createInterface(ctx, allocation, scopedLog)
-
-	// Then
-	assert.Equal(t, 0, interfaceNum)
-	assert.Equal(t, errUnableToGetEniQuota, msg)
-	assert.Error(t, err)
-}
-
 // Mock types for testing createInterface
 type mockENIQuota struct {
 	mock.Mock

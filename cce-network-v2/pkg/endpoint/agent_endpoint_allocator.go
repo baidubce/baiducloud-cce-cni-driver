@@ -191,7 +191,7 @@ func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
 		return err
 	}
 	if isSameContainerID(oldEP, containerID) {
-		return e.tryDeleteEndpointAfterPodDeleted(oldEP, false, logEntry)
+		return e.tryDeleteEndpointAfterPodDeleted(oldEP, true, logEntry)
 	} else {
 		logEntry.Infof("ignore to release ip case by container id is not match")
 	}
@@ -945,5 +945,5 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		logEntry.WithField("err", err).WithField("cep", ep.Name).Warning("failed to remove finalizer of cep before delete")
 	}
 	logEntry.WithField("step", "delete").Info("maker endpoint deleted")
-	return e.cceEndpointClient.CCEEndpoints(ep.Namespace).Delete(context.TODO(), ep.Name, metav1.DeleteOptions{})
+	return e.deleteEndpointSafely(ep)
 }

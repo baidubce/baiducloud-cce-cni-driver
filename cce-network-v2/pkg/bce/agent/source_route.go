@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
@@ -423,6 +424,10 @@ func addRule(scopedLog *logrus.Entry, ip string, table int, from bool, priority 
 	}
 
 	if err := netlink.RuleAdd(rule); err != nil {
+		if os.IsExist(err) {
+			return ensureRuleExists(scopedLog, rule, &src, table, from, priority)
+		}
+		// Other errors
 		scopedLog.WithFields(logrus.Fields{
 			"rule": logfields.Repr(rule),
 		}).Errorf("add rule for source based routing failed: %v", err)
@@ -432,4 +437,53 @@ func addRule(scopedLog *logrus.Entry, ip string, table int, from bool, priority 
 		"rule": logfields.Repr(rule),
 	}).Infof("add rule for source based routing success")
 	return nil
+}
+
+func ensureRuleExists(scopedLog *logrus.Entry, rule *netlink.Rule, src *net.IPNet, table int, from bool, priority int) error {
+	// Verify that an identical rule already exists using RuleListFiltered
+	family, filter, mask := buildFilterArgs(src, table, from, priority)
+	existing, listErr := netlink.RuleListFiltered(family, filter, mask)
+	if listErr != nil {
+		scopedLog.WithFields(logrus.Fields{
+			"rule": logfields.Repr(rule),
+		}).Errorf("rule exists but failed to verify with RuleListFiltered: %v", listErr)
+		return fmt.Errorf("rule exists but failed to verify with RuleListFiltered: %w", listErr)
+	}
+	for _, r := range existing {
+		if r.Table == table && r.Priority == priority {
+			if (from && r.Src != nil && r.Src.String() == src.String()) || (!from && r.Dst != nil && r.Dst.String() == src.String()) {
+				scopedLog.WithFields(logrus.Fields{
+					"rule": logfields.Repr(rule),
+				}).Debugf("rule already exists and matches, skipping add")
+				return nil
+			}
+		}
+	}
+	// No identical rule found
+	scopedLog.WithFields(logrus.Fields{
+		"rule": logfields.Repr(rule),
+	}).Errorf("rule add reported exist but no identical rule found")
+	return fmt.Errorf("rule add reported exist but no identical rule found")
+}
+
+func buildFilterArgs(src *net.IPNet, table int, from bool, priority int) (int, *netlink.Rule, uint64) {
+	filter := netlink.NewRule()
+	filter.Table = table
+	filter.Priority = priority
+	if from {
+		filter.Src = src
+	} else {
+		filter.Dst = src
+	}
+	family := netlink.FAMILY_V4
+	if src.IP.To4() == nil {
+		family = netlink.FAMILY_V6
+	}
+	mask := netlink.RT_FILTER_TABLE | netlink.RT_FILTER_PRIORITY
+	if from {
+		mask |= netlink.RT_FILTER_SRC
+	} else {
+		mask |= netlink.RT_FILTER_DST
+	}
+	return family, filter, mask
 }

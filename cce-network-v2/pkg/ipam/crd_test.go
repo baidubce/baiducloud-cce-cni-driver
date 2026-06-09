@@ -192,6 +192,8 @@ func newFakeNetResourceSetStore(conf Configuration, c *C) *nodeStore {
 		conf:               conf,
 		refreshTrigger:     t,
 		hasRestoreFinished: true,
+		restoreFinished:    make(chan struct{}),
+		ipPoolReady:        make(chan struct{}),
 	}
 	return store
 }
@@ -233,4 +235,32 @@ func (s *IPAMSuite) TestMarkForReleaseNoAllocate(c *C) {
 	cn.Status.IPAM.ReleaseIPs["1.1.1.3"] = ipamOption.IPAMMarkForRelease
 	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 	c.Assert(string(cn.Status.IPAM.ReleaseIPs["1.1.1.3"]), checker.Equals, ipamOption.IPAMDoNotRelease)
+}
+
+func TestUpdateLocalNodeResource(t *testing.T) {
+	// Given: a nodeStore with an existing ownNode
+	conf := &testConfigurationCRD{}
+	store := newFakeNetResourceSetStore(conf, nil)
+
+	existingNode := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "existing-node",
+		},
+		Spec: ccev2.NetResourceSpec{
+			IPAM: ipamTypes.IPAMSpec{
+				Pool: map[string]ipamTypes.AllocationIP{
+					"10.0.0.1": {Resource: "eni-1"},
+				},
+			},
+		},
+	}
+	store.ownNode = existingNode
+
+	// When: updateLocalNodeResource is called with nil node
+	store.updateLocalNodeResource(nil)
+
+	// Then: the ownNode should remain unchanged (not set to nil)
+	assert.NotNil(t, store.ownNode, "ownNode should not be nil after calling updateLocalNodeResource with nil")
+	assert.Equal(t, "existing-node", store.ownNode.Name, "ownNode should remain unchanged")
+	assert.Equal(t, 1, len(store.ownNode.Spec.IPAM.Pool), "ownNode pool should remain unchanged")
 }

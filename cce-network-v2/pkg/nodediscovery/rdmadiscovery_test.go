@@ -74,6 +74,10 @@ func (m *mockMetadataClient) GetInstanceType() (metadata.InstanceType, error) {
 	return metadata.InstanceType("bcc"), nil
 }
 
+func (m *mockMetadataClient) GetInstanceSpecs() (string, error) {
+	return "bcc.mock", nil
+}
+
 func (m *mockMetadataClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	return metadata.InstanceTypeExBCC, nil
 }
@@ -144,6 +148,22 @@ func (m *mockMetadataClient) GetVifFeatures(mac string) (string, error) {
 
 func (m *mockMetadataClient) GetResourceID() (string, error) {
 	return "", nil
+}
+
+func (m *mockMetadataClient) GetLinkPrimaryIP(macAddress string) (string, error) {
+	return "10.0.0.1", nil
+}
+
+func (m *mockMetadataClient) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClient) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClient) GetLinkMTU(macAddress string) (int, error) {
+	return 1500, nil
 }
 
 // mockMetadataClientWithHPASID is an enhanced mock for testing HPASID scenarios
@@ -371,6 +391,14 @@ func TestShouldExitOnRegularERINRS_EdgeCases(t *testing.T) {
 
 // TestCleanupStaleRdmaNRS_InputValidation tests input validation for cleanupStaleRdmaNRS
 func TestCleanupStaleRdmaNRS_InputValidation(t *testing.T) {
+	// Setup mock metadata client
+	mockClient := &mockMetadataClient{
+		instanceID: "i-test-123",
+		err:        nil,
+	}
+	agent.SetMetadataClient(mockClient)
+	defer agent.ResetMetadataClient()
+
 	rd := &RdmaDiscovery{}
 
 	t.Run("Given_EmptyCurrentRdmaIfs_When_Cleanup_Then_EarlyReturn", func(t *testing.T) {
@@ -475,6 +503,14 @@ func TestCleanupStaleRdmaNRS_WithMockK8s(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Setup mock metadata client for this test
+			mockClient := &mockMetadataClient{
+				instanceID: tt.mockInstanceID,
+				err:        nil,
+			}
+			agent.SetMetadataClient(mockClient)
+			defer agent.ResetMetadataClient()
+
 			// Create RdmaDiscovery instance with proper initialization
 			rd := &RdmaDiscovery{
 				NodeDiscovery: &NodeDiscovery{
@@ -494,32 +530,13 @@ func TestCleanupStaleRdmaNRS_WithMockK8s(t *testing.T) {
 				require.NoError(t, err, "Failed to create test NRS")
 			}
 
-			// Note: We cannot easily mock agent.GetInstanceID due to Go's package system.
-			// The test will timeout due to network calls to metadata service.
-			// This is expected behavior in test environment.
-
 			// Execute the function under test
 			err := rd.cleanupStaleRdmaNRS(tt.currentRdmaIfs)
 
-			if len(tt.currentRdmaIfs) == 0 {
-				// Should return early without error for empty input
-				assert.NoError(t, err, "Should not error on empty input")
+			if tt.expectedError {
+				assert.Error(t, err)
 			} else {
-				// Will likely fail due to agent.GetInstanceID, but that's expected
-				// The important thing is that it doesn't panic and handles input correctly
-				t.Logf("Function returned error (expected due to agent.GetInstanceID): %v", err)
-
-				// For test cases that expect no error, we should not assert error
-				// For test cases that expect error, we should assert error
-				if tt.expectedError {
-					assert.Error(t, err, "Expected error due to agent.GetInstanceID in test environment")
-					if err != nil {
-						assert.Contains(t, err.Error(), "failed to get instance ID", "Error should mention instance ID failure")
-					}
-				} else {
-					// For cases that don't expect error, we just log the result
-					t.Logf("Function completed without error as expected")
-				}
+				assert.NoError(t, err, "Should not error on empty input")
 			}
 
 			// Verify that we can still interact with the mock K8s client
@@ -1580,6 +1597,10 @@ func (m *mockMetadataClientForHPAS) GetInstanceType() (metadata.InstanceType, er
 	return metadata.InstanceType("bcc"), nil
 }
 
+func (m *mockMetadataClientForHPAS) GetInstanceSpecs() (string, error) {
+	return "bcc.mock", nil
+}
+
 func (m *mockMetadataClientForHPAS) GetAvailabilityZone() (string, error) {
 	return "cn-bj-d", nil
 }
@@ -1610,6 +1631,38 @@ func (m *mockMetadataClientForHPAS) GetLinkGateway(macAddress, ip string) (strin
 
 func (m *mockMetadataClientForHPAS) GetLinkMTU(macAddress string) (int, error) {
 	return 1500, nil
+}
+
+func (m *mockMetadataClientForHPAS) GetInstanceName() (string, error) {
+	return "test-instance-name", nil
+}
+
+func (m *mockMetadataClientForHPAS) GetLocalIPv4() (string, error) {
+	return "10.0.0.1", nil
+}
+
+func (m *mockMetadataClientForHPAS) GetRegion() (string, error) {
+	return "bj", nil
+}
+
+func (m *mockMetadataClientForHPAS) GetLinkMask(macAddress, ip string) (string, error) {
+	return "255.255.255.0", nil
+}
+
+func (m *mockMetadataClientForHPAS) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClientForHPAS) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClientForHPAS) GetVifFeatures(macAddress string) (string, error) {
+	return "", nil
+}
+
+func (m *mockMetadataClientForHPAS) ListMacs() ([]string, error) {
+	return []string{}, nil
 }
 
 // mockEventRecorder is a mock implementation of record.EventRecorder for testing
@@ -1771,7 +1824,7 @@ func simulateMutateNodeResourceHPASLogic(rdmaNetResourceSet *ccev2.NetResourceSe
 // This test covers lines 481-502 in rdmadiscovery.go
 // Note: This test only covers successful scenarios to avoid log.Fatal calls which would exit the test
 func TestMutateNodeResource_HPAS_Integration(t *testing.T) {
-	// Save original metadata client and restore it after test
+	// Save original metadata client and restore it after tests
 	defer agent.ResetMetadataClient()
 
 	tests := []struct {

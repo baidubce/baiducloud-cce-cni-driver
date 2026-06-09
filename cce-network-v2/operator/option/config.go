@@ -237,6 +237,11 @@ const (
 
 	// HPASStanderd enables the use of standardized HPAS interface
 	HPASStanderd = "hpas-standerd"
+
+	// BCE API Retry options
+	BCEAPIRetryCount        = "bce-api-retry-count"
+	BCEAPIRetryMaxDelay     = "bce-api-retry-max-delay"
+	BCEAPIRetryBaseInterval = "bce-api-retry-base-interval"
 )
 
 // OperatorConfig is the configuration used by the operator.
@@ -448,6 +453,11 @@ type OperatorConfig struct {
 
 	// HPASStanderd enables the use of standardized HPAS interface
 	HPASStanderd bool
+
+	// BCE API Retry options
+	BCEAPIRetryCount        int           // Number of retries (1 = 2 total attempts)
+	BCEAPIRetryMaxDelay     time.Duration // Maximum delay between retries
+	BCEAPIRetryBaseInterval time.Duration // Base interval for retry delay with jitter
 }
 
 // Populate sets all options with the values from viper.
@@ -542,6 +552,11 @@ func (c *OperatorConfig) Populate() {
 
 	// HPAS Standerd
 	c.HPASStanderd = viper.GetBool(HPASStanderd)
+
+	// BCE API Retry options
+	c.BCEAPIRetryCount = viper.GetInt(BCEAPIRetryCount)
+	c.BCEAPIRetryMaxDelay = viper.GetDuration(BCEAPIRetryMaxDelay)
+	c.BCEAPIRetryBaseInterval = viper.GetDuration(BCEAPIRetryBaseInterval)
 
 	// Option maps and slices
 

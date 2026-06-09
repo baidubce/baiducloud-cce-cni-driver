@@ -117,6 +117,27 @@ func (c *HpcClient) BatchAddPrivateIP(ctx context.Context, eniID string, private
 	return hpcEni.PrivateIPAddresses, err
 }
 
+func (c *HpcClient) BatchAddPrivateIPWithClientToken(ctx context.Context, eniID string, privateIPs []string, count int, clientToken string) ([]string, error) {
+	log.Infof("start to batch add hpc privateIP with clientToken of eniID: %v", eniID)
+	args := &hpc.EniBatchPrivateIPArgs{
+		EniID:                 eniID,
+		PrivateIPAddressCount: count,
+		ClientToken:           clientToken,
+	}
+	hpcEni, err := c.cloud.BatchAddHpcEniPrivateIP(ctx, args)
+	if hpcEni == nil || len(hpcEni.PrivateIPAddresses) == 0 {
+		log.WithError(err).WithField("hpcENI", eniID).Warnf("failed to batch add private ips in hpc ENI with clientToken")
+		if err == nil {
+			err = fmt.Errorf("failed to batch add private ips in hpc ENI %s with clientToken", eniID)
+		}
+		return []string{}, err
+	}
+
+	log.Infof("batch add HpcEni private ips are %v in hpcENI %s with clientToken", hpcEni.PrivateIPAddresses, eniID)
+
+	return hpcEni.PrivateIPAddresses, err
+}
+
 func (c *HpcClient) BatchDeletePrivateIP(ctx context.Context, eniID string, privateIPs []string) error {
 	log.Infof("start to batch delete hpc privateIP of eniID: %v", eniID)
 	args := &hpc.EniBatchDeleteIPArgs{

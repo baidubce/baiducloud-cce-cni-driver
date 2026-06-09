@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
@@ -44,7 +45,32 @@ const (
 	BCCEndpointEnv = "BCC_ENDPOINT"
 	BBCEndpointEnv = "BBC_ENDPOINT"
 	EIPEndpointEnv = "EIP_ENDPOINT"
+
+	// Default BCE API retry configuration (in milliseconds)
+	defaultBCEAPIRetryCount          = 1
+	defaultBCEAPIRetryMaxDelayMs     = 5000
+	defaultBCEAPIRetryBaseIntervalMs = 500
 )
+
+// getRetryConfig returns retry configuration from operator config with defaults
+func getRetryConfig() (retryCount int, maxDelayMs int64, baseIntervalMs int64) {
+	retryCount = defaultBCEAPIRetryCount
+	maxDelayMs = defaultBCEAPIRetryMaxDelayMs
+	baseIntervalMs = defaultBCEAPIRetryBaseIntervalMs
+
+	// Override with operator config if set
+	if operatorOption.Config.BCEAPIRetryCount > 0 {
+		retryCount = operatorOption.Config.BCEAPIRetryCount
+	}
+	if operatorOption.Config.BCEAPIRetryMaxDelay > 0 {
+		maxDelayMs = operatorOption.Config.BCEAPIRetryMaxDelay.Milliseconds()
+	}
+	if operatorOption.Config.BCEAPIRetryBaseInterval > 0 {
+		baseIntervalMs = operatorOption.Config.BCEAPIRetryBaseInterval.Milliseconds()
+	}
+
+	return
+}
 
 func newBCEClientConfig(ctx context.Context,
 	region,
@@ -58,13 +84,15 @@ func newBCEClientConfig(ctx context.Context,
 		endpoint = preDefinedEndpoints[region]
 	}
 
+	retryCount, maxDelayMs, baseIntervalMs := getRetryConfig()
+
 	return &bce.BceClientConfiguration{
 		Endpoint:                  endpoint,
 		Region:                    region,
 		UserAgent:                 bce.DEFAULT_USER_AGENT,
 		Credentials:               auth.GetCredentials(ctx),
 		SignOption:                auth.GetSignOptions(ctx),
-		Retry:                     bce.NewNoRetryPolicy(),
+		Retry:                     bce.NewBackOffRetryPolicy(retryCount, maxDelayMs, baseIntervalMs),
 		ConnectionTimeoutInMillis: int(timeout.Milliseconds()),
 	}
 }
@@ -152,7 +180,7 @@ func New(
 
 func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
-
+	scopedLog := log.WithField("instanceID", args.InstanceId)
 	isTruncated := true
 	nextMarker := ""
 
@@ -184,7 +212,7 @@ func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni,
 			exportMetric("ListENI", t, lastErr)
 
 			if lastErr != nil {
-				log.Warnf("ListENI failed for marker %s, will retry: %v", nextMarker, lastErr)
+				scopedLog.Warnf("ListENI failed for marker %s, will retry: %v", nextMarker, lastErr)
 				return false, nil // 返回false表示需要重试
 			}
 
@@ -193,12 +221,12 @@ func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni,
 
 		if err != nil {
 			// 重试耗尽或context取消
-			log.Errorf("ListENI failed after retries for marker %s: %v", nextMarker, lastErr)
+			scopedLog.Errorf("ListENI failed after retries for marker %s: %v", nextMarker, lastErr)
 			return nil, lastErr
 		}
 
 		if res == nil {
-			log.Errorf("ListENI returned nil response")
+			scopedLog.Errorf("ListENI returned nil response")
 			return nil, fmt.Errorf("ListENI returned nil response")
 		}
 
@@ -365,10 +393,16 @@ func (c *Client) ListEIPs(_ context.Context, args eip.ListEipArgs) ([]eip.EipMod
 }
 
 func (c *Client) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
+	return c.BatchAddPrivateIPWithClientToken(ctx, privateIPs, count, eniID, isIpv6, "")
+}
+
+// BatchAddPrivateIPWithClientToken adds private IPs to an ENI with client token for idempotency
+func (c *Client) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
 	t := time.Now()
 
 	resp, err := c.eniClient.BatchAddPrivateIp(&eni.EniBatchPrivateIpArgs{
 		EniId:                 eniID,
+		ClientToken:           clientToken,
 		PrivateIpAddresses:    privateIPs,
 		PrivateIpAddressCount: count,
 		IsIpv6:                isIpv6,
@@ -707,6 +741,8 @@ func (c *Client) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCMod
 func (c *Client) HPASWrapper(ctx context.Context) error {
 	//c.eniClient.WithHeader
 	c.bccClient.Signer = hpas.NewHPASSignWrapper(c.bccClient.Signer)
-	c.eniClient.Signer = hpas.NewHPASSignWrapper(c.eniClient.Signer)
+	if eniClient, ok := c.eniClient.(*eniExt.Client); ok && eniClient != nil {
+		eniClient.Signer = hpas.NewHPASSignWrapper(eniClient.Signer)
+	}
 	return nil
 }

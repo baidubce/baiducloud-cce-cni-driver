@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"sort"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -243,6 +245,14 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 	resource := n.k8sObj
 	n.mutex.RUnlock()
 
+	if n.usePrimaryENIWithSecondaryMode {
+		scopedLog.Infof("The maximum number of ENIs is 0, use primary interface with secondary IP mode")
+		if err = n.createPrimaryENIOnCluster(ctx, scopedLog, resource); err != nil {
+			return 0, "", err
+		}
+		return 1, "create primary ENI on cluster", nil
+	}
+
 	if n.nextCreateENITime != nil && n.nextCreateENITime.After(time.Now()) {
 		msg = fmt.Sprintf("unable to create new ENI: cooling down, next available time is %v", n.nextCreateENITime.Format(time.RFC3339))
 		err = errors.New(msg)
@@ -273,7 +283,7 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 				if e.Status.CCEStatus == ccev2.ENIStatusUsingInPod {
 					inuseENICount++
 				}
-			} else if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
+			} else if utils.IsSecondaryIPMode(n.k8sObj.Spec.ENI.UseMode) {
 				// if the length of private ip set is greater than the MaxIPPerENI, then the ENI is in use
 				if len(e.Spec.ENI.PrivateIPSet) >= eniQuota.GetMaxIP() {
 					inuseENICount++
@@ -445,6 +455,23 @@ func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.E
 		createENIArgs.EnterpriseSecurityGroupIds = []string{}
 	}
 
+	// Generate client token key based on fixed ENI creation parameters for idempotency
+	clientTokenKey := bceutils.GenerateENIClientTokenKey(
+		createENIArgs.InstanceId,
+		createENIArgs.SubnetId,
+		createENIArgs.SecurityGroupIds,
+		createENIArgs.EnterpriseSecurityGroupIds,
+	)
+
+	// Get or create client token for this ENI creation request
+	clientToken := n.clientTokens.GetOrCreateClientToken(clientTokenKey)
+	createENIArgs.ClientToken = clientToken
+
+	scopedLog = scopedLog.WithFields(logrus.Fields{
+		"clientTokenKey": clientTokenKey,
+		"clientToken":    clientToken,
+	})
+
 	// use the given ip to create a new ENI
 	var privateIPs []enisdk.PrivateIp
 	for i := 0; i < len(resource.Spec.ENI.PrivateIPSet); i++ {
@@ -485,8 +512,13 @@ func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.E
 		scopedLog.WithField("request", logfields.Json(createENIArgs)).
 			WithContext(ctx).
 			WithError(err).Errorf("create eni failed")
+		// Keep clientToken in map for retry with same token
 		return "", err
 	}
+
+	// Remove clientToken after successful creation to allow new creation with different parameters
+	n.clientTokens.RemoveClientToken(clientTokenKey)
+
 	scopedLog.WithField("request", logfields.Json(createENIArgs)).
 		WithContext(ctx).Debugf("sync eni %s success", resource.Name)
 	return eniID, nil

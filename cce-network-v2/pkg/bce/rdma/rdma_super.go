@@ -32,6 +32,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -553,8 +554,8 @@ func (n *bceRDMANetResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 		iaasClient := n.manager.getIaaSClient(vifFeatures)
 
 		for ipv4ToAllocate > 0 || ipv6ToAllocate > 0 {
-			ipv4PaticalToAllocate = math.IntMin(ipv4ToAllocate, 10)
-			ipv6PaticalToAllocate = math.IntMin(ipv6ToAllocate, 10)
+			ipv4PaticalToAllocate = math.IntMin(ipv4ToAllocate, bceconstants.BatchAddOrDeleteIPLimit)
+			ipv6PaticalToAllocate = math.IntMin(ipv6ToAllocate, bceconstants.BatchAddOrDeleteIPLimit)
 			allocateLog := scopedLog.WithFields(logrus.Fields{
 				"ipv4ToAllocate":        ipv4ToAllocate,
 				"ipv6ToAllocate":        ipv6ToAllocate,
@@ -802,7 +803,7 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 				}
 			}
 			if containsIP {
-				ipv6ToReleaseSet = ipv6ToReleaseSet.append(ipstr, 10)
+				ipv6ToReleaseSet = ipv6ToReleaseSet.append(ipstr, bceconstants.BatchAddOrDeleteIPLimit)
 			}
 		} else if ip != nil {
 			containsIP := false
@@ -813,7 +814,7 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 				}
 			}
 			if containsIP {
-				ipv4ToReleaseSet = ipv4ToReleaseSet.append(ipstr, 10)
+				ipv4ToReleaseSet = ipv4ToReleaseSet.append(ipstr, bceconstants.BatchAddOrDeleteIPLimit)
 			}
 		}
 	}

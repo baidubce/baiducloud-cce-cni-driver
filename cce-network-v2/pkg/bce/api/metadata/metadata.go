@@ -17,16 +17,20 @@ package metadata
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/version"
 )
@@ -35,6 +39,12 @@ const (
 	metadataHost     = "169.254.169.254"
 	metadataScheme   = "http"
 	metadataBasePath = "/1.0/meta-data/"
+)
+
+var (
+	// DefaultMetaClient is the shared metadata client instance
+	// Initialized lazily in InitMetadataClient() to ensure retry config is set
+	DefaultMetaClient Interface
 )
 
 type InstanceType string
@@ -65,7 +75,9 @@ var (
 type Interface interface {
 	GetInstanceID() (string, error)
 	GetInstanceName() (string, error)
+	GetResourceID() (string, error)
 	GetInstanceType() (InstanceType, error)
+	GetInstanceSpecs() (string, error)
 	GetInstanceTypeEx() (InstanceTypeEx, error)
 	GetLocalIPv4() (string, error)
 	GetAvailabilityZone() (string, error)
@@ -75,6 +87,10 @@ type Interface interface {
 	GetSubnetID() (string, error)
 	GetLinkGateway(string, string) (string, error)
 	GetLinkMask(string, string) (string, error)
+	GetLinkFixedIPs(string) ([]string, error)
+	GetLinkPrimaryIP(string) (string, error)
+	GetLinkSecondaryIPs(string) ([]string, error)
+	GetLinkMTU(string) (int, error)
 	GetVifFeatures(macAddress string) (string, error)
 	GetFeatureList() (*FeatureList, error)
 
@@ -84,16 +100,22 @@ type Interface interface {
 var _ Interface = &Client{}
 
 type Client struct {
-	host   string
-	scheme string
-	debug  bool
+	host              string
+	scheme            string
+	debug             bool
+	retryCount        int
+	retryMaxDelay     time.Duration
+	retryBaseInterval time.Duration
 }
 
-func NewClient() *Client {
+func NewClient(retryCount int, retryMaxDelay, retryBaseInterval time.Duration) *Client {
 	c := &Client{
-		host:   metadataHost,
-		scheme: metadataScheme,
-		debug:  false,
+		host:              metadataHost,
+		scheme:            metadataScheme,
+		debug:             false,
+		retryCount:        retryCount,
+		retryMaxDelay:     retryMaxDelay,
+		retryBaseInterval: retryBaseInterval,
 	}
 
 	if _, exists := os.LookupEnv("DEBUG_METADATA"); exists {
@@ -103,51 +125,130 @@ func NewClient() *Client {
 	return c
 }
 
+// InitMetadataClient initializes the global DefaultMetaClient with the provided retry configuration
+// This is the main initialization function that sets up retry config and creates the client
+func InitMetadataClient(retryCount int, retryMaxDelay, retryBaseInterval time.Duration) {
+	// Use defaults if not provided
+	if retryCount < 0 {
+		retryCount = defaults.APIRetryCount
+	}
+	if retryMaxDelay <= 0 {
+		retryMaxDelay = defaults.APIRetryMaxDelay
+	}
+	if retryBaseInterval <= 0 {
+		retryBaseInterval = defaults.APIRetryBaseInterval
+	}
+	DefaultMetaClient = NewClient(retryCount, retryMaxDelay, retryBaseInterval)
+}
+
 func (c *Client) sendRequest(path string) ([]byte, error) {
 	ctx := logging.NewContext()
-
 	reqURL := url.URL{
 		Scheme: c.scheme,
 		Host:   c.host,
 		Path:   path,
 	}
 
-	// Create request with custom User-Agent header
-	req, err := http.NewRequest("GET", reqURL.String(), nil)
+	var lastErr error
+	for attempt := 0; attempt <= c.retryCount; attempt++ {
+		req, err := http.NewRequest("GET", reqURL.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		userAgent := fmt.Sprintf("cce-network-v2/%s", version.GetCCEVersion().Version)
+		req.Header.Set("User-Agent", userAgent)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			if !c.shouldRetry(attempt, nil, err) {
+				return nil, fmt.Errorf("MetaAPI request failed after %d retries: %w", c.retryCount+1, err)
+			}
+			c.backoffAndRetry(ctx, "request failed", attempt, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		bodyContent, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			lastErr = err
+			if !c.shouldRetry(attempt, resp, err) {
+				return nil, fmt.Errorf("MetaAPI body read failed after %d retries: %w", c.retryCount+1, err)
+			}
+			c.backoffAndRetry(ctx, "body read failed", attempt, err)
+			continue
+		}
+
+		if c.debug {
+			log.WithContext(ctx).WithField("path", path).WithField("response", string(bodyContent)).Debug("curl metadata")
+		}
+
+		if resp.StatusCode >= http.StatusBadRequest {
+			lastErr = fmt.Errorf("Error Message: \"%s\", Status Code: %d", string(bodyContent), resp.StatusCode)
+			if !c.shouldRetry(attempt, resp, nil) {
+				return bodyContent, lastErr
+			}
+			c.backoffAndRetry(ctx, "5xx error", attempt, lastErr)
+			continue
+		}
+
+		if strings.TrimSpace(string(bodyContent)) == "" {
+			return bodyContent, ErrorNotImplemented
+		}
+
+		return bodyContent, nil
+	}
+
+	return nil, lastErr
+}
+
+// shouldRetry determines if a request should be retried
+// Aligns with VPC API retry logic in bce-sdk-go/bce/retry.go:
+// - Retry on network errors (net.Error or resp == nil)
+// - Retry on 5xx errors (500-599)
+// - Retry on 421 (RateLimit)
+// - Do not retry on 4xx errors (except 421)
+func (c *Client) shouldRetry(attempt int, resp *http.Response, err error) bool {
+	if attempt >= c.retryCount {
+		return false
+	}
+
+	// Network error - always retry
 	if err != nil {
-		return nil, err
+		if _, ok := err.(net.Error); ok {
+			return true
+		}
 	}
 
-	// Set User-Agent header with version
-	userAgent := fmt.Sprintf("cce-network-v2/%s", version.GetCCEVersion().Version)
-	req.Header.Set("User-Agent", userAgent)
-
-	// Send request
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Get body content
-	bodyContent, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	// No response (network error) - always retry
+	if resp == nil {
+		return true
 	}
 
-	if c.debug {
-		log.WithContext(ctx).WithField("path", path).WithField("response", string(bodyContent)).Debug("curl metadata")
+	// Retry on RateLimit (421)
+	if resp.StatusCode == 421 {
+		return true
 	}
 
-	if resp.StatusCode >= http.StatusBadRequest {
-		return bodyContent, fmt.Errorf("Error Message: \"%s\", Status Code: %d", string(bodyContent), resp.StatusCode)
-	}
-	// Empty body means openstack meta-data API not implemented yet
-	if strings.TrimSpace(string(bodyContent)) == "" {
-		return bodyContent, ErrorNotImplemented
+	// Retry on all 5xx errors
+	if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+		return true
 	}
 
-	return bodyContent, err
+	// Do not retry on other status codes (2xx, 3xx, 4xx except 421)
+	return false
+}
+
+// backoffAndRetry logs retry attempt, calculates backoff delay and sleeps
+func (c *Client) backoffAndRetry(ctx context.Context, reason string, attempt int, err error) {
+	delay := time.Duration((1 << uint(attempt))) * c.retryBaseInterval
+	if delay > c.retryMaxDelay {
+		delay = c.retryMaxDelay
+	}
+	log.WithContext(ctx).WithError(err).Warnf("MetaAPI %s (attempt %d/%d), retrying in %v",
+		reason, attempt+1, c.retryCount+1, delay)
+	time.Sleep(delay)
 }
 
 func (c *Client) GetInstanceID() (string, error) {
@@ -184,6 +285,14 @@ func (c *Client) GetInstanceType() (InstanceType, error) {
 	}
 	typeStr := strings.TrimSpace(string(bodyType))
 	return InstanceType(typeStr), nil
+}
+
+func (c *Client) GetInstanceSpecs() (string, error) {
+	body, err := c.sendRequest(metadataBasePath + "instance-specs")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 func (c *Client) GetInstanceTypeEx() (InstanceTypeEx, error) {

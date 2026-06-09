@@ -17,6 +17,7 @@ package cloud
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -35,7 +36,8 @@ import (
 
 // mockClient implements Interface for testing
 type mockClient struct {
-	listSubnetsFunc func(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error)
+	listSubnetsFunc                      func(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error)
+	batchAddPrivateIPWithClientTokenFunc func(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error)
 }
 
 func (m *mockClient) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error) {
@@ -72,6 +74,12 @@ func (m *mockClient) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, su
 	return nil, nil
 }
 func (m *mockClient) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
+	return nil, nil
+}
+func (m *mockClient) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+	if m.batchAddPrivateIPWithClientTokenFunc != nil {
+		return m.batchAddPrivateIPWithClientTokenFunc(ctx, privateIPs, count, eniID, isIpv6, clientToken)
+	}
 	return nil, nil
 }
 func (m *mockClient) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string, isIpv6 bool) error {
@@ -415,4 +423,197 @@ func TestHPASWrapper(t *testing.T) {
 
 	// Assert
 	assert.Nil(t, err, "HPASWrapper should return nil")
+}
+
+// TestFlowControlClient_BatchAddPrivateIPWithClientToken tests the BatchAddPrivateIPWithClientToken method
+func TestFlowControlClient_BatchAddPrivateIPWithClientToken(t *testing.T) {
+	ass := assert.New(t)
+
+	tests := []struct {
+		name            string
+		enableRateLimit bool
+		privateIPs      []string
+		count           int
+		eniID           string
+		isIpv6          bool
+		clientToken     string
+		mockResult      []string
+		mockError       error
+		wantErr         bool
+	}{
+		{
+			name:            "add_ipv4_without_rate_limit",
+			enableRateLimit: false,
+			privateIPs:      []string{},
+			count:           2,
+			eniID:           "eni-test",
+			isIpv6:          false,
+			clientToken:     "token-123",
+			mockResult:      []string{"10.0.0.1", "10.0.0.2"},
+			mockError:       nil,
+			wantErr:         false,
+		},
+		{
+			name:            "add_ipv6_with_rate_limit",
+			enableRateLimit: true,
+			privateIPs:      []string{},
+			count:           2,
+			eniID:           "eni-test",
+			isIpv6:          true,
+			clientToken:     "token-456",
+			mockResult:      []string{"2001:db8::1", "2001:db8::2"},
+			mockError:       nil,
+			wantErr:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original config and restore after test
+			originalEnableRateLimit := option.Config.EnableAPIRateLimit
+			defer func() {
+				option.Config.EnableAPIRateLimit = originalEnableRateLimit
+			}()
+
+			// Set rate limit config for this test
+			option.Config.EnableAPIRateLimit = tt.enableRateLimit
+
+			// Create mock client that returns the expected result
+			mock := &mockClient{}
+
+			// Create rate limiter
+			limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+				BatchAddPrivateIP: {
+					RateLimit: grate.Limit(10),
+					RateBurst: 10,
+				},
+			}, nil)
+			ass.Nil(err, "failed to create rate limiter set")
+
+			limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			})
+
+			// Create flow control client
+			fc := &flowControlClient{
+				client:  mock,
+				limiter: limiter,
+			}
+
+			// Execute test
+			ctx := context.Background()
+			_, err = fc.BatchAddPrivateIPWithClientToken(ctx, tt.privateIPs, tt.count, tt.eniID, tt.isIpv6, tt.clientToken)
+
+			// Validate error
+			if tt.wantErr {
+				ass.NotNil(err, "expected error but got nil")
+				return
+			}
+
+			ass.Nil(err, "unexpected error: %v", err)
+			// The mock returns nil, so we just check no error occurred
+		})
+	}
+}
+
+// TestFlowControlClient_BatchAddPrivateIPWithClientToken_ErrorCases tests error branches
+func TestFlowControlClient_BatchAddPrivateIPWithClientToken_ErrorCases(t *testing.T) {
+	ass := assert.New(t)
+
+	t.Run("limiter_wait_error", func(t *testing.T) {
+		// Save original config and restore after test
+		originalEnableRateLimit := option.Config.EnableAPIRateLimit
+		defer func() {
+			option.Config.EnableAPIRateLimit = originalEnableRateLimit
+		}()
+
+		// Enable rate limiting
+		option.Config.EnableAPIRateLimit = true
+
+		// Create mock client
+		mock := &mockClient{
+			batchAddPrivateIPWithClientTokenFunc: func(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+				return []string{"10.0.0.1"}, nil
+			},
+		}
+
+		// Create rate limiter
+		limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+			BatchAddPrivateIP: {
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			},
+		}, nil)
+		ass.Nil(err, "failed to create rate limiter set")
+
+		limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+			RateLimit: grate.Limit(10),
+			RateBurst: 10,
+		})
+
+		// Create flow control client
+		fc := &flowControlClient{
+			client:  mock,
+			limiter: limiter,
+		}
+
+		// Create a cancelled context to trigger limiter.Wait error
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		// Execute test - should get context canceled error from limiter.Wait
+		_, err = fc.BatchAddPrivateIPWithClientToken(ctx, []string{}, 1, "eni-test", false, "token-123")
+
+		// Validate error
+		ass.NotNil(err, "expected error from cancelled context")
+		ass.Contains(err.Error(), "context canceled", "expected context canceled error")
+	})
+
+	t.Run("client_error_in_defer", func(t *testing.T) {
+		// Save original config and restore after test
+		originalEnableRateLimit := option.Config.EnableAPIRateLimit
+		defer func() {
+			option.Config.EnableAPIRateLimit = originalEnableRateLimit
+		}()
+
+		// Enable rate limiting
+		option.Config.EnableAPIRateLimit = true
+
+		// Create mock client that returns an error
+		expectedErr := errors.New("mock client error")
+		mock := &mockClient{
+			batchAddPrivateIPWithClientTokenFunc: func(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+				return nil, expectedErr
+			},
+		}
+
+		// Create rate limiter
+		limiterSet, err := rate.NewAPILimiterSet(nil, map[string]rate.APILimiterParameters{
+			BatchAddPrivateIP: {
+				RateLimit: grate.Limit(10),
+				RateBurst: 10,
+			},
+		}, nil)
+		ass.Nil(err, "failed to create rate limiter set")
+
+		limiter := rate.APILimiterSetWrapDefault(limiterSet, &rate.APILimiterParameters{
+			RateLimit: grate.Limit(10),
+			RateBurst: 10,
+		})
+
+		// Create flow control client
+		fc := &flowControlClient{
+			client:  mock,
+			limiter: limiter,
+		}
+
+		// Execute test
+		ctx := context.Background()
+		_, err = fc.BatchAddPrivateIPWithClientToken(ctx, []string{}, 1, "eni-test", false, "token-123")
+
+		// Validate error - should get the client error and defer should call req.Error(err)
+		ass.NotNil(err, "expected error from client")
+		ass.Equal(expectedErr, err, "expected mock client error")
+	})
 }

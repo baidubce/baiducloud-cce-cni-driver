@@ -421,11 +421,11 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 			// Only set to ReadyOnNode when InterfaceIndex is not 0
 			(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGMissingInumber)
 		}
-		isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
 
-		return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 	}
-	return nil
+
+	isNeedUpdateStatus = !reflect.DeepEqual(resource.Status, newObj.Status)
+	return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 }
 
 func (eh *eniInitFactory) updateENIStatus(resource *ccev2.ENI, isNeedUpdateStatus bool, scopedLog *logrus.Entry) error {

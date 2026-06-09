@@ -27,6 +27,7 @@ import (
 	hpcapi "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -101,6 +102,10 @@ func (m *mockBCEClient) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID,
 }
 
 func (m *mockBCEClient) BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockBCEClient) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
 	return nil, nil
 }
 
@@ -410,7 +415,8 @@ func TestBceNetworkResourceSet_createENI_GivenIPv4OnlyENI_WhenIPv6Disabled_ThenC
 
 	// Create test subject
 	n := &bceNetworkResourceSet{
-		bceclient: mockClient,
+		bceclient:    mockClient,
+		clientTokens: bceutils.NewClientTokenSet(),
 	}
 
 	// Create test ENI resource
@@ -478,7 +484,8 @@ func TestBceNetworkResourceSet_createENI_GivenEmptyIPv6List_WhenIPv6Enabled_Then
 
 	// Create test subject
 	n := &bceNetworkResourceSet{
-		bceclient: mockClient,
+		bceclient:    mockClient,
+		clientTokens: bceutils.NewClientTokenSet(),
 	}
 
 	// Create test ENI resource
@@ -542,7 +549,8 @@ func TestBceNetworkResourceSet_createENI_GivenEmptyPrivateIPSet_WhenCreatingENI_
 
 	// Create test subject
 	n := &bceNetworkResourceSet{
-		bceclient: mockClient,
+		bceclient:    mockClient,
+		clientTokens: bceutils.NewClientTokenSet(),
 	}
 
 	// Create test ENI resource with empty PrivateIPSet
@@ -600,7 +608,8 @@ func TestBceNetworkResourceSet_createENI_GivenBCEClientError_WhenCreatingENI_The
 
 	// Create test subject
 	n := &bceNetworkResourceSet{
-		bceclient: mockClient,
+		bceclient:    mockClient,
+		clientTokens: bceutils.NewClientTokenSet(),
 	}
 
 	// Create test ENI resource
@@ -651,7 +660,8 @@ func TestBceNetworkResourceSet_createENI_GivenNilEnterpriseSecurityGroupIds_When
 
 	// Create test subject
 	n := &bceNetworkResourceSet{
-		bceclient: mockClient,
+		bceclient:    mockClient,
+		clientTokens: bceutils.NewClientTokenSet(),
 	}
 
 	// Create test ENI resource with nil EnterpriseSecurityGroupIds
@@ -715,6 +725,7 @@ func TestBccNetworkResourceSet_createENIOnCluster_GivenHPASWithoutHPASID_WhenGet
 		bceNetworkResourceSet: &bceNetworkResourceSet{
 			bceclient:     mockClient,
 			eventRecorder: record.NewFakeRecorder(10),
+			clientTokens:  bceutils.NewClientTokenSet(),
 		},
 	}
 	// Setup mock expectations
@@ -821,6 +832,7 @@ func TestBccNetworkResourceSet_createENIOnCluster_GivenValidInstance_WhenUsesEff
 			creatingEni:   newCreatingEniSet(),
 			eventRecorder: record.NewFakeRecorder(10),
 			log:           logrus.NewEntry(logrus.New()),
+			clientTokens:  bceutils.NewClientTokenSet(),
 		},
 	}
 
@@ -934,6 +946,7 @@ func TestBccNetworkResourceSet_createInterface_GivenCooldownTime_WhenCreateInter
 	n := &bccNetworkResourceSet{
 		bceNetworkResourceSet: &bceNetworkResourceSet{
 			nextCreateENITime: &time.Time{},
+			clientTokens:      bceutils.NewClientTokenSet(),
 		},
 	}
 	// 设置冷却时间为未来时间
@@ -951,6 +964,39 @@ func TestBccNetworkResourceSet_createInterface_GivenCooldownTime_WhenCreateInter
 	assert.Equal(t, 0, interfaceNum)
 	assert.Contains(t, msg, "unable to create new ENI: cooling down")
 	assert.Error(t, err)
+}
+
+func TestBccNetworkResourceSet_createInterface_UsePrimaryENIWithSecondaryMode(t *testing.T) {
+	env := setupBCCNodeTestEnv(t)
+	env.node.usePrimaryENIWithSecondaryMode = true
+	env.node.bccInfo = &bccapi.InstanceModel{
+		InstanceId: env.k8sObj.Spec.InstanceID,
+		NicInfo: bccapi.NicInfo{
+			VpcId:          env.k8sObj.Spec.ENI.VpcID,
+			SubnetId:       env.k8sObj.Spec.ENI.SubnetIDs[0],
+			EniId:          "eni-primary",
+			Name:           "primary",
+			MacAddress:     "02:16:3e:58:9a:4b",
+			SecurityGroups: []string{"sg-test"},
+			Ips: []bccapi.IpModel{
+				{PrivateIp: "10.0.0.10", Primary: "true"},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	interfaceNum, msg, err := env.node.createInterface(ctx, &ipam.AllocationAction{}, logrus.NewEntry(logrus.New()))
+
+	if assert.NoError(t, err) {
+		assert.Equal(t, 1, interfaceNum)
+		assert.Equal(t, "create primary ENI on cluster", msg)
+		assert.True(t, env.node.haveCreatePrimaryENI)
+		eni, getErr := k8s.CCEClient().CceV2().ENIs().Get(ctx, "eni-primary", metav1.GetOptions{})
+		if assert.NoError(t, getErr) {
+			assert.Equal(t, ccev2.ENIUseModePrimaryWithSecondaryIP, eni.Spec.UseMode)
+			assert.Equal(t, env.k8sObj.Spec.ENI.SubnetIDs[0], eni.Spec.ENI.SubnetID)
+		}
+	}
 }
 
 // Mock types for testing createInterface
@@ -1013,4 +1059,151 @@ func (m *mockInstancesManager) GetPoolQuota() ipamTypes.PoolQuotaMap {
 func (m *mockInstancesManager) Resync(ctx context.Context, t time.Time) time.Time {
 	args := m.Called(ctx, t)
 	return args.Get(0).(time.Time)
+}
+
+// TestGenerateENIClientTokenKey tests the generateENIClientTokenKey function
+func TestGenerateENIClientTokenKey(t *testing.T) {
+	tests := []struct {
+		name                       string
+		instanceID                 string
+		subnetID                   string
+		securityGroupIDs           []string
+		enterpriseSecurityGroupIDs []string
+		expectSameAs               *struct {
+			instanceID                 string
+			subnetID                   string
+			securityGroupIDs           []string
+			enterpriseSecurityGroupIDs []string
+		}
+		expectSame bool
+	}{
+		{
+			name:                       "same parameters should generate same key",
+			instanceID:                 "i-test123",
+			subnetID:                   "sbn-test456",
+			securityGroupIDs:           []string{"sg-1", "sg-2"},
+			enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			expectSameAs: &struct {
+				instanceID                 string
+				subnetID                   string
+				securityGroupIDs           []string
+				enterpriseSecurityGroupIDs []string
+			}{
+				instanceID:                 "i-test123",
+				subnetID:                   "sbn-test456",
+				securityGroupIDs:           []string{"sg-1", "sg-2"},
+				enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			},
+			expectSame: true,
+		},
+		{
+			name:                       "different order of security groups should generate same key",
+			instanceID:                 "i-test123",
+			subnetID:                   "sbn-test456",
+			securityGroupIDs:           []string{"sg-2", "sg-1"},
+			enterpriseSecurityGroupIDs: []string{"esg-2", "esg-1"},
+			expectSameAs: &struct {
+				instanceID                 string
+				subnetID                   string
+				securityGroupIDs           []string
+				enterpriseSecurityGroupIDs []string
+			}{
+				instanceID:                 "i-test123",
+				subnetID:                   "sbn-test456",
+				securityGroupIDs:           []string{"sg-1", "sg-2"},
+				enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			},
+			expectSame: true,
+		},
+		{
+			name:                       "different subnet should generate different key",
+			instanceID:                 "i-test123",
+			subnetID:                   "sbn-different",
+			securityGroupIDs:           []string{"sg-1", "sg-2"},
+			enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			expectSameAs: &struct {
+				instanceID                 string
+				subnetID                   string
+				securityGroupIDs           []string
+				enterpriseSecurityGroupIDs []string
+			}{
+				instanceID:                 "i-test123",
+				subnetID:                   "sbn-test456",
+				securityGroupIDs:           []string{"sg-1", "sg-2"},
+				enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			},
+			expectSame: false,
+		},
+		{
+			name:                       "different instance should generate different key",
+			instanceID:                 "i-different",
+			subnetID:                   "sbn-test456",
+			securityGroupIDs:           []string{"sg-1", "sg-2"},
+			enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			expectSameAs: &struct {
+				instanceID                 string
+				subnetID                   string
+				securityGroupIDs           []string
+				enterpriseSecurityGroupIDs []string
+			}{
+				instanceID:                 "i-test123",
+				subnetID:                   "sbn-test456",
+				securityGroupIDs:           []string{"sg-1", "sg-2"},
+				enterpriseSecurityGroupIDs: []string{"esg-1", "esg-2"},
+			},
+			expectSame: false,
+		},
+		{
+			name:                       "empty security groups should work",
+			instanceID:                 "i-test123",
+			subnetID:                   "sbn-test456",
+			securityGroupIDs:           []string{},
+			enterpriseSecurityGroupIDs: []string{},
+			expectSameAs: &struct {
+				instanceID                 string
+				subnetID                   string
+				securityGroupIDs           []string
+				enterpriseSecurityGroupIDs []string
+			}{
+				instanceID:                 "i-test123",
+				subnetID:                   "sbn-test456",
+				securityGroupIDs:           []string{},
+				enterpriseSecurityGroupIDs: []string{},
+			},
+			expectSame: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key1 := bceutils.GenerateENIClientTokenKey(
+				tt.instanceID,
+				tt.subnetID,
+				tt.securityGroupIDs,
+				tt.enterpriseSecurityGroupIDs,
+			)
+
+			// Verify key is not empty
+			assert.NotEmpty(t, key1, "Generated key should not be empty")
+
+			// Verify key is a valid hex string (SHA256 produces 64 hex characters)
+			assert.Len(t, key1, 64, "SHA256 hash should be 64 characters")
+			assert.Regexp(t, regexp.MustCompile("^[0-9a-f]{64}$"), key1, "Key should be valid hex string")
+
+			if tt.expectSameAs != nil {
+				key2 := bceutils.GenerateENIClientTokenKey(
+					tt.expectSameAs.instanceID,
+					tt.expectSameAs.subnetID,
+					tt.expectSameAs.securityGroupIDs,
+					tt.expectSameAs.enterpriseSecurityGroupIDs,
+				)
+
+				if tt.expectSame {
+					assert.Equal(t, key1, key2, "Expected same keys for same parameters")
+				} else {
+					assert.NotEqual(t, key1, key2, "Expected different keys for different parameters")
+				}
+			}
+		})
+	}
 }

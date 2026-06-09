@@ -51,6 +51,7 @@ import (
 	nodemanager "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/manager"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/utils"
 	k8sTypes "k8s.io/api/core/v1"
 )
 
@@ -584,6 +585,24 @@ func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResour
 		}
 	}
 
+	newMode, matchedSpec, err := determineForcePrimaryENIMode(
+		eniUseMode,
+		option.Config.ForcePrimaryENIInstanceSpecs,
+		agent.GetInstanceSpecs,
+	)
+	if err != nil {
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "failed to get instance specs: %v", err)
+		log.WithError(err).Warn("failed to fetch instance specs for force-primary-eni-instance-specs, skip forcing mode")
+	} else {
+		if matchedSpec != "" {
+			log.WithFields(logrus.Fields{
+				"instanceSpec": matchedSpec,
+				"node":         nodeResource.Name,
+			}).Info("force ENI use mode to PrimaryWithSecondaryIP by configuration")
+		}
+		eniUseMode = newMode
+	}
+
 	// create new nrs if it is not set
 	if nodeResource.Spec.ENI == nil {
 		eni, err := agent.GenerateENISpec()
@@ -637,6 +656,26 @@ func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResour
 		}
 		nodeResource.Spec.ENI.SubnetIDs = sbnSet.List()
 	}
+}
+
+func determineForcePrimaryENIMode(currentMode string, patterns []string, fetchSpec func() (string, error)) (string, string, error) {
+	mode := strings.TrimSpace(currentMode)
+	if len(patterns) == 0 {
+		return mode, "", nil
+	}
+
+	if mode != "" && !strings.EqualFold(mode, string(ccev2.ENIUseModeSecondaryIP)) {
+		return mode, "", nil
+	}
+
+	spec, err := fetchSpec()
+	if err != nil {
+		return mode, "", err
+	}
+	if utils.MatchAnyPattern(patterns, spec) {
+		return string(ccev2.ENIUseModePrimaryWithSecondaryIP), spec, nil
+	}
+	return mode, "", nil
 }
 
 func (n *NodeDiscovery) RegisterK8sNodeGetter(k8sNodeGetter k8sNodeGetter) {

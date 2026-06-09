@@ -35,6 +35,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/common"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/components"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
@@ -512,6 +513,9 @@ func initializeFlags() {
 	flags.StringSlice(option.ENISubnets, []string{}, "subnet ids")
 	option.BindEnv(option.ENISubnets)
 
+	flags.StringSlice(option.ForcePrimaryENIInstanceSpecs, []string{}, "instance specs that must use primary ENI secondary IP mode")
+	option.BindEnv(option.ForcePrimaryENIInstanceSpecs)
+
 	flags.Int(option.ENIRouteTableOffset, 127, "route table offset")
 	option.BindEnv(option.ENIRouteTableOffset)
 
@@ -547,6 +551,13 @@ func initEnv(cmd *cobra.Command) {
 
 	// Prepopulate option.Config with options from CLI.
 	option.Config.Populate()
+
+	// Initialize metadata client with retry configuration from option
+	metadata.InitMetadataClient(
+		option.Config.MetaAPIRetryCount,
+		option.Config.MetaAPIRetryMaxDelay,
+		option.Config.MetaAPIRetryBaseInterval,
+	)
 
 	// add hooks after setting up metrics in the option.Config
 	logging.DefaultLogger.Hooks.Add(metrics.NewLoggingHook(components.CCEAgentName))

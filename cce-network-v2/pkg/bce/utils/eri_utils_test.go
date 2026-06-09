@@ -30,6 +30,7 @@ import (
 // eriMockMetaClient is a mock implementation of metadata.Interface for ERI testing
 type eriMockMetaClient struct {
 	featureList *metadata.FeatureList
+	instanceID  string
 	err         error
 }
 
@@ -40,13 +41,20 @@ func (m *eriMockMetaClient) GetFeatureList() (*metadata.FeatureList, error) {
 // Mock other required methods with empty implementations
 func (m *eriMockMetaClient) GetVPCID() (string, error)                           { return "", nil }
 func (m *eriMockMetaClient) GetInstanceType() (metadata.InstanceType, error)     { return "", nil }
+func (m *eriMockMetaClient) GetInstanceSpecs() (string, error)                   { return "", nil }
 func (m *eriMockMetaClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) { return "", nil }
 func (m *eriMockMetaClient) GetSourceType() (string, error)                      { return "", nil }
 func (m *eriMockMetaClient) GetAvailabilityZone() (string, error)                { return "", nil }
-func (m *eriMockMetaClient) GetInstanceID() (string, error)                      { return "", nil }
-func (m *eriMockMetaClient) GetSubnetID() (string, error)                        { return "", nil }
-func (m *eriMockMetaClient) ListMacs() ([]string, error)                         { return nil, nil }
-func (m *eriMockMetaClient) GetVifFeatures(macAddress string) (string, error)    { return "", nil }
+func (m *eriMockMetaClient) GetInstanceID() (string, error) {
+	if m.instanceID != "" {
+		return m.instanceID, nil
+	}
+	return "", m.err
+}
+func (m *eriMockMetaClient) GetResourceID() (string, error)                   { return "", nil }
+func (m *eriMockMetaClient) GetSubnetID() (string, error)                     { return "", nil }
+func (m *eriMockMetaClient) ListMacs() ([]string, error)                      { return nil, nil }
+func (m *eriMockMetaClient) GetVifFeatures(macAddress string) (string, error) { return "", nil }
 func (m *eriMockMetaClient) GetLinkGateway(macAddress, ipAddress string) (string, error) {
 	return "", nil
 }
@@ -54,6 +62,10 @@ func (m *eriMockMetaClient) GetInstanceName() (string, error)                   
 func (m *eriMockMetaClient) GetLocalIPv4() (string, error)                            { return "", nil }
 func (m *eriMockMetaClient) GetRegion() (string, error)                               { return "", nil }
 func (m *eriMockMetaClient) GetLinkMask(macAddress, ipAddress string) (string, error) { return "", nil }
+func (m *eriMockMetaClient) GetLinkPrimaryIP(macAddress string) (string, error)       { return "", nil }
+func (m *eriMockMetaClient) GetLinkFixedIPs(macAddress string) ([]string, error)      { return nil, nil }
+func (m *eriMockMetaClient) GetLinkSecondaryIPs(macAddress string) ([]string, error)  { return nil, nil }
+func (m *eriMockMetaClient) GetLinkMTU(macAddress string) (int, error)                { return 0, nil }
 
 func TestEnableERI_GivenNilNode_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
@@ -193,8 +205,8 @@ func TestEnableERI_GivenNodeWithERILabelUpperCaseTrue_WhenCalled_ThenReturnFalse
 /*
 func TestHasAvailableERIQuota_GivenEmptyERIQuota_WhenCalled_ThenPanic(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -202,7 +214,7 @@ func TestHasAvailableERIQuota_GivenEmptyERIQuota_WhenCalled_ThenPanic(t *testing
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When & Then
 	// This test would cause log.Fatal which terminates the process
@@ -213,8 +225,8 @@ func TestHasAvailableERIQuota_GivenEmptyERIQuota_WhenCalled_ThenPanic(t *testing
 
 func TestHasAvailableERIQuota_GivenInvalidERIQuota_WhenCalled_ThenPanic(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -222,7 +234,7 @@ func TestHasAvailableERIQuota_GivenInvalidERIQuota_WhenCalled_ThenPanic(t *testi
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When & Then
 	// This test would cause log.Fatal which terminates the process
@@ -233,14 +245,14 @@ func TestHasAvailableERIQuota_GivenInvalidERIQuota_WhenCalled_ThenPanic(t *testi
 
 func TestHasAvailableERIQuota_GivenGetFeatureListError_WhenCalled_ThenPanic(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: nil,
 		err:         assert.AnError,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When & Then
 	// This test would cause log.Fatal which terminates the process
@@ -251,14 +263,14 @@ func TestHasAvailableERIQuota_GivenGetFeatureListError_WhenCalled_ThenPanic(t *t
 
 func TestHasAvailableERIQuota_GivenNilFeatureList_WhenCalled_ThenPanic(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: nil,
 		err:         nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When & Then
 	// This test would cause log.Fatal which terminates the process
@@ -270,8 +282,8 @@ func TestHasAvailableERIQuota_GivenNilFeatureList_WhenCalled_ThenPanic(t *testin
 
 func TestHasAvailableERIQuota_GivenValidERIQuota_WhenCalled_ThenReturnTrue(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -279,7 +291,7 @@ func TestHasAvailableERIQuota_GivenValidERIQuota_WhenCalled_ThenReturnTrue(t *te
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When
 	result := HasAvailableERIQuota()
@@ -290,8 +302,8 @@ func TestHasAvailableERIQuota_GivenValidERIQuota_WhenCalled_ThenReturnTrue(t *te
 
 func TestHasAvailableERIQuota_GivenZeroERIQuota_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -299,7 +311,7 @@ func TestHasAvailableERIQuota_GivenZeroERIQuota_WhenCalled_ThenReturnFalse(t *te
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When
 	result := HasAvailableERIQuota()
@@ -310,8 +322,8 @@ func TestHasAvailableERIQuota_GivenZeroERIQuota_WhenCalled_ThenReturnFalse(t *te
 
 func TestHasAvailableERIQuota_GivenNegativeERIQuota_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -319,7 +331,7 @@ func TestHasAvailableERIQuota_GivenNegativeERIQuota_WhenCalled_ThenReturnFalse(t
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When
 	result := HasAvailableERIQuota()
@@ -330,8 +342,8 @@ func TestHasAvailableERIQuota_GivenNegativeERIQuota_WhenCalled_ThenReturnFalse(t
 
 func TestHasAvailableERIQuota_GivenLargeERIQuota_WhenCalled_ThenReturnTrue(t *testing.T) {
 	// Given
-	originalClient := defaultMetaClient
-	defer func() { defaultMetaClient = originalClient }()
+	originalClient := metadata.DefaultMetaClient
+	defer func() { metadata.DefaultMetaClient = originalClient }()
 
 	mockClient := &eriMockMetaClient{
 		featureList: &metadata.FeatureList{
@@ -339,7 +351,7 @@ func TestHasAvailableERIQuota_GivenLargeERIQuota_WhenCalled_ThenReturnTrue(t *te
 		},
 		err: nil,
 	}
-	defaultMetaClient = mockClient
+	metadata.DefaultMetaClient = mockClient
 
 	// When
 	result := HasAvailableERIQuota()
@@ -463,6 +475,7 @@ func (m *labelSelectorMockMetaClient) GetInstanceID() (string, error) {
 
 // Implement other required methods from metadata.Interface
 func (m *labelSelectorMockMetaClient) GetInstanceName() (string, error) { return "", nil }
+func (m *labelSelectorMockMetaClient) GetResourceID() (string, error)   { return "", nil }
 func (m *labelSelectorMockMetaClient) GetInstanceType() (metadata.InstanceType, error) {
 	return "", nil
 }
@@ -484,6 +497,18 @@ func (m *labelSelectorMockMetaClient) GetLinkGateway(macAddress, ipAddress strin
 func (m *labelSelectorMockMetaClient) GetLinkMask(macAddress, ipAddress string) (string, error) {
 	return "", nil
 }
+func (m *labelSelectorMockMetaClient) GetLinkPrimaryIP(macAddress string) (string, error) {
+	return "", nil
+}
+func (m *labelSelectorMockMetaClient) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	return nil, nil
+}
+func (m *labelSelectorMockMetaClient) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	return nil, nil
+}
+func (m *labelSelectorMockMetaClient) GetLinkMTU(macAddress string) (int, error) {
+	return 0, nil
+}
 func (m *labelSelectorMockMetaClient) GetFeatureList() (*metadata.FeatureList, error) {
 	return nil, nil
 }
@@ -493,6 +518,18 @@ func TestGetERIManagedLabelSelector_GivenValidNodeNameAndInstanceID_WhenCalled_T
 	// Note: This is an integration test that tests the function with real dependencies
 	// In a production environment, this would work with actual node name and metadata client
 
+	// Given: Mock metadata client
+	mockClient := &eriMockMetaClient{
+		instanceID: "i-test123",
+	}
+
+	// Save original client and restore after test
+	originalClient := metadata.DefaultMetaClient
+	defer func() {
+		metadata.DefaultMetaClient = originalClient
+	}()
+	metadata.DefaultMetaClient = mockClient
+
 	// When
 	result := GetERIManagedLabelSelector()
 
@@ -501,6 +538,7 @@ func TestGetERIManagedLabelSelector_GivenValidNodeNameAndInstanceID_WhenCalled_T
 	// We can't assert the exact value since it depends on the actual node name and instance ID
 	// But we can verify it's a string (not panicking)
 	assert.IsType(t, "", result)
+	assert.NotEmpty(t, result, "Label selector should not be empty when metadata client is available")
 }
 
 // Note: For more comprehensive testing of GetERIManagedLabelSelector, we would need to:

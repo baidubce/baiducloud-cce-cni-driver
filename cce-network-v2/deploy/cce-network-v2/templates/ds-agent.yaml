@@ -19,9 +19,9 @@ spec:
         cce.baidubce.com/cniwebhook: disabled
         {{- include "helm.selectorLabels" . | nindent 8 }}
       annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: {{ trimPrefix ":" (index .Values.ccedConfig "prometheus-serve-addr") | quote }}
-        prometheus.io/path: "/metrics"
+        prometheus.cce.baidubce.com/scrape: "true"
+        prometheus.cce.baidubce.com/port: {{ trimPrefix ":" (index .Values.ccedConfig "prometheus-serve-addr") | quote }}
+        prometheus.cce.baidubce.com/path: "/metrics"
     spec:
       containers:
         - command:

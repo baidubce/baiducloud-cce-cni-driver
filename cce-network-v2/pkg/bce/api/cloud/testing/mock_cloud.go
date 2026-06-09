@@ -190,6 +190,21 @@ func (mr *MockInterfaceMockRecorder) BatchAddPrivateIP(ctx, privateIPs, count, e
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIP", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIP), ctx, privateIPs, count, eniID, isIpv6)
 }
 
+// BatchAddPrivateIPWithClientToken mocks base method.
+func (m *MockInterface) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchAddPrivateIPWithClientToken", ctx, privateIPs, count, eniID, isIpv6, clientToken)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BatchAddPrivateIPWithClientToken indicates an expected call of BatchAddPrivateIPWithClientToken.
+func (mr *MockInterfaceMockRecorder) BatchAddPrivateIPWithClientToken(ctx, privateIPs, count, eniID, isIpv6, clientToken interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchAddPrivateIPWithClientToken", reflect.TypeOf((*MockInterface)(nil).BatchAddPrivateIPWithClientToken), ctx, privateIPs, count, eniID, isIpv6, clientToken)
+}
+
 // BatchAddPrivateIpCrossSubnet mocks base method.
 func (m *MockInterface) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
 	m.ctrl.T.Helper()

@@ -184,7 +184,7 @@ type Subnet struct {
 	SubnetType  SubnetType       `json:"subnetType"`
 	Description string           `json:"description"`
 	CreatedTime string           `json:"createdTime"`
-	AvailableIp int              `json:"availableIp"`
+	AvailableIp int              `json:"availableIp" validate:"required"`
 	Tags        []model.TagModel `json:"tags"`
 }
 

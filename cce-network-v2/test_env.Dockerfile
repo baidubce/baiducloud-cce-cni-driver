@@ -10,4 +10,8 @@ COPY bce-sdk-go ./bce-sdk-go
 COPY ${WORKDIR} ./cce-network-v2
 
 WORKDIR /go/src/cce-network-v2
+
+# Remove the conflicting centos.go file if it exists
+RUN rm -f pkg/os/centos.go
+
 RUN go mod tidy

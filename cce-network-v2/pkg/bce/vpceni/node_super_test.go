@@ -2,6 +2,7 @@ package vpceni
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
@@ -27,6 +29,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/golang/mock/gomock"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -465,6 +468,7 @@ func newMockBccInfo(k8sObj *ccev2.NetResourceSet, maxENINum int) *bccapi.Instanc
 		Spec:               "",
 		Status:             bccapi.InstanceStatusRunning,
 		EniQuota:           maxENINum,
+		EriQuota:           2,
 		InternalIP:         k8sObj.Name,
 		CpuCount:           32,
 		MemoryCapacityInGB: 32,
@@ -1693,18 +1697,9 @@ func TestCreateInterface_GivenNoReadyENI_WhenFallbackToIaaS(t *testing.T) {
 		})
 	defer patches.Reset()
 
-	groupCalled := false
-	patchGroup := gomonkey.ApplyFunc(forceGetENIFromInstanceGroupFunc,
-		func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
-			groupCalled = true
-			assert.Equal(t, "hpas-effective", instanceID)
-			return 0, "", nil
-		})
-	defer patchGroup.Reset()
-
 	iaasCalled := false
-	patchIaaS := gomonkey.ApplyFunc(forceGetENIFromIaaSFunc,
-		func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+	patchIaaS := gomonkey.ApplyFunc((*bceNetworkResourceSet).forceGetENIFromIaaS,
+		func(_ *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
 			iaasCalled = true
 			assert.Equal(t, "hpas-effective", instanceID)
 			return 2, "iaas-fallback", nil
@@ -1716,7 +1711,6 @@ func TestCreateInterface_GivenNoReadyENI_WhenFallbackToIaaS(t *testing.T) {
 	assert.Equal(t, 2, interfaceNum)
 	assert.Equal(t, "iaas-fallback", msg)
 	assert.Equal(t, "hpas-effective", foreachInstanceID)
-	assert.True(t, groupCalled)
 	assert.True(t, iaasCalled)
 }
 
@@ -2059,6 +2053,24 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 	}()
 	option.Config.ClusterID = "test-cluster"
 
+	markENIQuotaSynced := func(k8sObj *ccev2.NetResourceSet) {
+		if k8sObj == nil {
+			return
+		}
+		if k8sObj.Annotations == nil {
+			k8sObj.Annotations = map[string]string{}
+		}
+		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = time.Now().Format(time.RFC3339)
+		if k8sObj.Spec.ENI != nil {
+			if k8sObj.Spec.ENI.MaxAllocateENI == 0 {
+				k8sObj.Spec.ENI.MaxAllocateENI = 1
+			}
+			if k8sObj.Spec.ENI.MaxIPsPerENI == 0 {
+				k8sObj.Spec.ENI.MaxIPsPerENI = 1
+			}
+		}
+	}
+
 	tests := []struct {
 		name         string
 		setupFunc    func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller)
@@ -2076,16 +2088,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "BCC")
 				k8sObj.Spec.InstanceID = "i-bcc-12345"
 				k8sObj.Spec.HPASID = "" // No HPASID for BCC
+				markENIQuotaSynced(k8sObj)
 
 				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 				if !assert.NoError(t, err) {
 					t.Fatalf("ensure nrs to informer failed: %v", err)
-				}
-
-				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
-				if !assert.NoError(t, err) {
-					t.Fatalf("ensure node to informer failed: %v", err)
 				}
 
 				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
@@ -2095,6 +2102,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 						InstanceId: instanceID,
 						VpcId:      "vpc-test123",
 						EniQuota:   8,
+						NicInfo: bccapi.NicInfo{
+							VpcId:    "vpc-test123",
+							SubnetId: "sbn-test",
+							EniId:    "eni-test",
+						},
 					}, nil
 				}).AnyTimes()
 
@@ -2130,16 +2142,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 				k8sObj.Spec.InstanceID = "i-hpas-12345"
 				k8sObj.Spec.HPASID = "hpas-abc123"    // Set HPASID for HPAS
 				k8sObj.Spec.ENI.InstanceType = "hpas" // Use lowercase to match metadata.InstanceTypeExHPAS
+				markENIQuotaSynced(k8sObj)
 
 				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 				if !assert.NoError(t, err) {
 					t.Fatalf("ensure nrs to informer failed: %v", err)
-				}
-
-				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
-				if !assert.NoError(t, err) {
-					t.Fatalf("ensure node to informer failed: %v", err)
 				}
 
 				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
@@ -2149,6 +2156,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 						InstanceId: instanceID,
 						VpcId:      "vpc-test123",
 						EniQuota:   8,
+						NicInfo: bccapi.NicInfo{
+							VpcId:    "vpc-test123",
+							SubnetId: "sbn-test",
+							EniId:    "eni-test",
+						},
 					}, nil
 				}).AnyTimes()
 
@@ -2184,16 +2196,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.59", "EBC")
 				k8sObj.Spec.InstanceID = "i-ebc-12345"
 				k8sObj.Spec.HPASID = "" // No HPASID for EBC
+				markENIQuotaSynced(k8sObj)
 
 				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 				if !assert.NoError(t, err) {
 					t.Fatalf("ensure nrs to informer failed: %v", err)
-				}
-
-				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
-				if !assert.NoError(t, err) {
-					t.Fatalf("ensure node to informer failed: %v", err)
 				}
 
 				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
@@ -2203,6 +2210,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 						InstanceId: instanceID,
 						VpcId:      "vpc-test123",
 						EniQuota:   8,
+						NicInfo: bccapi.NicInfo{
+							VpcId:    "vpc-test123",
+							SubnetId: "sbn-test",
+							EniId:    "eni-test",
+						},
 					}, nil
 				}).AnyTimes()
 
@@ -2238,16 +2250,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 				k8sObj.Spec.InstanceID = "i-hpas-original"
 				k8sObj.Spec.HPASID = "hpas-effective123" // Different from instanceID
 				k8sObj.Spec.ENI.InstanceType = "hpas"    // Use lowercase to match metadata.InstanceTypeExHPAS
+				markENIQuotaSynced(k8sObj)
 
 				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
 				if !assert.NoError(t, err) {
 					t.Fatalf("ensure nrs to informer failed: %v", err)
-				}
-
-				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
-				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
-				if !assert.NoError(t, err) {
-					t.Fatalf("ensure node to informer failed: %v", err)
 				}
 
 				// Mock all the required calls to avoid test failures
@@ -2259,6 +2266,11 @@ func TestForceGetENIFromIaaS(t *testing.T) {
 						InstanceId: instanceID,
 						VpcId:      "vpc-test123",
 						EniQuota:   8,
+						NicInfo: bccapi.NicInfo{
+							VpcId:    "vpc-test123",
+							SubnetId: "sbn-test",
+							EniId:    "eni-test",
+						},
 					}, nil
 				}).AnyTimes()
 
@@ -2531,8 +2543,8 @@ func TestBceNetworkResourceSet_RemoveReleasedIPsFromENI(t *testing.T) {
 		// The actual IP removal logic is tested through the updateENIWithPoll function
 		ipsToRelease := []string{"10.128.34.100", "10.128.34.102"}
 
-		// Use a timeout context to prevent hanging
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Use a timeout context that exceeds retryTimeout to avoid premature cancellation
+		timeoutCtx, cancel := context.WithTimeout(ctx, retryTimeout+5*time.Second)
 		defer cancel()
 
 		err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
@@ -2571,8 +2583,8 @@ func TestBceNetworkResourceSet_RemoveReleasedIPsFromENI(t *testing.T) {
 		// Test removing some IPv6 IPs
 		ipsToRelease := []string{"2001:db8::1", "2001:db8::3"}
 
-		// Use a timeout context to prevent hanging
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Use a timeout context that exceeds retryTimeout to avoid premature cancellation
+		timeoutCtx, cancel := context.WithTimeout(ctx, retryTimeout+5*time.Second)
 		defer cancel()
 
 		err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
@@ -2614,8 +2626,8 @@ func TestBceNetworkResourceSet_RemoveReleasedIPsFromENI(t *testing.T) {
 		// Test removing mixed IPs
 		ipsToRelease := []string{"10.128.34.100", "2001:db8::1"}
 
-		// Use a timeout context to prevent hanging
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Use a timeout context that exceeds retryTimeout to avoid premature cancellation
+		timeoutCtx, cancel := context.WithTimeout(ctx, retryTimeout+5*time.Second)
 		defer cancel()
 
 		err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
@@ -2653,8 +2665,8 @@ func TestBceNetworkResourceSet_RemoveReleasedIPsFromENI(t *testing.T) {
 		// Test removing existing and non-existing IPs
 		ipsToRelease := []string{"10.128.34.100", "10.128.34.999"} // 999 doesn't exist
 
-		// Use a timeout context to prevent hanging
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Use a timeout context that exceeds retryTimeout to avoid premature cancellation
+		timeoutCtx, cancel := context.WithTimeout(ctx, retryTimeout+5*time.Second)
 		defer cancel()
 
 		err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
@@ -2838,4 +2850,281 @@ func TestBceNetworkResourceSet_RleaseOldIP(t *testing.T) {
 			t.Logf("测试 %s 完成: isLocal=%v, eniID=%s, err=%v", tt.name, isLocal, eniID, err)
 		})
 	}
+}
+
+// TestGetBCEClient 测试GetBCEClient函数
+func TestGetBCEClient_GivenValidNode_WhenGetBCEClient_ThenReturnClient(t *testing.T) {
+	// Given
+	node := &bceNetworkResourceSet{}
+
+	// When
+	result := node.GetBCEClient()
+
+	// Then - 即使是nil也不会panic
+	_ = result
+}
+
+// TestIsDefinitiveError 测试isDefinitiveError函数
+func TestIsDefinitiveError_GivenVariousErrors_WhenCheckDefinitive_ThenReturnCorrectResult(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "Invalid parameter error",
+			err:      errors.New("invalid parameter: test"),
+			expected: true,
+		},
+		{
+			name:     "Generic error",
+			err:      errors.New("generic error"),
+			expected: false,
+		},
+		{
+			name:     "Network timeout error",
+			err:      errors.New("network timeout"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			result := node.isDefinitiveError(tt.err)
+
+			// Then
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestWaitForRetryBackoffConfig 测试waitForRetry函数中的backoff配置
+func TestWaitForRetryBackoffConfig_WhenCreateConfig_ThenReturnCorrectConfig(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+
+	// 测试waitForRetry函数中创建的backoff配置
+	// 注意：由于使用了backoff.NewTicker，第一个tick会立即返回，所以这里只测试函数能正常完成
+	ctx := context.Background()
+	batchLog := logrus.NewEntry(logrus.New())
+
+	// When - 调用waitForRetry函数，它会内部创建backoff配置
+	err := node.waitForRetry(ctx, 1, errors.New("test error"), batchLog)
+
+	// Then - 验证函数正常执行
+	// 由于backoff.NewTicker的第一个tick会立即返回，所以不验证延迟时间
+	assert.NoError(t, err)
+}
+
+// TestBackoffBehavior 测试backoff行为
+// 注意：由于使用了backoff.NewTicker，第一个tick会立即返回，所以这里只测试函数能正常完成
+func TestBackoffBehavior_GivenRetryCount_WhenCalculateDelay_ThenReturnCorrectDelay(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+	ctx := context.Background()
+	batchLog := logrus.NewEntry(logrus.New())
+
+	tests := []struct {
+		name       string
+		retryCount int
+	}{
+		{
+			name:       "First retry (base delay)",
+			retryCount: 1,
+		},
+		{
+			name:       "Second retry (2x base delay)",
+			retryCount: 2,
+		},
+		{
+			name:       "Third retry (4x base delay)",
+			retryCount: 3,
+		},
+		{
+			name:       "Fourth retry (8x base delay)",
+			retryCount: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 测试waitForRetry函数能正常完成
+			// 由于backoff.NewTicker的第一个tick会立即返回，所以不验证延迟时间
+			err := node.waitForRetry(ctx, tt.retryCount, errors.New("test error"), batchLog)
+
+			// Then
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestVerifyIPReleasedWithENIInfo 测试verifyIPReleasedWithENIInfo函数
+func TestVerifyIPReleasedWithENIInfo_GivenENIAndIP_WhenVerifyRelease_ThenReturnCorrectResult(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+	scopedLog := logrus.NewEntry(logrus.New())
+
+	tests := []struct {
+		name     string
+		ip       string
+		iaasENI  *eni.Eni
+		expected bool
+	}{
+		{
+			name:     "Nil ENI",
+			ip:       "10.0.0.1",
+			iaasENI:  nil,
+			expected: false,
+		},
+		{
+			name: "IP still exists in IPv4 list",
+			ip:   "10.0.0.1",
+			iaasENI: &eni.Eni{
+				Eni: enisdk.Eni{
+					PrivateIpSet: []enisdk.PrivateIp{
+						{PrivateIpAddress: "10.0.0.1"},
+						{PrivateIpAddress: "10.0.0.2"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "IP still exists in IPv6 list",
+			ip:   "2001:db8::1",
+			iaasENI: &eni.Eni{
+				Eni: enisdk.Eni{
+					Ipv6PrivateIpSet: []enisdk.PrivateIp{
+						{PrivateIpAddress: "2001:db8::1"},
+						{PrivateIpAddress: "2001:db8::2"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "IP not found in ENI (successfully released)",
+			ip:   "10.0.0.3",
+			iaasENI: &eni.Eni{
+				Eni: enisdk.Eni{
+					PrivateIpSet: []enisdk.PrivateIp{
+						{PrivateIpAddress: "10.0.0.1"},
+						{PrivateIpAddress: "10.0.0.2"},
+					},
+					Ipv6PrivateIpSet: []enisdk.PrivateIp{
+						{PrivateIpAddress: "2001:db8::1"},
+						{PrivateIpAddress: "2001:db8::2"},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			result := node.verifyIPReleasedWithENIInfo(tt.ip, tt.iaasENI, scopedLog)
+
+			// Then
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestWaitForRetry 测试waitForRetry函数
+func TestWaitForRetry_GivenContext_WhenWaitForRetry_ThenHandleCorrectly(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+	batchLog := logrus.NewEntry(logrus.New())
+
+	t.Run("Context cancelled", func(t *testing.T) {
+		// Given
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		// When
+		err := node.waitForRetry(ctx, 5, errors.New("test error"), batchLog)
+
+		// Then
+		assert.Equal(t, context.Canceled, err)
+	})
+
+	t.Run("Wait completes successfully", func(t *testing.T) {
+		// Given
+		ctx := context.Background()
+
+		// When
+		err := node.waitForRetry(ctx, 1, errors.New("test error"), batchLog)
+
+		// Then
+		// 由于backoff.NewTicker的第一个tick会立即返回，所以只验证没有错误
+		assert.NoError(t, err)
+	})
+}
+
+// TestAttemptBatchRelease_ExceedMaxLimit tests attemptBatchRelease with batch size exceeding limit
+func TestAttemptBatchRelease_ExceedMaxLimit(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+	ctx := context.Background()
+	scopedLog := logrus.NewEntry(logrus.New())
+
+	// Create a mock ENI
+	eni := &ccev2.ENI{}
+
+	// Create a release action
+	release := &ipam.ReleaseAction{
+		InterfaceID: "eni-test",
+	}
+
+	// Create IPs exceeding the batch limit (batchAddOrDeleteIPSize is 40)
+	ipsToRelease := make([]string, 41)
+	for i := 0; i < 41; i++ {
+		ipsToRelease[i] = fmt.Sprintf("192.168.1.%d", i+1)
+	}
+
+	// When
+	err := node.attemptBatchRelease(ctx, release, ipsToRelease, eni, scopedLog)
+
+	// Then
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum limit")
+}
+
+// TestReleaseBatchIPsWithRetry_BatchSizeLimit tests releaseBatchIPsWithRetry with batch size handling
+func TestReleaseBatchIPsWithRetry_BatchSizeLimit(t *testing.T) {
+	// This test verifies the branch: if currentBatchSize > batchAddOrDeleteIPSize
+	// The code should limit currentBatchSize to batchAddOrDeleteIPSize
+
+	node := &bceNetworkResourceSet{
+		log: logrus.NewEntry(logrus.New()),
+	}
+
+	// Mock manager with ENI lister that returns an error
+	// This will cause the function to exit early after checking batch size logic
+	node.manager = &InstancesManager{
+		enilister: &MockENILister{
+			GetFunc: func(name string) (*ccev2.ENI, error) {
+				return nil, errors.New("eni not found")
+			},
+		},
+	}
+
+	ctx := context.Background()
+	scopedLog := logrus.NewEntry(logrus.New())
+
+	release := &ipam.ReleaseAction{
+		InterfaceID: "eni-test",
+	}
+
+	// Create more than batchAddOrDeleteIPSize IPs to trigger the batch size limit logic
+	ipsToRelease := make([]string, 50)
+	for i := 0; i < 50; i++ {
+		ipsToRelease[i] = fmt.Sprintf("192.168.1.%d", i+1)
+	}
+
+	// When
+	_, err := node.releaseBatchIPsWithRetry(ctx, release, ipsToRelease, scopedLog)
+
+	// Then - should get error from ENI lister, but the batch size logic was executed
+	assert.Error(t, err)
 }

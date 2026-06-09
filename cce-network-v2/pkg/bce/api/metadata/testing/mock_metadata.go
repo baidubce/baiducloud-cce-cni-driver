@@ -94,6 +94,21 @@ func (mr *MockInterfaceMockRecorder) GetInstanceType() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceType", reflect.TypeOf((*MockInterface)(nil).GetInstanceType))
 }
 
+// GetInstanceSpecs mocks base method.
+func (m *MockInterface) GetInstanceSpecs() (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetInstanceSpecs")
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetInstanceSpecs indicates an expected call of GetInstanceSpecs.
+func (mr *MockInterfaceMockRecorder) GetInstanceSpecs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceSpecs", reflect.TypeOf((*MockInterface)(nil).GetInstanceSpecs))
+}
+
 // GetInstanceTypeEx mocks base method.
 func (m *MockInterface) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	m.ctrl.T.Helper()

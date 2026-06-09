@@ -1,3 +1,17 @@
+/*
+ * Copyright (c) 2023 Baidu, Inc. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+ * except in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the
+ * License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+ * either express or implied. See the License for the specific language governing permissions
+ * and limitations under the License.
+ *
+ */
 package vpceni
 
 import (
@@ -6,9 +20,11 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/golang/mock/gomock"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -19,8 +35,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
+	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 )
 
 // Test helper functions
@@ -575,9 +595,53 @@ func TestCreateNameForENI_AdditionalScenarios(t *testing.T) {
 // Test functions for 0% coverage functions
 
 func TestBCCNetworkResourceSet_allocateIPs(t *testing.T) {
-	// This test would require mocking the BCE client, which is complex
-	// For now, we'll create a basic test structure that can be expanded
-	t.Skip("allocateIPs test requires complex mocking of BCE client - skipped for now")
+	node, err := bccTestContext(t)
+	if !assert.NoError(t, err, "setup node failed") {
+		return
+	}
+
+	bccNode, ok := node.real.(*bccNetworkResourceSet)
+	if !assert.True(t, ok, "should be bccNetworkResourceSet") {
+		return
+	}
+
+	mockCloud := node.manager.GetMockCloudInterface()
+	ctx := context.Background()
+	scopedLog := createTestLogger()
+
+	t.Run("allocate_ipv4_with_client_token", func(t *testing.T) {
+		allocation := &ipam.AllocationAction{
+			InterfaceID: "eni-test",
+			PoolID:      ipamTypes.PoolID("sbn-test"),
+		}
+
+		mockCloud.EXPECT().
+			BatchAddPrivateIPWithClientToken(gomock.Any(), gomock.Any(), 2, "eni-test", false, gomock.Any()).
+			Return([]string{"10.0.0.1", "10.0.0.2"}, nil).
+			Times(1)
+
+		ipv4Result, ipv6Result, err := bccNode.allocateIPs(ctx, scopedLog, allocation, 2, 0)
+		assert.NoError(t, err)
+		assert.Len(t, ipv4Result, 2)
+		assert.Nil(t, ipv6Result)
+	})
+
+	t.Run("allocate_ipv6_with_client_token", func(t *testing.T) {
+		allocation := &ipam.AllocationAction{
+			InterfaceID: "eni-test",
+			PoolID:      ipamTypes.PoolID("sbn-test"),
+		}
+
+		mockCloud.EXPECT().
+			BatchAddPrivateIPWithClientToken(gomock.Any(), gomock.Any(), 2, "eni-test", true, gomock.Any()).
+			Return([]string{"2001:db8::1", "2001:db8::2"}, nil).
+			Times(1)
+
+		ipv4Result, ipv6Result, err := bccNode.allocateIPs(ctx, scopedLog, allocation, 0, 2)
+		assert.NoError(t, err)
+		assert.Nil(t, ipv4Result)
+		assert.Len(t, ipv6Result, 2)
+	})
 }
 
 func TestBCCNetworkResourceSet_releaseIPs(t *testing.T) {
@@ -1042,9 +1106,225 @@ func TestBCCNetworkResourceSet___prepareIPAllocation(t *testing.T) {
 }
 
 func TestBCCNetworkResourceSet_refreshBCCInfo(t *testing.T) {
-	// This test would require mocking the BCE client, which is complex
-	// For now, we'll create a basic test structure that can be expanded
-	t.Skip("refreshBCCInfo test requires complex mocking of BCE client - skipped for now")
+	t.Run("instance_deleted_check", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+		bccNode, ok := node.real.(*bccNetworkResourceSet)
+		if !assert.True(t, ok) {
+			return
+		}
+
+		bccNode.bccLock.Lock()
+		bccNode.instanceDeleted = true
+		bccNode.bccLock.Unlock()
+
+		_, err = bccNode.refreshBCCInfo()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "has been deleted")
+	})
+
+	t.Run("instance_validation_success", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+		bccNode, ok := node.real.(*bccNetworkResourceSet)
+		if !assert.True(t, ok) {
+			return
+		}
+
+		result, err := bccNode.refreshBCCInfo()
+		// Since bccTestContext sets up a mock that returns a valid instance with eniQuota=8,
+		// this call should succeed with validation passing
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 8, result.EniQuota)
+		assert.NotEmpty(t, result.NicInfo.VpcId)
+		assert.NotEmpty(t, result.NicInfo.SubnetId)
+	})
+
+	t.Run("instance_not_found_deleted", func(t *testing.T) {
+		// Create a fresh test context with a new controller
+		ccemock.InitMockEnv()
+		bcesync.InitBSM()
+
+		mockCtl := gomock.NewController(t)
+		defer mockCtl.Finish()
+		im := newMockInstancesManager(mockCtl)
+
+		k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "bcc")
+		k8sObj.Annotations = map[string]string{}
+		k8sObj.Annotations[k8s.AnnotationNodeMaxENINum] = "8"
+		k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum] = "16"
+		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = time.Now().Format(time.RFC3339)
+		k8sObj.Spec.ENI.MaxAllocateENI = 8
+		k8sObj.Spec.ENI.MaxIPsPerENI = 16
+
+		err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+		if !assert.NoError(t, err, "ensure nrs to informer failed") {
+			return
+		}
+
+		k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+		err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+		if !assert.NoError(t, err, "ensure node to informer failed") {
+			return
+		}
+
+		// Mock GetBCCInstanceDetail to return NoSuchObject error
+		im.GetMockCloudInterface().EXPECT().
+			GetBCCInstanceDetail(gomock.Any(), gomock.Any()).
+			Return(nil, fmt.Errorf("NoSuchObject")).
+			Times(1)
+
+		node := NewBCENetworkResourceSet(nil, k8sObj, im)
+		assert.NotNil(t, node)
+
+		if node.eniQuota == nil {
+			node.eniQuota = newCustomerIPQuota(log, k8s.WatcherClient(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclientd)
+			node.eniQuota.SetMaxENI(8)
+			node.eniQuota.SetMaxIP(16)
+		}
+		node.lastResyncEniQuotaTime = time.Now()
+
+		bccNode, ok := node.real.(*bccNetworkResourceSet)
+		if !assert.True(t, ok) {
+			return
+		}
+
+		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, node.k8sObj.Spec.ENI.SubnetIDs)
+
+		_, err = bccNode.refreshBCCInfo()
+		if assert.Error(t, err) {
+			assert.Contains(t, err.Error(), "not found")
+		}
+
+		// Verify instanceDeleted flag is set
+		bccNode.bccLock.RLock()
+		assert.True(t, bccNode.instanceDeleted)
+		bccNode.bccLock.RUnlock()
+	})
+
+	t.Run("instance_api_error", func(t *testing.T) {
+		// Create a fresh test context with a new controller
+		ccemock.InitMockEnv()
+		bcesync.InitBSM()
+
+		mockCtl := gomock.NewController(t)
+		defer mockCtl.Finish()
+		im := newMockInstancesManager(mockCtl)
+
+		k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "bcc")
+		k8sObj.Annotations = map[string]string{}
+		k8sObj.Annotations[k8s.AnnotationNodeMaxENINum] = "8"
+		k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum] = "16"
+		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = time.Now().Format(time.RFC3339)
+		k8sObj.Spec.ENI.MaxAllocateENI = 8
+		k8sObj.Spec.ENI.MaxIPsPerENI = 16
+
+		err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+		if !assert.NoError(t, err, "ensure nrs to informer failed") {
+			return
+		}
+
+		k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+		err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+		if !assert.NoError(t, err, "ensure node to informer failed") {
+			return
+		}
+
+		// Mock GetBCCInstanceDetail to return generic error
+		im.GetMockCloudInterface().EXPECT().
+			GetBCCInstanceDetail(gomock.Any(), gomock.Any()).
+			Return(nil, fmt.Errorf("API error")).
+			Times(1)
+
+		node := NewBCENetworkResourceSet(nil, k8sObj, im)
+		assert.NotNil(t, node)
+
+		if node.eniQuota == nil {
+			node.eniQuota = newCustomerIPQuota(log, k8s.WatcherClient(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclientd)
+			node.eniQuota.SetMaxENI(8)
+			node.eniQuota.SetMaxIP(16)
+		}
+		node.lastResyncEniQuotaTime = time.Now()
+
+		bccNode, ok := node.real.(*bccNetworkResourceSet)
+		if !assert.True(t, ok) {
+			return
+		}
+
+		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, node.k8sObj.Spec.ENI.SubnetIDs)
+
+		_, err = bccNode.refreshBCCInfo()
+		if assert.Error(t, err) {
+			assert.Contains(t, err.Error(), "API error")
+		}
+	})
+
+	t.Run("instance_validation_failure", func(t *testing.T) {
+		// Create a fresh test context with a new controller
+		ccemock.InitMockEnv()
+		bcesync.InitBSM()
+
+		mockCtl := gomock.NewController(t)
+		defer mockCtl.Finish()
+		im := newMockInstancesManager(mockCtl)
+
+		k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "bcc")
+		k8sObj.Annotations = map[string]string{}
+		k8sObj.Annotations[k8s.AnnotationNodeMaxENINum] = "8"
+		k8sObj.Annotations[k8s.AnnotationNodeMaxPerENIIPsNum] = "16"
+		k8sObj.Annotations[k8s.AnnotationIPResourceCapacitySynced] = time.Now().Format(time.RFC3339)
+		k8sObj.Spec.ENI.MaxAllocateENI = 8
+		k8sObj.Spec.ENI.MaxIPsPerENI = 16
+
+		err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+		if !assert.NoError(t, err, "ensure nrs to informer failed") {
+			return
+		}
+
+		k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+		err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+		if !assert.NoError(t, err, "ensure node to informer failed") {
+			return
+		}
+
+		// Mock GetBCCInstanceDetail to return invalid instance (missing required fields)
+		im.GetMockCloudInterface().EXPECT().
+			GetBCCInstanceDetail(gomock.Any(), gomock.Any()).
+			Return(&bccapi.InstanceModel{
+				InstanceId: k8sObj.Spec.InstanceID,
+				EniQuota:   8,
+				EriQuota:   2,
+				// Missing required fields like NicInfo to trigger validation error
+			}, nil).
+			Times(1)
+
+		node := NewBCENetworkResourceSet(nil, k8sObj, im)
+		assert.NotNil(t, node)
+
+		if node.eniQuota == nil {
+			node.eniQuota = newCustomerIPQuota(log, k8s.WatcherClient(), k8sObj.Name, k8sObj.Spec.InstanceID, im.bceclientd)
+			node.eniQuota.SetMaxENI(8)
+			node.eniQuota.SetMaxIP(16)
+		}
+		node.lastResyncEniQuotaTime = time.Now()
+
+		bccNode, ok := node.real.(*bccNetworkResourceSet)
+		if !assert.True(t, ok) {
+			return
+		}
+
+		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, node.k8sObj.Spec.ENI.SubnetIDs)
+
+		_, err = bccNode.refreshBCCInfo()
+		if assert.Error(t, err) {
+			assert.Contains(t, err.Error(), "validation failed")
+		}
+	})
 }
 
 func TestBCCNetworkResourceSet_refreshENIQuota(t *testing.T) {
@@ -1492,4 +1772,55 @@ func Test_getDefaultBCCEniQuota(t *testing.T) {
 			assert.Equal(t, tt.expectedIP, maxIP, "IP quota should match expected value")
 		})
 	}
+}
+
+func TestNewBCCNetworkResourceSet(t *testing.T) {
+	// 创建父结构体实例
+	super := &bceNetworkResourceSet{
+		instanceID: "test-instance",
+	}
+
+	// 测试正常情况
+	t.Run("normal case", func(t *testing.T) {
+		node := newBCCNetworkResourceSet(super)
+
+		// 验证返回的实例不为nil
+		assert.NotNil(t, node)
+
+		// 验证父结构体指针正确设置
+		assert.Equal(t, super, node.bceNetworkResourceSet)
+
+		// 验证instanceType正确设置
+		assert.Equal(t, string(metadata.InstanceTypeExBCC), node.instanceType)
+
+		// 验证其他字段初始化为零值
+		assert.Nil(t, node.bccInfo)
+		assert.False(t, node.usePrimaryENIWithSecondaryMode)
+	})
+
+	// 测试nil输入
+	t.Run("nil input", func(t *testing.T) {
+		node := newBCCNetworkResourceSet(nil)
+
+		// 验证返回的实例不为nil
+		assert.NotNil(t, node)
+
+		// 验证父结构体指针被初始化
+		assert.NotNil(t, node.bceNetworkResourceSet)
+
+		// 验证instanceType正确设置
+		assert.Equal(t, string(metadata.InstanceTypeExBCC), node.instanceType)
+	})
+
+	// 测试并发安全性 - 验证没有竞态条件
+	t.Run("concurrency safety", func(t *testing.T) {
+		// 使用多个goroutine并发创建实例
+		for i := 0; i < 100; i++ {
+			t.Run("", func(t *testing.T) {
+				t.Parallel()
+				node := newBCCNetworkResourceSet(super)
+				assert.NotNil(t, node)
+			})
+		}
+	})
 }

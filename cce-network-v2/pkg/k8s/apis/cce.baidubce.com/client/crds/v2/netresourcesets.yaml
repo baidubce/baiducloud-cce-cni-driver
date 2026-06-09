@@ -146,6 +146,7 @@ spec:
                     enum:
                     - Secondary
                     - Primary
+                    - PrimaryWithSecondaryIP
                     type: string
                   vpc-id:
                     description: VpcID is the VPC ID to use when allocating ENIs.

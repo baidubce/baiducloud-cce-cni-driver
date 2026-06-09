@@ -13,6 +13,7 @@ import (
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
@@ -1381,7 +1382,11 @@ type MockMetaClient struct {
 
 func NewMockMetaClient(primaryIP, gateway string, mtu int, err error) *MockMetaClient {
 	return &MockMetaClient{
-		Client:    metadata.NewClient(),
+		Client: metadata.NewClient(
+			defaults.APIRetryCount,
+			defaults.APIRetryMaxDelay,
+			defaults.APIRetryBaseInterval,
+		),
 		primaryIP: primaryIP,
 		gateway:   gateway,
 		mtu:       mtu,
@@ -2648,4 +2653,102 @@ func TestRename_Lines539to555(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetENICorrectConfigFromMetadata tests getENICorrectConfigFromMetadata function
+func TestGetENICorrectConfigFromMetadata(t *testing.T) {
+	t.Run("success with IPv4 only", func(t *testing.T) {
+		mockClient := &mockMetadataClient{
+			primaryIP: "10.0.0.10",
+			gateway:   "10.0.0.1",
+			mtu:       9000,
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		config, err := getENICorrectConfigFromMetadata("fa:16:3e:00:00:01", nil)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "10.0.0.10", config.PrimaryIPv4)
+		assert.Equal(t, "10.0.0.1", config.Gateway)
+		assert.Equal(t, 9000, config.MTU)
+		assert.Empty(t, config.PrimaryIPv6)
+	})
+
+	t.Run("success with IPv6 enabled", func(t *testing.T) {
+		originalEnableIPv6 := option.Config.EnableIPv6
+		option.Config.EnableIPv6 = true
+		defer func() { option.Config.EnableIPv6 = originalEnableIPv6 }()
+
+		mockClient := &mockMetadataClient{
+			primaryIP: "10.0.0.10",
+			gateway:   "10.0.0.1",
+			mtu:       1500,
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		eni := &ccev2.ENI{
+			Spec: ccev2.ENISpec{
+				ENI: models.ENI{
+					IPV6PrivateIPSet: []*models.PrivateIP{
+						{Primary: false, PrivateIPAddress: "2001:db8::2"},
+						{Primary: true, PrivateIPAddress: "2001:db8::1"},
+					},
+				},
+			},
+		}
+
+		config, err := getENICorrectConfigFromMetadata("fa:16:3e:00:00:01", eni)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "10.0.0.10", config.PrimaryIPv4)
+		assert.Equal(t, "10.0.0.1", config.Gateway)
+		assert.Equal(t, 1500, config.MTU)
+		assert.Equal(t, "2001:db8::1", config.PrimaryIPv6)
+	})
+
+	t.Run("GetLinkPrimaryIP error", func(t *testing.T) {
+		mockClient := &mockMetadataClient{
+			genericErr: fmt.Errorf("primary IP error"),
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		_, err := getENICorrectConfigFromMetadata("fa:16:3e:00:00:01", nil)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get primary IP from metadata")
+	})
+
+	t.Run("GetLinkGateway error", func(t *testing.T) {
+		mockClient := &mockMetadataClient{
+			primaryIP:  "10.0.0.10",
+			genericErr: fmt.Errorf("gateway error"),
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		_, err := getENICorrectConfigFromMetadata("fa:16:3e:00:00:01", nil)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get gateway from metadata")
+	})
+
+	t.Run("GetLinkMTU error uses default", func(t *testing.T) {
+		mockClient := &mockMetadataClient{
+			primaryIP:  "10.0.0.10",
+			gateway:    "10.0.0.1",
+			genericErr: fmt.Errorf("mtu error"),
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		config, err := getENICorrectConfigFromMetadata("fa:16:3e:00:00:01", nil)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "10.0.0.10", config.PrimaryIPv4)
+		assert.Equal(t, "10.0.0.1", config.Gateway)
+		assert.Equal(t, defaultMTUforENI, config.MTU)
+	})
 }

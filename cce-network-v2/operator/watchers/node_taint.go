@@ -381,40 +381,43 @@ func addNodeTaint(ctx context.Context, nodeName string) error {
 		return err
 	}
 
-	var taintFound bool
-
-	var taints []corev1.Taint
-	for _, taint := range k8sNode.Spec.Taints {
-		if taint.Key == pkgOption.Config.AgentNotReadyNodeTaintValue() {
-			taintFound = true
-		}
+	newTaint := corev1.Taint{
+		Key:    pkgOption.Config.AgentNotReadyNodeTaintValue(),
+		Effect: corev1.TaintEffectNoSchedule,
 	}
-
-	// No cce taints found
-	if !taintFound {
-		return nil
+	for _, taint := range k8sNode.Spec.Taints {
+		if taint.Key == newTaint.Key {
+			return nil
+		}
 	}
 	log.WithFields(logrus.Fields{
 		logfields.NodeName: nodeName,
 		"taint":            pkgOption.Config.AgentNotReadyNodeTaintValue(),
 	}).Debug("adding Node Taint")
 
-	taints = append(k8sNode.Spec.Taints, corev1.Taint{
-		Key:    pkgOption.Config.AgentNotReadyNodeTaintValue(),
-		Effect: corev1.TaintEffectNoSchedule,
-	})
-
-	createStatusAndNodePatch := []k8s.JSONPatch{
-		{
-			OP:    "test",
-			Path:  "/spec/taints",
-			Value: k8sNode.Spec.Taints,
-		},
-		{
-			OP:    "replace",
-			Path:  "/spec/taints",
-			Value: taints,
-		},
+	var createStatusAndNodePatch []k8s.JSONPatch
+	if len(k8sNode.Spec.Taints) == 0 {
+		createStatusAndNodePatch = []k8s.JSONPatch{
+			{
+				OP:    "add",
+				Path:  "/spec/taints",
+				Value: []corev1.Taint{newTaint},
+			},
+		}
+	} else {
+		taints := append(k8sNode.Spec.Taints, newTaint)
+		createStatusAndNodePatch = []k8s.JSONPatch{
+			{
+				OP:    "test",
+				Path:  "/spec/taints",
+				Value: k8sNode.Spec.Taints,
+			},
+			{
+				OP:    "replace",
+				Path:  "/spec/taints",
+				Value: taints,
+			},
+		}
 	}
 
 	patch, err := json.Marshal(createStatusAndNodePatch)

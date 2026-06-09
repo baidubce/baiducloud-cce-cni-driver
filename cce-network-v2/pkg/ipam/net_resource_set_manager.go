@@ -285,9 +285,9 @@ func (n *NetResourceSetManager) Create(resource *v2.NetResourceSet) error {
 // Kubernetes apiserver
 func (n *NetResourceSetManager) Update(resource *v2.NetResourceSet) error {
 	start := time.Now()
-	n.mutex.Lock()
+	n.mutex.RLock()
 	netResource, ok := n.netResources[resource.Name]
-	n.mutex.Unlock()
+	n.mutex.RUnlock()
 
 	defer func() {
 		netResource.UpdatedResource(resource)

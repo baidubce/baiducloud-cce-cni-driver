@@ -68,6 +68,10 @@ func (m *mockMetadataClientForHPASID) GetInstanceType() (metadata.InstanceType, 
 	return "bcc.g1.c1m4", nil
 }
 
+func (m *mockMetadataClientForHPASID) GetInstanceSpecs() (string, error) {
+	return "bcc.g1.c1m4", nil
+}
+
 func (m *mockMetadataClientForHPASID) GetSourceType() (string, error) {
 	return "hpas", nil
 }
@@ -94,6 +98,38 @@ func (m *mockMetadataClientForHPASID) GetLinkGateway(macAddress, ip string) (str
 
 func (m *mockMetadataClientForHPASID) GetLinkMTU(macAddress string) (int, error) {
 	return 1500, nil
+}
+
+func (m *mockMetadataClientForHPASID) GetInstanceName() (string, error) {
+	return "test-instance-name", nil
+}
+
+func (m *mockMetadataClientForHPASID) GetLocalIPv4() (string, error) {
+	return "10.0.0.1", nil
+}
+
+func (m *mockMetadataClientForHPASID) GetRegion() (string, error) {
+	return "bj", nil
+}
+
+func (m *mockMetadataClientForHPASID) GetLinkMask(macAddress, ip string) (string, error) {
+	return "255.255.255.0", nil
+}
+
+func (m *mockMetadataClientForHPASID) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClientForHPASID) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *mockMetadataClientForHPASID) GetVifFeatures(macAddress string) (string, error) {
+	return "", nil
+}
+
+func (m *mockMetadataClientForHPASID) ListMacs() ([]string, error) {
+	return []string{}, nil
 }
 
 // mockK8sNodeGetter is a mock implementation of k8sNodeGetter

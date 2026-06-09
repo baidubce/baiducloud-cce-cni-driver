@@ -52,18 +52,11 @@ var (
 		OverlayRDMA:  {},
 		UnderlayRDMA: {},
 	}
-
-	defaultMetaClient metadata.Interface = metadata.NewClient()
 )
-
-// GetDefaultMetaClient returns the default metadata client (for testing purposes)
-func GetDefaultMetaClient() metadata.Interface {
-	return defaultMetaClient
-}
 
 // SetDefaultMetaClient sets the default metadata client (for testing purposes)
 func SetDefaultMetaClient(client metadata.Interface) {
-	defaultMetaClient = client
+	metadata.DefaultMetaClient = client
 }
 
 type RdmaIfInfo struct {
@@ -230,7 +223,7 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 	var ris = map[string]RdmaIfInfo{}
 
 	// list network interface macs
-	macList, macErr := defaultMetaClient.ListMacs()
+	macList, macErr := metadata.DefaultMetaClient.ListMacs()
 	if macErr != nil {
 		if scopedLog != nil {
 			scopedLog.WithError(macErr).Errorf("list mac failed")
@@ -242,7 +235,7 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 
 	// check whether there is ERI
 	for _, macAddress := range macList {
-		vifFeatures, vifErr := defaultMetaClient.GetVifFeatures(macAddress)
+		vifFeatures, vifErr := metadata.DefaultMetaClient.GetVifFeatures(macAddress)
 		if vifErr != nil {
 			if scopedLog != nil {
 				scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
@@ -262,7 +255,7 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 			}
 
 			var rdmaIfInfo RdmaIfInfo
-			nodeInstanceID, metaAPIErr := defaultMetaClient.GetInstanceID()
+			nodeInstanceID, metaAPIErr := metadata.DefaultMetaClient.GetInstanceID()
 			if metaAPIErr != nil {
 				if scopedLog != nil {
 					scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
@@ -288,7 +281,7 @@ func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]Rdm
 	var ris = map[string]RdmaIfInfo{}
 
 	// list network interface macs
-	macList, macErr := defaultMetaClient.ListMacs()
+	macList, macErr := metadata.DefaultMetaClient.ListMacs()
 	if macErr != nil {
 		if scopedLog != nil {
 			scopedLog.WithError(macErr).Errorf("list mac failed")
@@ -300,7 +293,7 @@ func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]Rdm
 
 	// check whether there is ERI
 	for _, macAddress := range macList {
-		vifFeatures, vifErr := defaultMetaClient.GetVifFeatures(macAddress)
+		vifFeatures, vifErr := metadata.DefaultMetaClient.GetVifFeatures(macAddress)
 		if vifErr != nil {
 			if scopedLog != nil {
 				scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
@@ -311,7 +304,7 @@ func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]Rdm
 		}
 		if _, ok := roceVFs[vifFeatures]; ok {
 			var rdmaIfInfo RdmaIfInfo
-			nodeInstanceID, metaAPIErr := defaultMetaClient.GetInstanceID()
+			nodeInstanceID, metaAPIErr := metadata.DefaultMetaClient.GetInstanceID()
 			if metaAPIErr != nil {
 				if scopedLog != nil {
 					scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
@@ -374,6 +367,7 @@ func GetPodNameFromCEPName(cepName string) (podName string) {
 }
 
 // agent is enable to manager current eni
+// todo hmm
 func IsAgentMgrENI(eni *ccev2.ENI) (enable bool) {
 	enable = true
 	switch eni.Spec.Type {
@@ -385,4 +379,11 @@ func IsAgentMgrENI(eni *ccev2.ENI) (enable bool) {
 		enable = true
 	}
 	return enable
+}
+
+func IsSecondaryIPMode(eniUseMode string) bool {
+	if eniUseMode == string(ccev2.ENIUseModeSecondaryIP) || eniUseMode == string(ccev2.ENIUseModePrimaryWithSecondaryIP) {
+		return true
+	}
+	return false
 }

@@ -50,6 +50,7 @@ type Interface interface {
 	// enable the cross subnet IP allocation function
 	BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error)
 	BatchAddPrivateIP(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool) ([]string, error)
+	BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error)
 	BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string, isIpv6 bool) error
 	CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error)
 	DeleteENI(ctx context.Context, eniID string) error
@@ -101,7 +102,7 @@ type Interface interface {
 type Client struct {
 	bccClient *bcc.Client
 	eipClient *eip.Client
-	eniClient *eniExt.Client
+	eniClient eniExt.ClientInterface
 	vpcClient *vpc.Client
 	hpcClient *hpc.Client
 	bbcClient *bbc.Client

@@ -147,7 +147,7 @@ func SyncCRDs(ctx context.Context, crdNames []string, rs *Resources, ag *APIGrou
 
 	log.Info("Waiting until all CCE CRDs are available")
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	for {
 		select {
 		case <-ctx.Done():

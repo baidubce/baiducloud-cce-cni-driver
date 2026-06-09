@@ -643,7 +643,8 @@ func (rd *RdmaDiscovery) getInstanceNetResourceSets(instanceID string) ([]*ccev2
 
 	// Only list nrs for this node
 	allNRSList, err := k8s.CCEClient().CceV2().NetResourceSets().List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("kubernetes.io/hostname=%s", hostname),
+		LabelSelector:   fmt.Sprintf("kubernetes.io/hostname=%s", hostname),
+		ResourceVersion: "0",
 	})
 	if err != nil {
 		rdLog.WithError(err).Error("Failed to query NRS from API server")

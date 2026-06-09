@@ -6,6 +6,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/bce-sdk-go/util/log"
 )
@@ -14,6 +15,7 @@ import (
 type metadataClient interface {
 	GetVPCID() (string, error)
 	GetInstanceTypeEx() (metadata.InstanceTypeEx, error)
+	GetInstanceSpecs() (string, error)
 	GetSourceType() (string, error)
 	GetInstanceType() (metadata.InstanceType, error)
 	GetAvailabilityZone() (string, error)
@@ -26,48 +28,53 @@ type metadataClient interface {
 	GetLinkMTU(macAddress string) (int, error)
 }
 
-var defaultMetaClient metadataClient = metadata.NewClient()
-
 // SetMetadataClient sets the metadata client for testing purposes
 // This function should only be used in tests
-func SetMetadataClient(client metadataClient) {
+func SetMetadataClient(client metadata.Interface) {
 	log.Debug("Setting metadata client to mock client")
-	defaultMetaClient = client
+	metadata.DefaultMetaClient = client
 }
 
 // ResetMetadataClient resets the metadata client to the default client
 // This function should only be used in tests
 func ResetMetadataClient() {
 	log.Debug("Resetting metadata client to default")
-	defaultMetaClient = metadata.NewClient()
+	metadata.DefaultMetaClient = metadata.NewClient(
+		defaults.APIRetryCount,
+		defaults.APIRetryMaxDelay,
+		defaults.APIRetryBaseInterval,
+	)
 }
 
 // TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
 // GetInstanceMetadata get basic metadata information
 func GetInstanceMetadata() (vpcID, instanceType, instanceSpecType, availabilityZone string, err error) {
-	vpcID, err = defaultMetaClient.GetVPCID()
+	vpcID, err = metadata.DefaultMetaClient.GetVPCID()
 	if err != nil {
 		return
 	}
 
-	instanceTypeEX, err := defaultMetaClient.GetInstanceTypeEx()
+	instanceTypeEX, err := metadata.DefaultMetaClient.GetInstanceTypeEx()
 	if err != nil {
 		return
 	}
 	instanceType = string(instanceTypeEX)
 
-	sourceType, err := defaultMetaClient.GetSourceType()
+	sourceType, err := metadata.DefaultMetaClient.GetSourceType()
+	if err != nil {
+		return
+	}
 	if strings.EqualFold(sourceType, string(metadata.InstanceTypeExHPAS)) {
 		instanceType = string(metadata.InstanceTypeExHPAS)
 	}
 
-	specType, err := defaultMetaClient.GetInstanceType()
+	specType, err := metadata.DefaultMetaClient.GetInstanceType()
 	if err != nil {
 		return
 	}
 	instanceSpecType = string(specType)
 
-	availabilityZone, err = defaultMetaClient.GetAvailabilityZone()
+	availabilityZone, err = metadata.DefaultMetaClient.GetAvailabilityZone()
 	if err != nil {
 		return
 	}
@@ -76,35 +83,39 @@ func GetInstanceMetadata() (vpcID, instanceType, instanceSpecType, availabilityZ
 }
 
 func GetInstanceType() (metadata.InstanceType, error) {
-	return defaultMetaClient.GetInstanceType()
+	return metadata.DefaultMetaClient.GetInstanceType()
+}
+
+func GetInstanceSpecs() (string, error) {
+	return metadata.DefaultMetaClient.GetInstanceSpecs()
 }
 
 func GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
-	return defaultMetaClient.GetInstanceTypeEx()
+	return metadata.DefaultMetaClient.GetInstanceTypeEx()
 }
 
 func GetSourceType() (string, error) {
-	return defaultMetaClient.GetSourceType()
+	return metadata.DefaultMetaClient.GetSourceType()
 }
 
 func getVpcIDByName() (string, error) {
-	return defaultMetaClient.GetVPCID()
+	return metadata.DefaultMetaClient.GetVPCID()
 }
 
 func GetInstanceID() (string, error) {
-	return defaultMetaClient.GetInstanceID()
+	return metadata.DefaultMetaClient.GetInstanceID()
 }
 
 // GetHpasID returns the HPAS ID if the instance is a HPAS instance,
 // otherwise returns an empty string
 func GetHpasID() (string, error) {
 	log.Debug("Getting HPAS ID from metadata client")
-	return defaultMetaClient.GetResourceID()
+	return metadata.DefaultMetaClient.GetResourceID()
 }
 
 // GetFeatureList returns the feature list including ERI and ENI quota
 func GetFeatureList() (*metadata.FeatureList, error) {
-	return defaultMetaClient.GetFeatureList()
+	return metadata.DefaultMetaClient.GetFeatureList()
 }
 
 // TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
@@ -140,7 +151,7 @@ func GenerateENISpec() (eni *api.ENISpec, err error) {
 
 			// set bbc primary eni subnet id
 			var sbnID string
-			sbnID, err = defaultMetaClient.GetSubnetID()
+			sbnID, err = metadata.DefaultMetaClient.GetSubnetID()
 			if err != nil {
 				return
 			}

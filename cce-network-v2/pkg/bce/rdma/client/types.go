@@ -36,6 +36,7 @@ type IaaSClient interface {
 	AddPrivateIP(ctx context.Context, eniID, privateIP string) (string, error)
 	DeletePrivateIP(ctx context.Context, eniID, privateIP string) error
 	BatchAddPrivateIP(ctx context.Context, eniID string, privateIPs []string, count int) ([]string, error)
+	BatchAddPrivateIPWithClientToken(ctx context.Context, eniID string, privateIPs []string, count int, clientToken string) ([]string, error)
 	BatchDeletePrivateIP(ctx context.Context, eniID string, privateIPs []string) error
 
 	GetRDMAIntType() string

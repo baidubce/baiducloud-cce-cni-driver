@@ -79,7 +79,7 @@ func EnableERI(k8sNode *corev1.Node, globalConfig bool) bool {
 // This function is decoupled from Daemon and can be used as a utility function
 func HasAvailableERIQuota() bool {
 	// Get ERI quota from metadata API
-	featureList, err := defaultMetaClient.GetFeatureList()
+	featureList, err := metadata.DefaultMetaClient.GetFeatureList()
 	if err != nil {
 		log.WithError(err).Fatal("Failed to get feature list from metadata API for ERI quota check")
 	}
@@ -111,7 +111,7 @@ func GetERIManagedLabelSelector() string {
 	nodeName := nodeTypes.GetName()
 
 	// Get node instance ID
-	metaClient := metadata.NewClient()
+	metaClient := metadata.DefaultMetaClient
 	instanceID, err := metaClient.GetInstanceID()
 	if err != nil {
 		// Return empty string if unable to get instance ID

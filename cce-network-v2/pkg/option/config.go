@@ -352,6 +352,11 @@ const (
 	// DefaultAPITimeoutLimit is the timeout limit when accessing external Cloud APIs
 	DefaultAPITimeoutLimit = "default-api-timeout"
 
+	// MetaAPI Retry options
+	MetaAPIRetryCount        = "metaapi-retry-count"
+	MetaAPIRetryMaxDelay     = "metaapi-retry-max-delay"
+	MetaAPIRetryBaseInterval = "metaapi-retry-base-interval"
+
 	// CRDWaitTimeout is the timeout in which CCE will exit if CRDs are not
 	// available.
 	CRDWaitTimeout = "crd-wait-timeout"
@@ -377,6 +382,7 @@ const (
 	MaxIPsPerENI                  = "max-ips-per-eni"
 	ENIPreAllocateENINum          = "eni-pre-allocate-num"
 	ENISubnets                    = "eni-subnet-ids"
+	ForcePrimaryENIInstanceSpecs  = "force-primary-eni-instance-specs"
 	ENIRouteTableOffset           = "eni-route-table-offset"
 	ENISecurityGroupIDs           = "eni-security-group-ids"
 	ENIEnterpriseSecurityGroupIds = "eni-enterprise-security-group-ids"
@@ -821,6 +827,14 @@ type DaemonConfig struct {
 
 	// ExtCNIPluginsList Expand the list of CNI plugins, such as 'sbr-eip'
 	ExtCNIPluginsList []string
+
+	// MetaAPI Retry configuration
+	MetaAPIRetryCount        int
+	MetaAPIRetryMaxDelay     time.Duration
+	MetaAPIRetryBaseInterval time.Duration
+
+	// ForcePrimaryENIInstanceSpecs lists instance specs that must use the primary ENI with secondary IP mode
+	ForcePrimaryENIInstanceSpecs []string
 }
 
 var (
@@ -854,6 +868,9 @@ var (
 		APIRateLimit:                     make(map[string]string),
 		FixedIPTimeout:                   defaults.CCEEndpointGCInterval,
 		CCEEndpointGC:                    defaults.CCEEndpointGCInterval,
+		MetaAPIRetryCount:                defaults.APIRetryCount,
+		MetaAPIRetryMaxDelay:             defaults.APIRetryMaxDelay,
+		MetaAPIRetryBaseInterval:         defaults.APIRetryBaseInterval,
 	}
 )
 
@@ -1385,6 +1402,13 @@ func (c *DaemonConfig) Populate() {
 	c.ResourceResyncInterval = viper.GetDuration(ResourceResyncInterval)
 	c.AgentResourceResyncInterval = viper.GetDuration(AgentResourceResyncInterval)
 	c.ExtCNIPluginsList = viper.GetStringSlice(ExtCNIPluginsList)
+
+	// MetaAPI Retry configuration
+	c.MetaAPIRetryCount = viper.GetInt(MetaAPIRetryCount)
+	c.MetaAPIRetryMaxDelay = viper.GetDuration(MetaAPIRetryMaxDelay)
+	c.MetaAPIRetryBaseInterval = viper.GetDuration(MetaAPIRetryBaseInterval)
+
+	c.ForcePrimaryENIInstanceSpecs = viper.GetStringSlice(ForcePrimaryENIInstanceSpecs)
 }
 
 func (c *DaemonConfig) checkIPAMDelegatedPlugin() error {

@@ -64,6 +64,18 @@ type BceClient struct {
 	Signer auth.Signer // the sign algorithm
 }
 
+func shouldBufferBody(policy RetryPolicy) bool {
+	switch p := policy.(type) {
+	case *NoRetryPolicy:
+		return false
+	case *BackOffRetryPolicy:
+		return p.maxErrorRetry > 0
+	default:
+		// Unknown policy, be conservative and keep body for potential retries.
+		return true
+	}
+}
+
 // BuildHttpRequest - the helper method for the client to build http request
 //
 // PARAMS:
@@ -128,7 +140,7 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 		// The request body should be temporarily saved if retry to send the http request
 		var retryBuf bytes.Buffer
 		var teeReader io.Reader
-		if c.Config.Retry.ShouldRetry(nil, 0) && req.Body() != nil {
+		if shouldBufferBody(c.Config.Retry) && req.Body() != nil {
 			teeReader = io.TeeReader(req.Body(), &retryBuf)
 			req.Request.SetBody(ioutil.NopCloser(teeReader))
 		}
@@ -136,8 +148,8 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 
 		if err != nil {
 			if c.Config.Retry.ShouldRetry(err, retries) {
-				delay_in_mills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
-				time.Sleep(delay_in_mills)
+				delayInMills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
+				time.Sleep(delayInMills)
 			} else {
 				return &BceClientError{
 					fmt.Sprintf("execute http request failed! Retried %d times, error: %v",
@@ -145,7 +157,7 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 			}
 			retries++
 			log.Warnf("send request failed: %v, retry for %d time(s)", err, retries)
-			if req.Body() != nil {
+			if req.Body() != nil && teeReader != nil {
 				ioutil.ReadAll(teeReader)
 				req.Request.SetBody(ioutil.NopCloser(&retryBuf))
 			}
@@ -167,14 +179,15 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 		if resp.IsFail() {
 			err := resp.ServiceError()
 			if c.Config.Retry.ShouldRetry(err, retries) {
-				delay_in_mills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
-				time.Sleep(delay_in_mills)
+				delayInMills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
+				time.Sleep(delayInMills)
 			} else {
 				return err
 			}
+			// 重试，重新设置body
 			retries++
 			log.Warnf("send request failed, retry for %d time(s)", retries)
-			if req.Body() != nil {
+			if req.Body() != nil && teeReader != nil {
 				ioutil.ReadAll(teeReader)
 				req.Request.SetBody(ioutil.NopCloser(&retryBuf))
 			}

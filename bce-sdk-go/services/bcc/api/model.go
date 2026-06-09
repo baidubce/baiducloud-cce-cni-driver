@@ -146,7 +146,7 @@ type InstanceModel struct {
 	HostId                string                 `json:"hostId"`
 	DeploysetId           string                 `json:"deploysetId"`
 	RackId                string                 `json:"rackId"`
-	NicInfo               NicInfo                `json:"nicInfo"`
+	NicInfo               NicInfo                `json:"nicInfo" validate:"required"`
 	EniNum                string                 `json:"eniNum"`
 	DeploySetList         []DeploySetSimpleModel `json:"deploysetList"`
 	DeletionProtection    int                    `json:"deletionProtection"`
@@ -188,13 +188,13 @@ type NicInfo struct {
 	Status         string    `json:"status"`
 	MacAddress     string    `json:"macAddress"`
 	DeviceId       string    `json:"deviceId"`
-	VpcId          string    `json:"vpcId"`
-	EniId          string    `json:"eniId"`
+	VpcId          string    `json:"vpcId" validate:"required"`
+	EniId          string    `json:"eniId" validate:"required"`
 	Name           string    `json:"name"`
 	Type           string    `json:"type"`
 	CreatedTime    string    `json:"createdTime"`
 	SubnetType     string    `json:"subnetType"`
-	SubnetId       string    `json:"subnetId"`
+	SubnetId       string    `json:"subnetId" validate:"required"`
 	EniNum         int       `json:"eniNum"`
 	Az             string    `json:"az"`
 	EniUuid        string    `json:"eniUuid"`

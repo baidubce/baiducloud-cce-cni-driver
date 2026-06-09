@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -2714,6 +2716,69 @@ func TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBBCWithMultipleSecondaryIP
 	mockClient.AssertExpectations(t)
 }
 
+// TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBBCWithMoreThanBatchLimit_WhenCalled_ThenChunkBBCBatchDelIP tests BBC ENI deletes IPs in batches of BatchDeleteIPLimit
+func TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBBCWithMoreThanBatchLimit_WhenCalled_ThenChunkBBCBatchDelIP(t *testing.T) {
+	// Arrange
+	mockClient := new(mockBCEClient)
+	mockUpdater := new(mockENIUpdater)
+
+	firstBatch := buildSecondaryIPs(11, bceconstants.BatchAddOrDeleteIPLimit)
+	secondBatch := buildSecondaryIPs(21, 2)
+
+	mockClient.On("BBCBatchDelIP", mock.Anything, &bbc.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: firstBatch,
+	}).Return(nil).Once()
+	mockClient.On("BBCBatchDelIP", mock.Anything, &bbc.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: secondBatch,
+	}).Return(nil).Once()
+
+	es := &eniSyncher{
+		bceclient: mockClient,
+		updater:   mockUpdater,
+	}
+
+	privateIPSet := []*models.PrivateIP{
+		{
+			PrivateIPAddress: "192.168.1.10",
+			Primary:          true,
+		},
+	}
+	for _, ip := range append(append([]string{}, firstBatch...), secondBatch...) {
+		privateIPSet = append(privateIPSet, &models.PrivateIP{
+			PrivateIPAddress: ip,
+			Primary:          false,
+		})
+	}
+
+	eniObj := &ccev2.ENI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-eni",
+		},
+		Spec: ccev2.ENISpec{
+			NodeName: "test-node",
+			UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
+			Type:     ccev2.ENIForBBC,
+			ENI: models.ENI{
+				InstanceID:   "test-instance",
+				PrivateIPSet: privateIPSet,
+			},
+		},
+	}
+
+	// Setup test context with no existing node
+	eniTestContext(t, nil)
+
+	// Act
+	err := es.releaseSecondaryIPsFromPrimaryENI(eniObj)
+
+	// Assert
+	assert.NoError(t, err, "releaseSecondaryIPsFromPrimaryENI should succeed and delete IPs in batches")
+	mockClient.AssertNumberOfCalls(t, "BBCBatchDelIP", 2)
+	mockClient.AssertExpectations(t)
+}
+
 // TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBCCWithMultipleSecondaryIPs_WhenCalled_ThenCallBCCBatchDelIPWithAllIPs tests BCC ENI with multiple secondary IPs
 func TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBCCWithMultipleSecondaryIPs_WhenCalled_ThenCallBCCBatchDelIPWithAllIPs(t *testing.T) {
 	// Arrange
@@ -2773,4 +2838,177 @@ func TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBCCWithMultipleSecondaryIP
 	// Assert
 	assert.NoError(t, err, "releaseSecondaryIPsFromPrimaryENI should succeed for BCC ENI with multiple secondary IPs")
 	mockClient.AssertExpectations(t)
+}
+
+// TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBCCWithMoreThanBatchLimit_WhenCalled_ThenChunkBCCBatchDelIP tests BCC ENI deletes IPs in batches of BatchDeleteIPLimit
+func TestReleaseSecondaryIPsFromPrimaryENI_GivenENIForBCCWithMoreThanBatchLimit_WhenCalled_ThenChunkBCCBatchDelIP(t *testing.T) {
+	// Arrange
+	mockClient := new(mockBCEClient)
+	mockUpdater := new(mockENIUpdater)
+
+	firstBatch := buildSecondaryIPs(11, bceconstants.BatchAddOrDeleteIPLimit)
+	secondBatch := buildSecondaryIPs(21, 2)
+
+	mockClient.On("BCCBatchDelIP", mock.Anything, &bccapi.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: firstBatch,
+	}).Return(nil).Once()
+	mockClient.On("BCCBatchDelIP", mock.Anything, &bccapi.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: secondBatch,
+	}).Return(nil).Once()
+
+	es := &eniSyncher{
+		bceclient: mockClient,
+		updater:   mockUpdater,
+	}
+
+	privateIPSet := []*models.PrivateIP{
+		{
+			PrivateIPAddress: "192.168.1.10",
+			Primary:          true,
+		},
+	}
+	for _, ip := range append(append([]string{}, firstBatch...), secondBatch...) {
+		privateIPSet = append(privateIPSet, &models.PrivateIP{
+			PrivateIPAddress: ip,
+			Primary:          false,
+		})
+	}
+
+	eniObj := &ccev2.ENI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-eni",
+		},
+		Spec: ccev2.ENISpec{
+			NodeName: "test-node",
+			UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
+			Type:     ccev2.ENIForBCC,
+			ENI: models.ENI{
+				InstanceID:   "test-instance",
+				PrivateIPSet: privateIPSet,
+			},
+		},
+	}
+
+	// Setup test context with no existing node
+	eniTestContext(t, nil)
+
+	// Act
+	err := es.releaseSecondaryIPsFromPrimaryENI(eniObj)
+
+	// Assert
+	assert.NoError(t, err, "releaseSecondaryIPsFromPrimaryENI should succeed and delete IPs in batches")
+	mockClient.AssertNumberOfCalls(t, "BCCBatchDelIP", 2)
+	mockClient.AssertExpectations(t)
+}
+
+// TestDeleteSecondaryIPs_GivenENIForBBCWithMoreThanBatchLimit_WhenCalled_ThenChunkBBCBatchDelIP tests helper batching for BBC path
+func TestDeleteSecondaryIPs_GivenENIForBBCWithMoreThanBatchLimit_WhenCalled_ThenChunkBBCBatchDelIP(t *testing.T) {
+	mockClient := new(mockBCEClient)
+	es := &eniSyncher{
+		bceclient: mockClient,
+	}
+
+	firstBatch := buildSecondaryIPs(11, bceconstants.BatchAddOrDeleteIPLimit)
+	secondBatch := buildSecondaryIPs(21, 2)
+
+	mockClient.On("BBCBatchDelIP", mock.Anything, &bbc.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: firstBatch,
+	}).Return(nil).Once()
+	mockClient.On("BBCBatchDelIP", mock.Anything, &bbc.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: secondBatch,
+	}).Return(nil).Once()
+
+	eniObj := &ccev2.ENI{
+		Spec: ccev2.ENISpec{
+			Type: ccev2.ENIForBBC,
+			ENI: models.ENI{
+				InstanceID: "test-instance",
+			},
+		},
+	}
+
+	secondaryIPs := append(append([]string{}, firstBatch...), secondBatch...)
+
+	err := es.deleteSecondaryIPs(eniObj, secondaryIPs)
+
+	assert.NoError(t, err, "deleteSecondaryIPs should succeed and delete IPs in batches for BBC")
+	mockClient.AssertNumberOfCalls(t, "BBCBatchDelIP", 2)
+	mockClient.AssertExpectations(t)
+}
+
+// TestDeleteSecondaryIPs_GivenNoSuchObject_WhenCalled_ThenIgnoreError ensures NotFound errors are treated as idempotent.
+func TestDeleteSecondaryIPs_GivenNoSuchObject_WhenCalled_ThenIgnoreError(t *testing.T) {
+	mockClient := new(mockBCEClient)
+	es := &eniSyncher{
+		bceclient: mockClient,
+	}
+
+	secondaryIPs := []string{"192.168.1.10"}
+	mockClient.On("BCCBatchDelIP", mock.Anything, &bccapi.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: secondaryIPs,
+	}).Return(errors.New("Error Code: \"NoSuchObject\"")).Once()
+
+	eniObj := &ccev2.ENI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-eni",
+		},
+		Spec: ccev2.ENISpec{
+			Type: ccev2.ENIForBCC,
+			ENI: models.ENI{
+				InstanceID: "test-instance",
+			},
+		},
+	}
+
+	err := es.deleteSecondaryIPs(eniObj, secondaryIPs)
+
+	assert.NoError(t, err, "deleteSecondaryIPs should ignore NoSuchObject errors")
+	mockClient.AssertExpectations(t)
+}
+
+// TestDeleteSecondaryIPs_GivenENIForBCCWhenFirstBatchFails_ThenReturnError tests helper error propagation for BCC path
+func TestDeleteSecondaryIPs_GivenENIForBCCWhenFirstBatchFails_ThenReturnError(t *testing.T) {
+	mockClient := new(mockBCEClient)
+	es := &eniSyncher{
+		bceclient: mockClient,
+	}
+
+	firstBatch := buildSecondaryIPs(11, bceconstants.BatchAddOrDeleteIPLimit)
+	secondBatch := buildSecondaryIPs(21, 2)
+	expectedErr := errors.New("bcc batch delete failed")
+
+	mockClient.On("BCCBatchDelIP", mock.Anything, &bccapi.BatchDelIpArgs{
+		InstanceId: "test-instance",
+		PrivateIps: firstBatch,
+	}).Return(expectedErr).Once()
+
+	eniObj := &ccev2.ENI{
+		Spec: ccev2.ENISpec{
+			Type: ccev2.ENIForBCC,
+			ENI: models.ENI{
+				InstanceID: "test-instance",
+			},
+		},
+	}
+
+	secondaryIPs := append(append([]string{}, firstBatch...), secondBatch...)
+
+	err := es.deleteSecondaryIPs(eniObj, secondaryIPs)
+
+	assert.ErrorIs(t, err, expectedErr, "deleteSecondaryIPs should return error when BCC delete fails")
+	mockClient.AssertNumberOfCalls(t, "BCCBatchDelIP", 1)
+	mockClient.AssertExpectations(t)
+}
+
+func buildSecondaryIPs(start, count int) []string {
+	ips := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		ips = append(ips, fmt.Sprintf("192.168.1.%d", start+i))
+	}
+	return ips
 }

@@ -16,6 +16,7 @@ package rdma
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -118,25 +119,28 @@ func TestUpdateERIMacAddressAnnotation_GivenPatchSuccess_WhenUpdate_ThenExecuteC
 // TestUpdateERIMacAddressAnnotation_GivenPatchFailure_WhenUpdate_ThenRetryAndLog tests condition function execution with failure
 func TestUpdateERIMacAddressAnnotation_GivenPatchFailure_WhenUpdate_ThenRetryAndLog(t *testing.T) {
 	// Arrange
+	k8s.InitNewFakeK8sClient()
 	nrs := createTestBceRDMANetResourceSet(nil)
 	ctx := context.Background()
 	newMac := "aa:bb:cc:dd:ee:ff"
 	scopedLog := logrus.NewEntry(logrus.New())
 
-	pollCalled := false
-	// Mock wait.PollImmediate to simulate retry behavior with failures
-	patches := gomonkey.ApplyFunc(wait.PollImmediate, func(interval, timeout time.Duration, condition wait.ConditionFunc) error {
-		pollCalled = true
-		// Return timeout error to simulate failure
-		return wait.ErrWaitTimeout
-	})
+	patchCallCount := 0
+	// Mock NetResourceSets().Patch to always fail, forcing PollImmediate to retry until timeout
+	patches := gomonkey.ApplyMethod(reflect.TypeOf(k8s.CCEClient().CceV2().NetResourceSets()), "Patch",
+		func(_ *fakev2.FakeNetResourceSets, ctx context.Context, name string, pt types.PatchType,
+			data []byte, opts metav1.PatchOptions, subresources ...string) (*ccev2.NetResourceSet, error) {
+			patchCallCount++
+			// Return error to force retry
+			return nil, fmt.Errorf("mock patch error")
+		})
 	defer patches.Reset()
 
 	// Act
 	nrs.updateERIMacAddressAnnotation(ctx, newMac, scopedLog)
 
-	// Assert
-	assert.True(t, pollCalled, "PollImmediate should be called")
+	// Assert - Patch should be called multiple times due to retries
+	assert.Greater(t, patchCallCount, 1, "Patch should be called multiple times due to retries")
 }
 
 // TestUpdateERIMacAddressAnnotation_GivenContextCancellation_WhenUpdate_ThenHandleGracefully tests context cancellation
@@ -165,6 +169,7 @@ func TestUpdateERIMacAddressAnnotation_GivenContextCancellation_WhenUpdate_ThenH
 // TestUpdateERIMacAddressAnnotation_GivenSimpleSuccess_WhenUpdate_ThenPatchSuccessfully tests simple success case
 func TestUpdateERIMacAddressAnnotation_GivenSimpleSuccess_WhenUpdate_ThenPatchSuccessfully(t *testing.T) {
 	// Arrange
+	k8s.InitNewFakeK8sClient()
 	nrs := createTestBceRDMANetResourceSet(nil)
 	ctx := context.Background()
 	newMac := "aa:bb:cc:dd:ee:ff"

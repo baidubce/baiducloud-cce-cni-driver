@@ -66,12 +66,19 @@ func (c *Client) BatchAddPrivateIPByHpc(args *EniBatchPrivateIPArgs) (*BatchAddP
 
 	log.WithField("args", args).Debug("The hpcEni batch privateIP args")
 	result := &BatchAddPrivateIPResult{}
-	err := bce.NewRequestBuilder(c).
+
+	builder := bce.NewRequestBuilder(c).
 		WithURL(getURLForHpcEni() + "/privateIp/batchAdd").
 		WithMethod(http.PUT).
 		WithBody(args).
-		WithResult(result).
-		Do()
+		WithResult(result)
+
+	// Add clientToken as query parameter if provided
+	if args.ClientToken != "" {
+		builder.WithQueryParam("clientToken", args.ClientToken)
+	}
+
+	err := builder.Do()
 
 	log.WithField("result", result).Debug("The hpcEni batch privateIP result")
 	return result, err

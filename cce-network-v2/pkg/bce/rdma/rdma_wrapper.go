@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/sirupsen/logrus"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,6 +56,8 @@ const (
 	defaultRdmaMaxIPsPerENI = 13
 )
 
+var validate = validator.New()
+
 // rdmaNetResourceSetWrapper is a wrapper of NetResourceSet, which is used to distinguish no-RDMA NetResourceSet
 type rdmaNetResourceSetWrapper struct {
 	*bceRDMANetResourceSet
@@ -67,11 +70,15 @@ type rdmaNetResourceSetWrapper struct {
 
 	// creatingENI tracks ENI being created
 	creatingENI *ccev2.ENI
+
+	// clientTokens stores client tokens for ERI creation and IP allocation idempotency
+	clientTokens *bceutils.ClientTokenSet
 }
 
 func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResourceSetWrapper {
 	node := &rdmaNetResourceSetWrapper{
 		bceRDMANetResourceSet: super,
+		clientTokens:          bceutils.NewClientTokenSet(),
 	}
 	node.instanceType = string(metadata.InstanceTypeExEHC)
 	_, err := node.ensureRdmaENI()
@@ -144,6 +151,9 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		if eni.Spec.InstanceID != effectiveInstanceID ||
 			eni.Labels[k8s.LabelInstanceID] != effectiveInstanceID {
 			eni.Spec.InstanceID = effectiveInstanceID
+			if eni.Labels == nil {
+				eni.Labels = make(map[string]string)
+			}
 			eni.Labels[k8s.LabelInstanceID] = effectiveInstanceID
 			isNeedUpdate = true
 		}
@@ -329,6 +339,11 @@ func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() (*bccapi.InstanceModel, err
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return nil, err
 	}
+	// Validate response to detect API degradation (RDMA/ERI needs eriQuota)
+	if err := validate.Struct(bccInfo); err != nil {
+		n.log.WithError(err).Error("BCC instance response validation failed (possible API degradation)")
+		return nil, fmt.Errorf("BCC instance response validation failed: %w", err)
+	}
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
 
 	n.limiterLock.Lock()
@@ -393,8 +408,23 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 			return nil, nil, fmt.Errorf("eni is nil")
 		}
 
+		// Generate client token key for IPv4 batch allocation (ERI doesn't support IPv6 yet)
+		tokenKey := bceutils.GenerateBatchAddIPClientTokenKey(eni.Spec.ID, ipv4ToAllocate, false)
+		clientToken := n.clientTokens.GetOrCreateClientToken(tokenKey)
+
+		scopedLog.WithFields(logrus.Fields{
+			"clientTokenKey": tokenKey,
+			"clientToken":    clientToken,
+			"count":          ipv4ToAllocate,
+		}).Debug("Using client token for BatchAddPrivateIP (ERI IPv4)")
+
 		// Batch allocation as primary approach
-		ips, err := iaasClient.BatchAddPrivateIP(ctx, eni.Spec.ID, []string{}, ipv4ToAllocate)
+		ips, err := iaasClient.BatchAddPrivateIPWithClientToken(ctx, eni.Spec.ID, []string{}, ipv4ToAllocate, clientToken)
+		if err == nil {
+			// Remove client token after successful allocation
+			n.clientTokens.RemoveClientToken(tokenKey)
+		}
+
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			// Check if this is a "no more IP" related error that might benefit from recovery
@@ -1112,17 +1142,6 @@ func (n *rdmaNetResourceSetWrapper) createERI(ctx context.Context, vpcID, instan
 		createArgs.EnterpriseSecurityGroupIds = []string{}
 	}
 
-	// 3. Call cloud API to create ERI
-	scopedLog := n.log.WithFields(logrus.Fields{
-		"eriName":        eriName,
-		"subnetID":       bestSubnet.Name,
-		"instanceID":     instanceID,
-		"vpcID":          vpcID,
-		"securityGroups": createArgs.SecurityGroupIds,
-	})
-
-	scopedLog.Info("Creating ERI via cloud API")
-
 	// Get effective instance ID based on instance type
 	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
 	if err != nil {
@@ -1131,6 +1150,29 @@ func (n *rdmaNetResourceSetWrapper) createERI(ctx context.Context, vpcID, instan
 
 	// Update createArgs with effective instance ID
 	createArgs.InstanceId = effectiveInstanceID
+
+	// Generate client token key for ERI creation
+	clientTokenKey := bceutils.GenerateENIClientTokenKey(
+		effectiveInstanceID,
+		bestSubnet.Name,
+		createArgs.SecurityGroupIds,
+		createArgs.EnterpriseSecurityGroupIds,
+	)
+	clientToken := n.clientTokens.GetOrCreateClientToken(clientTokenKey)
+	createArgs.ClientToken = clientToken
+
+	// 3. Call cloud API to create ERI
+	scopedLog := n.log.WithFields(logrus.Fields{
+		"eriName":        eriName,
+		"subnetID":       bestSubnet.Name,
+		"instanceID":     instanceID,
+		"vpcID":          vpcID,
+		"securityGroups": createArgs.SecurityGroupIds,
+		"clientTokenKey": clientTokenKey,
+		"clientToken":    clientToken,
+	})
+
+	scopedLog.Info("Creating ERI via cloud API")
 
 	var eriID string
 	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
@@ -1148,8 +1190,12 @@ func (n *rdmaNetResourceSetWrapper) createERI(ctx context.Context, vpcID, instan
 
 	if err != nil {
 		scopedLog.WithError(err).Error("Failed to create ERI")
+		// Keep clientToken in map for retry with same token
 		return "", fmt.Errorf("failed to create ERI: %w", err)
 	}
+
+	// Remove clientToken after successful creation
+	n.clientTokens.RemoveClientToken(clientTokenKey)
 
 	scopedLog.WithField("eriID", eriID).Info("ERI created successfully")
 	return eriID, nil

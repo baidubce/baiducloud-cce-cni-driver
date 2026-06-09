@@ -39,7 +39,6 @@ import (
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/informer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
@@ -91,6 +90,10 @@ type nodeStore struct {
 	// lastReleaseIPs keeps the IPs involved in the last release-handshake decision
 	// for correlation in logs.
 	lastReleaseIPs []string
+
+	// ipPoolReady 在满足最小 IP 要求时关闭，用于通知等待逻辑
+	ipPoolReady     chan struct{}
+	ipPoolReadyOnce sync.Once
 }
 
 // newNetResourceSetStore initializes a new store which reflects the NetResourceSet custom
@@ -103,6 +106,7 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 		allocationPoolSize: map[Family]int{},
 		conf:               conf,
 		mtuConfig:          mtuConfig,
+		ipPoolReady:        make(chan struct{}),
 	}
 	store.restoreFinished = make(chan struct{})
 	cceClient := k8s.CCEClient()
@@ -183,24 +187,10 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 		log.WithField(fieldName, networkResourceSetName).Info("Successfully synchronized NetResourceSet custom resource")
 	}
 
-	for {
-		minimumReached, required, numAvailable := store.hasMinimumIPsInPool()
-		logFields := logrus.Fields{
-			fieldName:   networkResourceSetName,
-			"required":  required,
-			"available": numAvailable,
-		}
-		if minimumReached {
-			log.WithFields(logFields).Info("All required IPs are available in CRD-backed allocation pool")
-			break
-		}
-
-		log.WithFields(logFields).WithField(
-			logfields.HelpMessage,
-			"Check if cce-network-operator pod is running and does not have any warnings or error messages.",
-		).Info("Waiting for IPs to become available in CRD-backed allocation pool")
-		time.Sleep(1 * time.Second)
-	}
+	store.notifyIPPoolReadyIfNeeded()
+	log.WithField(fieldName, networkResourceSetName).Info("Waiting for IPs to become available in CRD-backed allocation pool")
+	<-store.ipPoolReady
+	log.WithField(fieldName, networkResourceSetName).Info("All required IPs are available in CRD-backed allocation pool")
 
 	go func() {
 		// Initial upstream sync must wait for the allocated IPs
@@ -343,18 +333,35 @@ func (n *nodeStore) deleteLocalNodeResource() {
 	n.mutex.Unlock()
 }
 
+func (n *nodeStore) notifyIPPoolReadyIfNeeded() {
+	minimumReached, _, _ := n.hasMinimumIPsInPool()
+	if minimumReached {
+		log.Info("IP pool ready")
+		n.ipPoolReadyOnce.Do(func() {
+			log.Info("IP pool ready, close wait")
+			close(n.ipPoolReady)
+		})
+	} else {
+		log.Info("IP pool not ready yet")
+	}
+}
+
 // updateLocalNodeResource is called when the NetResourceSet resource representing
 // the local node has been added or updated. It updates the available IPs based
 // on the custom resource passed into the function.
 func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
+	if node == nil {
+		return
+	}
 	log.WithFields(logrus.Fields{
 		"node": node.Name,
+		"pool": len(node.Spec.IPAM.Pool),
 	}).Info("Updating local node resource")
 
 	// Log the entry of the release-handshake evaluation window
 	// so we can measure from here to the CR status update.
 	n.mutex.Lock()
-	if node != nil && node.Status.IPAM.ReleaseIPs != nil {
+	if node.Status.IPAM.ReleaseIPs != nil {
 		ips := make([]string, 0, len(node.Status.IPAM.ReleaseIPs))
 		for ip := range node.Status.IPAM.ReleaseIPs {
 			ips = append(ips, ip)
@@ -373,6 +380,10 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 	n.ownNode = node
 	restore := n.hasRestoreFinished
 	n.mutex.Unlock()
+
+	// 确保即使在 restore 阶段未完成时，也能够感知到 CR 中 IP 池已经满足条件
+	// 以便尽快唤醒等待逻辑，避免“Waiting for IPs...”无限阻塞
+	n.notifyIPPoolReadyIfNeeded()
 
 	if !restore {
 		log.Infof("skipping restore due to missing preallocated IPs")

@@ -9,6 +9,7 @@ type BatchAddPrivateIPResult struct {
 type EniBatchPrivateIPArgs struct {
 	EniID                 string `json:"eniId"`
 	PrivateIPAddressCount int    `json:"privateIpAddressCount,omitempty"`
+	ClientToken           string `json:"-"`
 }
 
 type EniBatchDeleteIPArgs struct {

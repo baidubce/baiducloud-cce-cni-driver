@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/containernetworking/cni/pkg/skel"
@@ -111,7 +112,11 @@ type rocePlugin struct {
 
 func newRocePlugin() *rocePlugin {
 	return &rocePlugin{
-		metaClient: metadata.NewClient(),
+		metaClient: metadata.NewClient(
+			defaults.APIRetryCount,
+			defaults.APIRetryMaxDelay,
+			defaults.APIRetryBaseInterval,
+		),
 	}
 }
 

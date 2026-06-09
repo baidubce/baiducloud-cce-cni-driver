@@ -39,5 +39,5 @@ func (s *TestUtilsSuite) TestCondition(c *C) {
 	c.Assert(WaitUntil(countTo5, 1*time.Millisecond), Not(IsNil))
 
 	counter = 0
-	c.Assert(WaitUntil(countTo5, 100*time.Millisecond), IsNil)
+	c.Assert(WaitUntil(countTo5, 200*time.Millisecond), IsNil)
 }

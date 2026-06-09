@@ -109,6 +109,7 @@ func registerBootstrapMetrics() {
 		Subsystem: metrics.SubsystemAgent,
 		Name:      "bootstrap_seconds",
 		Help:      "Duration of bootstrap sequence",
+		Buckets:   []float64{5, 20, 60, 120},
 	}, []string{metrics.LabelScope, metrics.LabelOutcome})
 
 	if err := metrics.Register(metricBootstrapTimes); err != nil {

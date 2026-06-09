@@ -77,18 +77,10 @@ func EnsureObjectToInformer(t *testing.T, informer cache.SharedIndexInformer, fu
 		resourceVersionMap.Add(obj.GetName(), obj.GetResourceVersion())
 	}
 
-outter:
-	for {
-		select {
-		case <-time.After(wait.ForeverTestTimeout):
-			return errors.New("timeout wait informer sync")
-		default:
-			if resourceVersionMap.IsAllObjectReceived() {
-				break outter
-			}
-			// Add a small sleep to avoid busy waiting
-			time.Sleep(10 * time.Millisecond)
-		}
+	if err := wait.PollImmediate(10*time.Millisecond, wait.ForeverTestTimeout, func() (bool, error) {
+		return resourceVersionMap.IsAllObjectReceived(), nil
+	}); err != nil {
+		return errors.New("timeout wait informer sync")
 	}
 	return nil
 }

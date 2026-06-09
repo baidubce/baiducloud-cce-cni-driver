@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
+
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
@@ -23,6 +25,8 @@ import (
 const (
 	subnetControllerName = "subnet-sync-manager"
 )
+
+var validate = validator.New()
 
 type VPCSubnetSyncher struct {
 	*subnetSyncher
@@ -272,6 +276,10 @@ func (ss *subnetSyncher) getSubnetWithCache(name string) (*vpc.Subnet, error) {
 		sbn, err := ss.bceclient.DescribeSubnet(context.TODO(), name)
 		if err != nil {
 			return nil, err
+		}
+		// Validate response to detect API degradation
+		if err := validate.Struct(sbn); err != nil {
+			return nil, fmt.Errorf("subnet response validation failed (possible API degradation): %w", err)
 		}
 		ss.SyncManager.AddItems([]vpc.Subnet{*sbn})
 		sbnCache = sbn

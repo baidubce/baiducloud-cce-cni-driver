@@ -9,6 +9,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
@@ -193,6 +194,46 @@ func TestIsAgentMgrENI_2(t *testing.T) {
 	}
 }
 
+func TestIsSecondaryIPMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		expected bool
+	}{
+		{
+			name:     "secondary mode returns true",
+			mode:     string(ccev2.ENIUseModeSecondaryIP),
+			expected: true,
+		},
+		{
+			name:     "primary with secondary mode returns true",
+			mode:     string(ccev2.ENIUseModePrimaryWithSecondaryIP),
+			expected: true,
+		},
+		{
+			name:     "primary mode returns false",
+			mode:     string(ccev2.ENIUseModePrimaryIP),
+			expected: false,
+		},
+		{
+			name:     "empty mode returns false",
+			mode:     "",
+			expected: false,
+		},
+		{
+			name:     "unknown mode returns false",
+			mode:     "CustomMode",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, IsSecondaryIPMode(tt.mode))
+		})
+	}
+}
+
 // mockMetaClient is a mock implementation of metadata client for testing
 type mockMetaClient struct {
 	instanceID string
@@ -205,7 +246,9 @@ func (m *mockMetaClient) GetInstanceID() (string, error) {
 
 // Implement other required methods from metadata.Interface
 func (m *mockMetaClient) GetInstanceName() (string, error)                    { return "", nil }
+func (m *mockMetaClient) GetResourceID() (string, error)                      { return "", nil }
 func (m *mockMetaClient) GetInstanceType() (metadata.InstanceType, error)     { return "", nil }
+func (m *mockMetaClient) GetInstanceSpecs() (string, error)                   { return "", nil }
 func (m *mockMetaClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) { return "", nil }
 func (m *mockMetaClient) GetLocalIPv4() (string, error)                       { return "", nil }
 func (m *mockMetaClient) GetAvailabilityZone() (string, error)                { return "", nil }
@@ -215,6 +258,10 @@ func (m *mockMetaClient) GetSourceType() (string, error)                      { 
 func (m *mockMetaClient) GetSubnetID() (string, error)                        { return "", nil }
 func (m *mockMetaClient) GetLinkGateway(string, string) (string, error)       { return "", nil }
 func (m *mockMetaClient) GetLinkMask(string, string) (string, error)          { return "", nil }
+func (m *mockMetaClient) GetLinkPrimaryIP(string) (string, error)             { return "", nil }
+func (m *mockMetaClient) GetLinkFixedIPs(string) ([]string, error)            { return nil, nil }
+func (m *mockMetaClient) GetLinkSecondaryIPs(string) ([]string, error)        { return nil, nil }
+func (m *mockMetaClient) GetLinkMTU(string) (int, error)                      { return 0, nil }
 func (m *mockMetaClient) GetVifFeatures(macAddress string) (string, error)    { return "", nil }
 func (m *mockMetaClient) GetFeatureList() (*metadata.FeatureList, error)      { return nil, nil }
 func (m *mockMetaClient) ListMacs() ([]string, error)                         { return nil, nil }
@@ -458,7 +505,9 @@ func (m *enhancedMockMetaClient) GetVifFeatures(macAddress string) (string, erro
 
 // Implement other required methods from metadata.Interface
 func (m *enhancedMockMetaClient) GetInstanceName() (string, error)                    { return "", nil }
+func (m *enhancedMockMetaClient) GetResourceID() (string, error)                      { return "", nil }
 func (m *enhancedMockMetaClient) GetInstanceType() (metadata.InstanceType, error)     { return "", nil }
+func (m *enhancedMockMetaClient) GetInstanceSpecs() (string, error)                   { return "", nil }
 func (m *enhancedMockMetaClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) { return "", nil }
 func (m *enhancedMockMetaClient) GetLocalIPv4() (string, error)                       { return "", nil }
 func (m *enhancedMockMetaClient) GetAvailabilityZone() (string, error)                { return "", nil }
@@ -473,15 +522,27 @@ func (m *enhancedMockMetaClient) GetLinkGateway(macAddress string, ip string) (s
 func (m *enhancedMockMetaClient) GetLinkMask(macAddress string, ip string) (string, error) {
 	return "", nil
 }
+func (m *enhancedMockMetaClient) GetLinkPrimaryIP(macAddress string) (string, error) {
+	return "", nil
+}
+func (m *enhancedMockMetaClient) GetLinkFixedIPs(macAddress string) ([]string, error) {
+	return nil, nil
+}
+func (m *enhancedMockMetaClient) GetLinkSecondaryIPs(macAddress string) ([]string, error) {
+	return nil, nil
+}
+func (m *enhancedMockMetaClient) GetLinkMTU(macAddress string) (int, error) {
+	return 0, nil
+}
 
 func TestGetRdmaIFsInfo(t *testing.T) {
 	// Save original values
-	originalMetaClient := defaultMetaClient
+	originalMetaClient := metadata.DefaultMetaClient
 	originalEnableERIManagement := option.Config.EnableERIManagement
 
 	// Restore after test
 	defer func() {
-		defaultMetaClient = originalMetaClient
+		metadata.DefaultMetaClient = originalMetaClient
 		option.Config.EnableERIManagement = originalEnableERIManagement
 	}()
 
@@ -630,7 +691,7 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up mock client
-			defaultMetaClient = tt.mockClient
+			metadata.DefaultMetaClient = tt.mockClient
 			option.Config.EnableERIManagement = tt.enableERIManagement
 
 			// Call the function
@@ -661,12 +722,12 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 
 func TestGetRdmaIFsInfoAll(t *testing.T) {
 	// Save original values
-	originalMetaClient := defaultMetaClient
+	originalMetaClient := metadata.DefaultMetaClient
 	originalEnableERIManagement := option.Config.EnableERIManagement
 
 	// Restore after test
 	defer func() {
-		defaultMetaClient = originalMetaClient
+		metadata.DefaultMetaClient = originalMetaClient
 		option.Config.EnableERIManagement = originalEnableERIManagement
 	}()
 
@@ -815,7 +876,7 @@ func TestGetRdmaIFsInfoAll(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up mock client
-			defaultMetaClient = tt.mockClient
+			metadata.DefaultMetaClient = tt.mockClient
 			option.Config.EnableERIManagement = tt.enableERIManagement
 
 			// Call the function
@@ -855,7 +916,11 @@ func TestGetDefaultMetaClient(t *testing.T) {
 			name: "TestGetDefaultMetaClient_GivenDefaultClient_WhenGettingDefaultMetaClient_ThenReturnDefaultClient",
 			setupFunc: func() metadata.Interface {
 				// Return the original default client
-				return metadata.NewClient()
+				return metadata.NewClient(
+					defaults.APIRetryCount,
+					defaults.APIRetryMaxDelay,
+					defaults.APIRetryBaseInterval,
+				)
 			},
 			description: "When no custom client is set, should return the default metadata client",
 		},
@@ -882,7 +947,7 @@ func TestGetDefaultMetaClient(t *testing.T) {
 	}
 
 	// Save original client
-	originalClient := GetDefaultMetaClient()
+	originalClient := metadata.DefaultMetaClient
 	defer func() {
 		// Restore original client after all tests
 		SetDefaultMetaClient(originalClient)
@@ -895,7 +960,7 @@ func TestGetDefaultMetaClient(t *testing.T) {
 			SetDefaultMetaClient(expectedClient)
 
 			// Execute: Get the default client
-			result := GetDefaultMetaClient()
+			result := metadata.DefaultMetaClient
 
 			// Verify: Check if the returned client matches the expected client
 			assert.Equal(t, expectedClient, result, tt.description)
@@ -921,7 +986,7 @@ func TestSetDefaultMetaClient(t *testing.T) {
 			},
 			verifyFunc: func(t *testing.T, client metadata.Interface) {
 				// Verify the client is set correctly by calling GetDefaultMetaClient
-				result := GetDefaultMetaClient()
+				result := metadata.DefaultMetaClient
 				assert.Equal(t, client, result, "Client should be set correctly")
 
 				// Verify the client works by calling GetInstanceID
@@ -942,7 +1007,7 @@ func TestSetDefaultMetaClient(t *testing.T) {
 			},
 			verifyFunc: func(t *testing.T, client metadata.Interface) {
 				// Verify nil client is set
-				result := GetDefaultMetaClient()
+				result := metadata.DefaultMetaClient
 				assert.Nil(t, result, "Client should be nil")
 			},
 			description: "When setting nil client, should be able to retrieve nil",
@@ -965,14 +1030,14 @@ func TestSetDefaultMetaClient(t *testing.T) {
 				SetDefaultMetaClient(firstClient)
 
 				// Verify first client is set
-				result := GetDefaultMetaClient()
+				result := metadata.DefaultMetaClient
 				assert.Equal(t, firstClient, result, "First client should be set")
 
 				// Now set the second client (from clientFunc)
 				SetDefaultMetaClient(client)
 
 				// Verify second client is set (latest one)
-				result = GetDefaultMetaClient()
+				result = metadata.DefaultMetaClient
 				assert.Equal(t, client, result, "Latest client should be set")
 				assert.NotEqual(t, firstClient, result, "Should not return first client")
 			},
@@ -991,7 +1056,7 @@ func TestSetDefaultMetaClient(t *testing.T) {
 			},
 			verifyFunc: func(t *testing.T, client metadata.Interface) {
 				// Verify the client is set correctly
-				result := GetDefaultMetaClient()
+				result := metadata.DefaultMetaClient
 				assert.Equal(t, client, result, "Enhanced client should be set correctly")
 
 				// Verify the client works by calling methods
@@ -1016,7 +1081,7 @@ func TestSetDefaultMetaClient(t *testing.T) {
 	}
 
 	// Save original client
-	originalClient := GetDefaultMetaClient()
+	originalClient := metadata.DefaultMetaClient
 	defer func() {
 		// Restore original client after all tests
 		SetDefaultMetaClient(originalClient)
@@ -1039,7 +1104,7 @@ func TestSetDefaultMetaClient(t *testing.T) {
 // TestGetDefaultMetaClient_Concurrency tests concurrent access to GetDefaultMetaClient
 func TestGetDefaultMetaClient_GivenConcurrentAccess_WhenGettingDefaultMetaClient_ThenReturnConsistentClient(t *testing.T) {
 	// Save original client
-	originalClient := GetDefaultMetaClient()
+	originalClient := metadata.DefaultMetaClient
 	defer func() {
 		SetDefaultMetaClient(originalClient)
 	}()
@@ -1057,7 +1122,7 @@ func TestGetDefaultMetaClient_GivenConcurrentAccess_WhenGettingDefaultMetaClient
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
-			client := GetDefaultMetaClient()
+			client := metadata.DefaultMetaClient
 			results <- client
 		}()
 	}
@@ -1072,7 +1137,7 @@ func TestGetDefaultMetaClient_GivenConcurrentAccess_WhenGettingDefaultMetaClient
 // TestSetDefaultMetaClient_Integration tests integration with GetRdmaIFsInfo
 func TestSetDefaultMetaClient_GivenMockClientWithRdmaInterface_WhenCallingGetRdmaIFsInfo_ThenReturnRdmaInfo(t *testing.T) {
 	// Save original client and config
-	originalClient := GetDefaultMetaClient()
+	originalClient := metadata.DefaultMetaClient
 	originalEnableERIManagement := option.Config.EnableERIManagement
 	defer func() {
 		SetDefaultMetaClient(originalClient)

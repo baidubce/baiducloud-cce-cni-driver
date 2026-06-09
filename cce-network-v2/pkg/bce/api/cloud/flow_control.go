@@ -576,6 +576,29 @@ func (fc *flowControlClient) BatchAddPrivateIP(ctx context.Context, privateIPs [
 	return ret, err
 }
 
+// BatchAddPrivateIPWithClientToken implements Interface
+func (fc *flowControlClient) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+	var (
+		req rate.LimitedRequest
+		err error
+	)
+	if option.Config.EnableAPIRateLimit {
+		req, err = fc.limiter.Wait(ctx, BatchAddPrivateIP)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				req.Error(err)
+			} else {
+				req.Done()
+			}
+		}()
+	}
+	ret, err := fc.client.BatchAddPrivateIPWithClientToken(ctx, privateIPs, count, eniID, isIpv6, clientToken)
+	return ret, err
+}
+
 // BatchAddPrivateIpCrossSubnet implements Interface
 func (fc *flowControlClient) BatchAddPrivateIpCrossSubnet(ctx context.Context, eniID string, subnetID string, privateIPs []string, count int, isIpv6 bool) ([]string, error) {
 	var (

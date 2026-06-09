@@ -19,6 +19,7 @@ import (
 	"context"
 	"testing"
 
+	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/hpas"
 	"github.com/baidubce/bce-sdk-go/auth"
 	"github.com/baidubce/bce-sdk-go/bce"
@@ -26,9 +27,16 @@ import (
 	"github.com/baidubce/bce-sdk-go/services/bcc"
 	"github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/stretchr/testify/assert"
-
-	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 )
+
+func getTestENIClient(t *testing.T, client *Client) *eniExt.Client {
+	t.Helper()
+	eniClient, ok := client.eniClient.(*eniExt.Client)
+	if !ok {
+		t.Fatalf("unexpected ENI client type %T", client.eniClient)
+	}
+	return eniClient
+}
 
 // TestClient_HPASWrapper tests the Client.HPASWrapper method
 func TestClient_HPASWrapper(t *testing.T) {
@@ -122,7 +130,7 @@ func TestClient_HPASWrapper(t *testing.T) {
 
 			// Store original signers for comparison
 			originalBCCSigner := client.bccClient.Signer
-			originalENISigner := client.eniClient.Signer
+			originalENISigner := getTestENIClient(t, client).Signer
 
 			// Call HPASWrapper
 			err := client.HPASWrapper(context.Background())
@@ -137,11 +145,12 @@ func TestClient_HPASWrapper(t *testing.T) {
 
 			// Validate that signers have been wrapped
 			ass.NotNil(client.bccClient.Signer, "bccClient.Signer should not be nil after HPASWrapper")
-			ass.NotNil(client.eniClient.Signer, "eniClient.Signer should not be nil after HPASWrapper")
+			eniClient := getTestENIClient(t, client)
+			ass.NotNil(eniClient.Signer, "eniClient.Signer should not be nil after HPASWrapper")
 
 			// Validate that the signers are now HPASWrapper instances
 			ass.IsType(&hpas.HPASWrapper{}, client.bccClient.Signer, "bccClient.Signer should be wrapped in HPASWrapper")
-			ass.IsType(&hpas.HPASWrapper{}, client.eniClient.Signer, "eniClient.Signer should be wrapped in HPASWrapper")
+			ass.IsType(&hpas.HPASWrapper{}, eniClient.Signer, "eniClient.Signer should be wrapped in HPASWrapper")
 
 			// Validate that the original signers are preserved inside the wrapper
 			if originalBCCSigner != nil {
@@ -150,7 +159,7 @@ func TestClient_HPASWrapper(t *testing.T) {
 			}
 
 			if originalENISigner != nil {
-				eniWrapper := client.eniClient.Signer.(*hpas.HPASWrapper)
+				eniWrapper := eniClient.Signer.(*hpas.HPASWrapper)
 				ass.Equal(originalENISigner, eniWrapper.Signer, "original ENI signer should be preserved in wrapper")
 			}
 		})
@@ -202,9 +211,10 @@ func TestClient_HPASWrapper_Context(t *testing.T) {
 
 	// Validate that signers are still wrapped despite canceled context
 	ass.NotNil(client.bccClient.Signer, "bccClient.Signer should not be nil")
-	ass.NotNil(client.eniClient.Signer, "eniClient.Signer should not be nil")
+	eniClient := getTestENIClient(t, client)
+	ass.NotNil(eniClient.Signer, "eniClient.Signer should not be nil")
 	ass.IsType(&hpas.HPASWrapper{}, client.bccClient.Signer, "bccClient.Signer should be wrapped")
-	ass.IsType(&hpas.HPASWrapper{}, client.eniClient.Signer, "eniClient.Signer should be wrapped")
+	ass.IsType(&hpas.HPASWrapper{}, eniClient.Signer, "eniClient.Signer should be wrapped")
 }
 
 // TestClient_HPASWrapper_MultipleCalls tests that multiple calls to HPASWrapper work correctly
@@ -238,7 +248,7 @@ func TestClient_HPASWrapper_MultipleCalls(t *testing.T) {
 
 	// Get the signers after first call
 	firstBCCSigner := client.bccClient.Signer
-	firstENISigner := client.eniClient.Signer
+	firstENISigner := getTestENIClient(t, client).Signer
 
 	// Second call
 	err2 := client.HPASWrapper(ctx)
@@ -246,11 +256,12 @@ func TestClient_HPASWrapper_MultipleCalls(t *testing.T) {
 
 	// Validate that signers are still wrapped
 	ass.NotNil(client.bccClient.Signer, "bccClient.Signer should not be nil after second call")
-	ass.NotNil(client.eniClient.Signer, "eniClient.Signer should not be nil after second call")
+	eniClient := getTestENIClient(t, client)
+	ass.NotNil(eniClient.Signer, "eniClient.Signer should not be nil after second call")
 	ass.IsType(&hpas.HPASWrapper{}, client.bccClient.Signer, "bccClient.Signer should be wrapped after second call")
-	ass.IsType(&hpas.HPASWrapper{}, client.eniClient.Signer, "eniClient.Signer should be wrapped after second call")
+	ass.IsType(&hpas.HPASWrapper{}, eniClient.Signer, "eniClient.Signer should be wrapped after second call")
 
 	// Validate that the signers have been re-wrapped (new instances)
 	ass.NotEqual(firstBCCSigner, client.bccClient.Signer, "BCC signer should be re-wrapped on second call")
-	ass.NotEqual(firstENISigner, client.eniClient.Signer, "ENI signer should be re-wrapped on second call")
+	ass.NotEqual(firstENISigner, eniClient.Signer, "ENI signer should be re-wrapped on second call")
 }

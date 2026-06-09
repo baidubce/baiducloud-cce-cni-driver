@@ -1,14 +1,26 @@
 # 2.0
 v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历史如下：
 
-### 2.13 (2024/08/01)
+### 2.13 (2025/08/01)
 新特性功能：
 1. 支持 eri 全生命周期管理
 2. 支持使用 rdma 的容器通过申请的资源来决定选择使用 HPC 或 ERI 子设备
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.6[暂未发布]
+#### 2.13.7[暂未发布]
+1. [Bug] 修复主网卡辅助IP批释放超过10个上限，导致释放失败的问题。
+2. [Optimize] 增加 metaapi 与 vpcapi sdk层普遍的错误重试逻辑，优化了代码逻辑，agent 侧整体使用统一的全局 metaapi 客户端
+3. [Optimize] 增加对特定可能降级接口的必要依赖字段的校验功能，例如 bcc 实例信息查询接口，子网信息查询接口等
+4. [Optimize] 增加特定接口的幂等性校验功能来增加组件容错能力，例如创建 ENI 接口，批量增加 IP 接口等
+5. [Optimize] 增加对实例信息查询接口的容错能力，主动避免已删除实例的重复查询请求
+6. [Bug] 机器重启导致eni的index值变更后，agent 不更新 eni 中 status 字段的 index 值
+7. [Feature] BCC 支持主网卡辅助 IP
+8. [Feature] 支持配置指定套餐使用主网卡辅助 IP
+9. [Feature] Agent 未就绪时增加污点
+10. [Optimize] 优化扩容节点就绪性能
+
+#### 2.13.6[2025.12.25]
 1. [Bug] 修复 meta api 异常时 Pod 缺少部分 RDMA 网卡的问题
 2. [Optimize] 优化资源同步逻辑，降低对 iaas 侧 ENI 和 Subnet 资源相关接口的 QPS
 3. [Feature] cce-network-agent 组件提供 ip 分配与回收耗时 Prometheus 指标
@@ -20,6 +32,7 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 9. [Optimize] cce-network-agent 组件优化 eni sync 时日志量过大问题，同时解决组件的 eni k8s 资源同步周期过小
 10. [Feature] 兼容内部上云镜像，修改 gc 逻辑实现，新增由 owner 加 IP 释放IP的方法
 11. [Bug] 修复由于命令行执行卡住导致 eri 状态异常的情况
+12. [Bug] 修复节点资源扩容过程中子网 IP 不足时导致节点有 ccesubnetUnavailable 状态，后续子网 IP 充足时节点不再有扩容需求导致状态不恢复的情况
 
 #### 2.13.5[20251106]
 1. [Bug] 修复在 rdma 网卡子设备配置错误时 POD 依然正常就绪导致缺卡的问题

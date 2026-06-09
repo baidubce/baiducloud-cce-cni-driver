@@ -17,14 +17,26 @@ package vpceni
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-playground/validator/v10"
+	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -32,10 +44,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
-	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/tools/cache"
 )
 
 const (
@@ -43,6 +51,8 @@ const (
 	maxRetryAttempts = 3
 	baseRetryDelay   = 100 * time.Millisecond
 )
+
+var validate = validator.New()
 
 // retryOperation executes an operation with exponential backoff retry
 func retryOperation(operation func() error, logger *logrus.Entry, operationName string) error {
@@ -73,9 +83,17 @@ type bccNetworkResourceSet struct {
 
 	// usePrimaryENIWithSecondaryMode primary eni with secondary IP mode only use by ebc instance
 	usePrimaryENIWithSecondaryMode bool
+
+	// instanceDeleted marks if the BCC instance has been deleted (NoSuchObject error)
+	instanceDeleted      bool
+	primaryENISubnetID   string
+	haveCreatePrimaryENI bool
 }
 
 func newBCCNetworkResourceSet(super *bceNetworkResourceSet) *bccNetworkResourceSet {
+	if super == nil {
+		super = &bceNetworkResourceSet{}
+	}
 	node := &bccNetworkResourceSet{
 		bceNetworkResourceSet: super,
 	}
@@ -83,10 +101,25 @@ func newBCCNetworkResourceSet(super *bceNetworkResourceSet) *bccNetworkResourceS
 	return node
 }
 
+// 当 ENI.UseMode 是 ccev2.ENIUseModePrimaryWithSecondaryIP，不关注 eniQuota，直接使用主网卡辅助 IP 模式
+func (n *bccNetworkResourceSet) isForceUsePrimaryENIWithSecondaryMode() bool {
+	if n != nil && n.k8sObj != nil && n.k8sObj.Spec.ENI != nil &&
+		n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryWithSecondaryIP) {
+		n.log.Info("force use primary eni with secondary ip mode")
+		return true
+	}
+	return false
+}
+
 // refreshBCCInfo refresh bcc instance info
 // caller should ensure be locked
 func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) {
 	n.bccLock.RLock()
+	// Check if instance is marked as deleted
+	if n.instanceDeleted {
+		n.bccLock.RUnlock()
+		return nil, fmt.Errorf("instance %s has been deleted", n.instanceID)
+	}
 	if n.bccInfo != nil {
 		n.bccLock.RUnlock()
 		return n.bccInfo, nil
@@ -95,12 +128,28 @@ func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) 
 
 	bccInfo, err := n.bceclient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
 	if err != nil {
+		// Check if instance not found (deleted by user)
+		if cloud.IsErrorReasonNoSuchObject(err) {
+			n.log.WithError(err).Warnf("BCC instance %s not found (deleted), marking as deleted", n.instanceID)
+			n.bccLock.Lock()
+			n.instanceDeleted = true
+			n.bccLock.Unlock()
+			return nil, fmt.Errorf("instance %s not found (deleted)", n.instanceID)
+		}
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
-		return n.bccInfo, err
+		return nil, err
 	}
-	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
+	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).WithField("node", n.k8sObj.Name).Infof("Get bcc instance detail response: %+v", bccInfo)
+	// Validate response to detect API degradation (BCC/ENI needs eniQuota and nicInfo)
+	// Skip validation for HPAS instances as they don't return NicInfo
+	if n.instanceType != string(metadata.InstanceTypeExHPAS) {
+		if err := validate.Struct(bccInfo); err != nil {
+			n.log.WithError(err).Error("BCC instance response validation failed (possible API degradation)")
+			return nil, fmt.Errorf("BCC instance response validation failed: %w", err)
+		}
+	}
 
-	if bccInfo.EniQuota == 0 {
+	if bccInfo.EniQuota == 0 || n.isForceUsePrimaryENIWithSecondaryMode() {
 		n.usePrimaryENIWithSecondaryMode = true
 	}
 
@@ -186,7 +235,142 @@ func (n *bccNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 		scopedLog.Errorf("failed to refresh ebc info: %v", err)
 		return nil, fmt.Errorf("failed to refresh ebc info")
 	}
-	return n.__prepareIPAllocation(scopedLog, true)
+	a, err = n.__prepareIPAllocation(scopedLog, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if !n.usePrimaryENIWithSecondaryMode {
+		return a, nil
+	}
+
+	// 主网卡辅助 ip 才需要执行创建主网卡逻辑，如果已经创建过主网卡，则不需要再创建
+	if n.haveCreatePrimaryENI {
+		return a, nil
+	}
+
+	if err = n.refreshPrimarySubnet(); err != nil {
+		return a, err
+	}
+
+	if a.AvailableInterfaces == 0 && a.InterfaceID == "" {
+		err := foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name,
+			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+				_, ok := iface.Resource.(*eniResource)
+				if !ok {
+					return nil
+				}
+				n.haveCreatePrimaryENI = true
+				return nil
+			})
+		if err != nil {
+			return a, err
+		}
+		if !n.haveCreatePrimaryENI {
+			a.AvailableInterfaces = 1
+		}
+	}
+	return a, err
+}
+
+func (n *bccNetworkResourceSet) refreshPrimarySubnet() error {
+	if !n.usePrimaryENIWithSecondaryMode {
+		return nil
+	}
+	bccInfo, err := n.refreshBCCInfo()
+	if err != nil {
+		return err
+	}
+	n.primaryENISubnetID = bccInfo.NicInfo.SubnetId
+	subnets := n.FilterAvailableSubnetIds([]string{n.primaryENISubnetID}, n.GetMinimumAllocatableIPv4())
+	n.availableSubnets = subnets
+	return nil
+}
+
+func (n *bccNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet) error {
+	bccInfo, err := n.refreshBCCInfo()
+	if err != nil {
+		return err
+	}
+	if err = n.refreshPrimarySubnet(); err != nil {
+		return err
+	}
+
+	effectiveInstanceID, err := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return err
+	}
+
+	zone := api.TransAvailableZoneToZoneName(operatorOption.Config.BCECloudContry, operatorOption.Config.BCECloudRegion, resource.Spec.ENI.AvailabilityZone)
+	eni, err := n.manager.enilister.Get(bccInfo.NicInfo.EniId)
+	if kerrors.IsNotFound(err) {
+		eni = &ccev2.ENI{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					k8s.LabelInstanceID: effectiveInstanceID,
+					k8s.LabelNodeName:   resource.Name,
+					k8s.LabelENIType:    resource.Spec.ENI.InstanceType,
+					k8s.LabelENIUseMode: string(ccev2.ENIUseModePrimaryWithSecondaryIP),
+				},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: ccev2.SchemeGroupVersion.String(),
+					Kind:       ccev2.NRSKindDefinition,
+					Name:       resource.Name,
+					UID:        resource.UID,
+				}},
+				Name: bccInfo.NicInfo.EniId,
+			},
+			Spec: ccev2.ENISpec{
+				NodeName: resource.Name,
+				UseMode:  ccev2.ENIUseModePrimaryWithSecondaryIP,
+				ENI: models.ENI{
+					ID:               bccInfo.NicInfo.EniId,
+					Name:             bccInfo.NicInfo.Name,
+					ZoneName:         zone,
+					InstanceID:       n.instanceID,
+					VpcID:            bccInfo.NicInfo.VpcId,
+					SubnetID:         bccInfo.NicInfo.SubnetId,
+					SecurityGroupIds: bccInfo.NicInfo.SecurityGroups,
+					MacAddress:       bccInfo.NicInfo.MacAddress,
+				},
+				RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
+				InstallSourceBasedRouting: false,
+				Type:                      ccev2.ENIType(resource.Spec.ENI.InstanceType),
+			},
+		}
+
+		for _, nicip := range bccInfo.NicInfo.Ips {
+			eni.Spec.ENI.PrivateIPSet = append(eni.Spec.ENI.PrivateIPSet, &models.PrivateIP{
+				SubnetID:         bccInfo.NicInfo.SubnetId,
+				Primary:          nicip.Primary == "true",
+				PrivateIPAddress: nicip.PrivateIp,
+				PublicIPAddress:  nicip.Eip,
+			})
+		}
+
+		eni.Finalizers = append(eni.Finalizers, bcesync.FinalizerENI)
+
+		if eni, err = k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{}); err != nil {
+			scopedLog.Errorf("failed to create primary ENI %s with secondary IP: %v", eni.Name, err)
+			return fmt.Errorf("failed to create primary ENI %s on k8s", eni.Name)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to get primary ENI %s on k8s: %v", bccInfo.NicInfo.EniId, err)
+	}
+
+	if err = n.tryBorrowIPs(eni); err != nil {
+		return err
+	}
+
+	if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		if _, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("failed to update primary ENI status: %w", err)
+		}
+		scopedLog.Infof("update primary ENI status to inuse successed")
+	}
+	n.haveCreatePrimaryENI = true
+	return nil
 }
 
 // __prepareIPAllocation 函数用于准备IP分配，返回一个ipam.AllocationAction类型的指针和错误信息。
@@ -319,10 +503,64 @@ func (n *bccNetworkResourceSet) __prepareIPAllocation(scopedLog *logrus.Entry, c
 // to perform the actual allocation.
 func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
 	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
+	if n.usePrimaryENIWithSecondaryMode {
+		return n.allocateIPsPrimaryENIMode(ctx, scopedLog, allocation, ipv4ToAllocate, ipv6ToAllocate)
+	}
+	return n.allocateIPsSecondaryENIMode(ctx, scopedLog, allocation, ipv4ToAllocate, ipv6ToAllocate)
+}
+
+func (n *bccNetworkResourceSet) allocateIPsPrimaryENIMode(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
+	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
+	if ipv4ToAllocate > 0 {
+		resp, apiErr := n.bceclient.BCCBatchAddIP(ctx, &bccapi.BatchAddIpArgs{
+			InstanceId:                     n.instanceID,
+			SecondaryPrivateIpAddressCount: ipv4ToAllocate,
+			AllocateMultiIpv6Addr:          ipv6ToAllocate > 0,
+		})
+		err = n.manager.HandlerVPCError(scopedLog, apiErr, string(allocation.PoolID))
+		if err != nil {
+			return nil, nil, fmt.Errorf("allocate ip to eni %s failed: %v", allocation.InterfaceID, err)
+		}
+		scopedLog.WithField("ips", resp.PrivateIps).Debug("allocate ip to eni success")
+		for _, ipstring := range resp.PrivateIps {
+			ip := net.ParseIP(ipstring)
+			if ip.To4() == nil {
+				ipv6PrivateIPSet = append(ipv6PrivateIPSet, &models.PrivateIP{
+					PrivateIPAddress: ipstring,
+					SubnetID:         string(allocation.PoolID),
+				})
+			} else {
+				ipv4PrivateIPSet = append(ipv4PrivateIPSet, &models.PrivateIP{
+					PrivateIPAddress: ipstring,
+					SubnetID:         string(allocation.PoolID),
+				})
+			}
+		}
+	}
+	return
+}
+
+func (n *bccNetworkResourceSet) allocateIPsSecondaryENIMode(ctx context.Context, scopedLog *logrus.Entry, allocation *ipam.AllocationAction, ipv4ToAllocate, ipv6ToAllocate int) (
+	ipv4PrivateIPSet, ipv6PrivateIPSet []*models.PrivateIP, err error) {
 	var ips []string
 	if ipv4ToAllocate > 0 {
+		// Generate client token key for IPv4 batch allocation
+		tokenKey := bceutils.GenerateBatchAddIPClientTokenKey(allocation.InterfaceID, ipv4ToAllocate, false)
+		clientToken := n.clientTokens.GetOrCreateClientToken(tokenKey)
+
+		scopedLog.WithFields(logrus.Fields{
+			"clientTokenKey": tokenKey,
+			"clientToken":    clientToken,
+			"count":          ipv4ToAllocate,
+		}).Debug("Using client token for BatchAddPrivateIP (IPv4)")
+
 		// allocate ip
-		ips, err = n.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv4ToAllocate, allocation.InterfaceID, false)
+		ips, err = n.bceclient.BatchAddPrivateIPWithClientToken(ctx, []string{}, ipv4ToAllocate, allocation.InterfaceID, false, clientToken)
+		if err == nil {
+			// Remove client token after successful allocation
+			n.clientTokens.RemoveClientToken(tokenKey)
+		}
+
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			return nil, nil, fmt.Errorf("allocate ip to eni %s failed: %v", allocation.InterfaceID, err)
@@ -339,8 +577,23 @@ func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 
 	// allocate ipv6
 	if ipv6ToAllocate > 0 {
+		// Generate client token key for IPv6 batch allocation
+		tokenKey := bceutils.GenerateBatchAddIPClientTokenKey(allocation.InterfaceID, ipv6ToAllocate, true)
+		clientToken := n.clientTokens.GetOrCreateClientToken(tokenKey)
+
+		scopedLog.WithFields(logrus.Fields{
+			"clientTokenKey": tokenKey,
+			"clientToken":    clientToken,
+			"count":          ipv6ToAllocate,
+		}).Debug("Using client token for BatchAddPrivateIP (IPv6)")
+
 		// allocate ipv6
-		ips, err = n.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv6ToAllocate, allocation.InterfaceID, true)
+		ips, err = n.bceclient.BatchAddPrivateIPWithClientToken(ctx, []string{}, ipv6ToAllocate, allocation.InterfaceID, true, clientToken)
+		if err == nil {
+			// Remove client token after successful allocation
+			n.clientTokens.RemoveClientToken(tokenKey)
+		}
+
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			err = fmt.Errorf("allocate ipv6 to eni %s failed: %v", allocation.InterfaceID, err)
@@ -360,6 +613,10 @@ func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 // ReleaseIPs is called after invoking PrepareIPRelease and needs to
 // perform the release of IPs.
 func (n *bccNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
+	if n.usePrimaryENIWithSecondaryMode {
+		return n.releaseIPsPrimaryENIMode(ctx, release, ipv4ToRelease, ipv6ToRelease)
+	}
+
 	if len(ipv4ToRelease) > 0 {
 		err := n.bceclient.BatchDeletePrivateIP(ctx, ipv4ToRelease, release.InterfaceID, false)
 		if err != nil {
@@ -375,8 +632,33 @@ func (n *bccNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.Re
 	return nil
 }
 
+// releaseIPsPrimaryENIMode releases IPs via the instance-level API when the node
+// runs in primary ENI with secondary IP mode.
+func (n *bccNetworkResourceSet) releaseIPsPrimaryENIMode(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
+	if len(ipv4ToRelease) > 0 {
+		if err := n.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
+			InstanceId: n.instanceID,
+			PrivateIps: ipv4ToRelease,
+		}); err != nil {
+			return fmt.Errorf("release ipv4 %v from eni %s failed: %v", ipv4ToRelease, release.InterfaceID, err)
+		}
+	}
+	if len(ipv6ToRelease) > 0 {
+		if err := n.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
+			InstanceId: n.instanceID,
+			PrivateIps: ipv6ToRelease,
+		}); err != nil {
+			return fmt.Errorf("release ipv6 %v from eni %s failed: %v", ipv6ToRelease, release.InterfaceID, err)
+		}
+	}
+	return nil
+}
+
 // AllocateIPCrossSubnet implements realNodeInf
 func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
+	if n.usePrimaryENIWithSecondaryMode {
+		return nil, "", fmt.Errorf("primary interface with secondary IP mode not support allocate ip cross subnet")
+	}
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return nil, "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
@@ -481,6 +763,9 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 
 // ReuseIPs implements realNodeInf
 func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
+	if n.usePrimaryENIWithSecondaryMode {
+		return "", fmt.Errorf("primary interface with secondary IP mode not support reuse ip")
+	}
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}

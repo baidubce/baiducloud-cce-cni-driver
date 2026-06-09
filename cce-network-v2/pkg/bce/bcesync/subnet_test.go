@@ -431,6 +431,10 @@ func (m *mockBCEClient4Subnet) BatchAddPrivateIP(ctx context.Context, privateIPs
 	return nil, nil
 }
 
+func (m *mockBCEClient4Subnet) BatchAddPrivateIPWithClientToken(ctx context.Context, privateIPs []string, count int, eniID string, isIpv6 bool, clientToken string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockBCEClient4Subnet) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, eniID string, isIpv6 bool) error {
 	return nil
 }
@@ -626,6 +630,31 @@ func TestSubnetSyncher_getSubnetWithCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "cached-subnet", subnet.SubnetId)
 	// Skip cache hit verification as it depends on SyncManager implementation
+}
+
+func TestSubnetSyncher_getSubnetWithCache_ValidationError(t *testing.T) {
+	ss := &subnetSyncher{}
+	ss.Init(context.Background())
+
+	// Create a mock client that returns invalid subnet
+	mockClient := &mockBCEClient4SubnetValidation{}
+	ss.bceclient = mockClient
+
+	_, err := ss.getSubnetWithCache("invalid-subnet")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "validation failed")
+}
+
+// mockBCEClient4SubnetValidation returns invalid subnet for validation testing
+type mockBCEClient4SubnetValidation struct {
+	mockBCEClient4Subnet
+}
+
+func (m *mockBCEClient4SubnetValidation) DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error) {
+	return &vpc.Subnet{
+		SubnetId: subnetID,
+		// Missing required fields like VPCId, Name, Cidr, ZoneName to trigger validation error
+	}, nil
 }
 
 func TestSubnetSyncher_EnsureSubnet(t *testing.T) {

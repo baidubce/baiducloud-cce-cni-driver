@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -357,14 +358,14 @@ func getENICorrectConfigFromMetadata(macAddress string, eni *ccev2.ENI) (*eniCor
 	config := &eniCorrectConfig{}
 
 	// Get primary IP only (we don't manage secondary IPs)
-	primaryIP, err := defaultMetaClient.GetLinkPrimaryIP(macAddress)
+	primaryIP, err := metadata.DefaultMetaClient.GetLinkPrimaryIP(macAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get primary IP from metadata: %w", err)
 	}
 	config.PrimaryIPv4 = primaryIP
 
 	// Get gateway for primary IP
-	gateway, err := defaultMetaClient.GetLinkGateway(macAddress, primaryIP)
+	gateway, err := metadata.DefaultMetaClient.GetLinkGateway(macAddress, primaryIP)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gateway from metadata: %w", err)
 	}
@@ -381,7 +382,7 @@ func getENICorrectConfigFromMetadata(macAddress string, eni *ccev2.ENI) (*eniCor
 	}
 
 	// Get MTU from metadata API (authoritative source)
-	mtu, err := defaultMetaClient.GetLinkMTU(macAddress)
+	mtu, err := metadata.DefaultMetaClient.GetLinkMTU(macAddress)
 	if err != nil {
 		// If MTU is not available from metadata, use default
 		config.MTU = defaultMTUforENI
@@ -827,7 +828,7 @@ func EnsureRoute(log *logrus.Entry, eniLink netlink.Link, family int, rtTable in
 }
 
 func metadataLinkGateway(mac string, ip net.IP) (net.IP, error) {
-	gateway, err := defaultMetaClient.GetLinkGateway(mac, ip.String())
+	gateway, err := metadata.DefaultMetaClient.GetLinkGateway(mac, ip.String())
 	if err != nil {
 		return nil, err
 	}

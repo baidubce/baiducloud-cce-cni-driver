@@ -85,6 +85,10 @@ func (c *EriClient) BatchAddPrivateIP(ctx context.Context, eniID string, private
 	return c.cloud.BatchAddPrivateIP(ctx, privateIPs, count, eniID, false)
 }
 
+func (c *EriClient) BatchAddPrivateIPWithClientToken(ctx context.Context, eniID string, privateIPs []string, count int, clientToken string) ([]string, error) {
+	return c.cloud.BatchAddPrivateIPWithClientToken(ctx, privateIPs, count, eniID, false, clientToken)
+}
+
 func (c *EriClient) BatchDeletePrivateIP(ctx context.Context, eniID string, privateIPs []string) error {
 	return c.cloud.BatchDeletePrivateIP(ctx, privateIPs, eniID, false)
 }

@@ -223,6 +223,13 @@ ccedConfig:
     bcecloud/apis/v1/DescribeSubnet: "rate-limit:5/1s,rate-burst:5,max-wait-duration:30s,parallel-requests:5"
     bcecloud/apis/v1/StatENI: "rate-limit:10/1s,rate-burst:15,max-wait-duration:30s,parallel-requests:10"
 
+  # BCE API 重试配置
+  # 重试次数：1次重试 = 2次总调用（1次初始 + 1次重试）
+  # 重试延迟：带±20% jitter抖动
+  bce-api-retry-count: 1           # 重试次数（默认1）
+  bce-api-retry-max-delay: 5s      # 最大延迟（默认5秒）
+  bce-api-retry-base-interval: 500ms  # 基础延迟（默认500毫秒）
+
   # 调试
   pprof: false
   pprof-port: 14386
@@ -261,6 +268,7 @@ ccedConfig:
   eni-use-mode: Secondary
   eni-install-source-based-routing: true
   eni-subnet-ids: ""
+  force-primary-eni-instance-specs: []
   eni-security-group-ids: ""
   eni-enterprise-security-group-ids: ""
 

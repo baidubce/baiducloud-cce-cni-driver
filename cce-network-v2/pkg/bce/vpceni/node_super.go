@@ -54,6 +54,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -150,6 +152,9 @@ type bceNetworkResourceSet struct {
 	// nextCreateENITime not allow create eni before this time
 	nextCreateENITime *time.Time
 
+	// clientTokens stores client tokens for ENI creation and IP allocation idempotency
+	clientTokens *bceutils.ClientTokenSet
+
 	real realNodeInf
 
 	// whatever the resource version of the eni have been synced
@@ -185,6 +190,7 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 		eventRecorder:           k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: vpcENISubsys}),
 		eniAllocatedIPsErrorMap: make(map[string]*ccev2.StatusChange),
 		creatingEni:             newCreatingEniSet(),
+		clientTokens:            bceutils.NewClientTokenSet(),
 	}
 
 	// 2. Get isSuportedENI from ccev2.NetResourceSet Label[k8s.LabelIsSupportENI], this Label is setted by nodediscovery determined by metadata api.
@@ -228,12 +234,12 @@ func (n *bceNetworkResourceSet) GetBCEClient() cloud.Interface {
 }
 
 func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
-	n.limiterLock.Lock()
+	n.limiterLock.RLock()
 	if n.eniQuota != nil && n.lastResyncEniQuotaTime.Add(DayDuration).After(time.Now()) {
-		n.limiterLock.Unlock()
+		n.limiterLock.RUnlock()
 		return n.eniQuota
 	}
-	n.limiterLock.Unlock()
+	n.limiterLock.RUnlock()
 
 	ctx := logfields.NewContext()
 	var instanceType string
@@ -803,17 +809,8 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 			return nil
 		})
 	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
-
 	if availableENICount == 0 {
-		interfaceNum, msg, err = forceGetENIFromInstanceGroupFunc(n, ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, effectiveInstanceID)
-		if err != nil {
-			scopedLog.WithError(err).Warnf("force get ENI from instance-group failed")
-		}
-		if interfaceNum > 0 {
-			return interfaceNum, msg, err
-		}
-
-		interfaceNum, msg, err = forceGetENIFromIaaSFunc(n, ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, effectiveInstanceID)
+		interfaceNum, msg, err = n.forceGetENIFromIaaS(ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, effectiveInstanceID)
 		if err != nil {
 			scopedLog.WithError(err).Warnf("force get ENI from IaaS failed")
 		}
@@ -1074,7 +1071,7 @@ func (n *bceNetworkResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 	// if instance type is BCC, we need to allocate ENI secondary ip from subnet
 	// subnet id and ENI id is in allocation.PoolID and allocation.InterfaceID that
 	//  we use them to allocate ip through the bceclient of instance manager
-	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModeSecondaryIP) {
+	if bceutils.IsSecondaryIPMode(n.k8sObj.Spec.ENI.UseMode) {
 		scopedLog := n.log.WithFields(logrus.Fields{
 			"eniID": allocation.InterfaceID,
 			"pool":  allocation.PoolID,
@@ -1119,8 +1116,8 @@ func (n *bceNetworkResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 		}
 
 		for ipv4ToAllocate > 0 || ipv6ToAllocate > 0 {
-			ipv4PaticalToAllocate = math.IntMin(ipv4ToAllocate, 10)
-			ipv6PaticalToAllocate = math.IntMin(ipv6ToAllocate, 10)
+			ipv4PaticalToAllocate = math.IntMin(ipv4ToAllocate, bceconstants.BatchAddOrDeleteIPLimit)
+			ipv6PaticalToAllocate = math.IntMin(ipv6ToAllocate, bceconstants.BatchAddOrDeleteIPLimit)
 			allocateLog := scopedLog.WithFields(logrus.Fields{
 				"ipv4ToAllocate":        ipv4ToAllocate,
 				"ipv6ToAllocate":        ipv6ToAllocate,
@@ -1425,6 +1422,9 @@ func (n *bceNetworkResourceSet) updateENIWithPoll(ctx context.Context, toUpdateE
 	err := wait.PollImmediate(retryDuration, retryTimeout, func() (bool, error) {
 		// get eni
 		// append ip to eni
+		log.WithFields(logrus.Fields{
+			"eniID": toUpdateEni.Name,
+		}).Info("start to update eni spec")
 		eni, ierr := n.manager.enilister.Get(string(toUpdateEni.Name))
 		if ierr != nil {
 			return false, fmt.Errorf("get eni %s failed: %v", toUpdateEni.Name, ierr)
@@ -1433,13 +1433,19 @@ func (n *bceNetworkResourceSet) updateENIWithPoll(ctx context.Context, toUpdateE
 		oldversion = eni.Spec.VPCVersion
 		eni.Spec.VPCVersion = eni.Spec.VPCVersion + 1
 		eni = refresh(eni)
-
 		// update eni
 		_, ierr = k8s.CCEClient().CceV2().ENIs().Update(ctx, eni, metav1.UpdateOptions{})
 		// retry if conflict
 		// if errors.IsConflict(ierr) || errors.IsResourceExpired(ierr) {
 		// retry if error to update eni
 		if ierr != nil {
+			log.WithError(ierr).
+				WithFields(logrus.Fields{
+					"eniID":      toUpdateEni.Name,
+					"instanceID": toUpdateEni.Spec.InstanceID,
+					"node":       toUpdateEni.Spec.NodeName,
+					"error":      ierr,
+				}).Errorf("update eni spec failed, retrying...")
 			return false, nil
 		}
 		// we should recorde log with eni attributes and ips if update eni success
@@ -1963,7 +1969,7 @@ func (n *bceNetworkResourceSet) removeReleasedIPsFromENI(ctx context.Context, in
 }
 
 // releaseBatchIPsWithRetry attempts to release a batch of IPs with retry logic
-// Note: Each batch can only release up to 10 IPs at once due to API limitations
+// Note: Each batch can only release up to BatchAddOrDeleteIPLimit IPs at once due to API limitations
 func (n *bceNetworkResourceSet) releaseBatchIPsWithRetry(ctx context.Context, release *ipam.ReleaseAction, ipsToRelease []string, scopedLog *logrus.Entry) ([]string, error) {
 	var successfullyReleasedIPs []string
 	remainingIPs := make([]string, len(ipsToRelease))
@@ -1988,8 +1994,8 @@ func (n *bceNetworkResourceSet) releaseBatchIPsWithRetry(ctx context.Context, re
 
 		// 取出当前批次要处理的IP（最多10个）
 		currentBatchSize := len(remainingIPs)
-		if currentBatchSize > 10 {
-			currentBatchSize = 10
+		if currentBatchSize > bceconstants.BatchAddOrDeleteIPLimit {
+			currentBatchSize = bceconstants.BatchAddOrDeleteIPLimit
 		}
 		currentBatch := remainingIPs[:currentBatchSize]
 
@@ -2047,10 +2053,10 @@ func (n *bceNetworkResourceSet) releaseBatchIPsWithRetry(ctx context.Context, re
 	return successfullyReleasedIPs, nil
 }
 
-// attemptBatchRelease 尝试批量释放IP (最多10个IP)
+// attemptBatchRelease 尝试批量释放IP (最多40个IP)
 func (n *bceNetworkResourceSet) attemptBatchRelease(ctx context.Context, release *ipam.ReleaseAction, ipsToRelease []string, eni *ccev2.ENI, scopedLog *logrus.Entry) error {
-	if len(ipsToRelease) > 10 {
-		return fmt.Errorf("batch size %d exceeds maximum limit of 10", len(ipsToRelease))
+	if len(ipsToRelease) > bceconstants.BatchAddOrDeleteIPLimit {
+		return fmt.Errorf("batch size %d exceeds maximum limit of %d", len(ipsToRelease), bceconstants.BatchAddOrDeleteIPLimit)
 	}
 
 	// 分类IP为IPv4和IPv6

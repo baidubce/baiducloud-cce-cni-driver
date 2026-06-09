@@ -437,4 +437,14 @@ const (
 
 	// DefaultResourceResyncWorkers specifies the default number of workers for k8s resources handler
 	DefaultResourceResyncWorkers = 8
+
+	// API Retry configuration (shared by MetaAPI, BCE API, etc.)
+	// APIRetryCount is the default number of retries for API requests
+	APIRetryCount = 1
+
+	// APIRetryMaxDelay is the default maximum delay for API retries
+	APIRetryMaxDelay = 5 * time.Second
+
+	// APIRetryBaseInterval is the default base interval for API retries
+	APIRetryBaseInterval = 500 * time.Millisecond
 )

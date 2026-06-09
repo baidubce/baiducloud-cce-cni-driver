@@ -17,8 +17,8 @@
 package bce
 
 import (
+	"math/rand"
 	"net"
-	"net/http"
 	"time"
 
 	"github.com/baidubce/bce-sdk-go/util/log"
@@ -65,7 +65,7 @@ func (b *BackOffRetryPolicy) ShouldRetry(err BceError, attempts int) bool {
 	}
 
 	if err == nil {
-		return true
+		return false
 	}
 
 	// Always retry on IO error
@@ -75,26 +75,21 @@ func (b *BackOffRetryPolicy) ShouldRetry(err BceError, attempts int) bool {
 
 	// Only retry on a service error
 	if realErr, ok := err.(*BceServiceError); ok {
-		switch realErr.StatusCode {
-		case http.StatusInternalServerError:
-			log.Warn("retry for internal server error(500)")
-			return true
-		case http.StatusBadGateway:
-			log.Warn("retry for bad gateway(502)")
-			return true
-		case http.StatusServiceUnavailable:
-			log.Warn("retry for service unavailable(503)")
-			return true
-		case http.StatusBadRequest:
-			if realErr.Code != "Http400" {
-				return false
-			}
-			log.Warn("retry for bad request(400)")
+		// Retry on RequestExpired
+		if realErr.Code == EREQUEST_EXPIRED {
+			log.Warn("retry for request expired")
 			return true
 		}
 
-		if realErr.Code == EREQUEST_EXPIRED {
-			log.Warn("retry for request expired")
+		// Retry on RateLimit (421)
+		if realErr.StatusCode == 421 || realErr.Code == "RateLimit" {
+			log.Warn("retry for rate limit")
+			return true
+		}
+
+		// Retry on all 5xx errors
+		if realErr.StatusCode >= 500 && realErr.StatusCode < 600 {
+			log.Warn("retry for 5xx error")
 			return true
 		}
 	}
@@ -106,11 +101,15 @@ func (b *BackOffRetryPolicy) GetDelayBeforeNextRetryInMillis(
 	if attempts < 0 {
 		return 0 * time.Millisecond
 	}
+	// Exponential backoff
 	delayInMillis := (1 << uint64(attempts)) * b.baseIntervalInMillis
 	if delayInMillis > b.maxDelayInMillis {
-		return time.Duration(b.maxDelayInMillis) * time.Millisecond
+		delayInMillis = b.maxDelayInMillis
 	}
-	return time.Duration(delayInMillis) * time.Millisecond
+	// Add jitter: random value between 0.8x and 1.2x (±20%)
+	jitter := 0.8 + rand.Float64()*0.4 // 0.8 to 1.2
+	delayWithJitter := int64(float64(delayInMillis) * jitter)
+	return time.Duration(delayWithJitter) * time.Millisecond
 }
 
 func NewBackOffRetryPolicy(maxRetry int, maxDelay, base int64) *BackOffRetryPolicy {

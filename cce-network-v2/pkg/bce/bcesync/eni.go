@@ -22,6 +22,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	bceconstants "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/constants"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -519,23 +520,57 @@ func (es *eniSyncher) releaseSecondaryIPsFromPrimaryENI(eni *ccev2.ENI) error {
 	if len(secondaryIPs) == 0 {
 		return nil
 	}
-	var err error
 
-	if eni.Spec.Type == ccev2.ENIForBBC {
-		err = es.bceclient.BBCBatchDelIP(logfields.NewContext(), &bbc.BatchDelIpArgs{
-			InstanceId: eni.Spec.InstanceID,
-			PrivateIps: secondaryIPs,
-		})
-	} else {
-		// EBC is supported yet
-		err = es.bceclient.BCCBatchDelIP(logfields.NewContext(), &bccapi.BatchDelIpArgs{
-			InstanceId: eni.Spec.InstanceID,
-			PrivateIps: secondaryIPs,
-		})
-	}
-	if err != nil {
+	if err := es.deleteSecondaryIPs(eni, secondaryIPs); err != nil {
 		eniLog.WithError(err).Errorf("delete secondary ips %v from eni %s failed", secondaryIPs, eni.Name)
 		return err
+	}
+	return nil
+}
+
+// deleteSecondaryIPs batches secondary IP deletion to avoid exceeding API limits.
+func (es *eniSyncher) deleteSecondaryIPs(eni *ccev2.ENI, secondaryIPs []string) error {
+	ctx := logfields.NewContext()
+
+	callBBC := func(batch []string) error {
+		return es.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+			InstanceId: eni.Spec.InstanceID,
+			PrivateIps: batch,
+		})
+	}
+	callBCC := func(batch []string) error {
+		return es.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
+			InstanceId: eni.Spec.InstanceID,
+			PrivateIps: batch,
+		})
+	}
+
+	for start := 0; start < len(secondaryIPs); start += bceconstants.BatchAddOrDeleteIPLimit {
+		end := start + bceconstants.BatchAddOrDeleteIPLimit
+		if end > len(secondaryIPs) {
+			end = len(secondaryIPs)
+		}
+		batch := secondaryIPs[start:end]
+		var err error
+		if eni.Spec.Type == ccev2.ENIForBBC {
+			err = callBBC(batch)
+		} else {
+			// EBC is supported yet
+			err = callBCC(batch)
+		}
+		if err != nil {
+			if cloud.IsErrorReasonNoSuchObject(err) ||
+				cloud.IsErrorENINotFound(err) ||
+				cloud.IsErrorENIPrivateIPNotFound(err) ||
+				cloud.IsErrorBBCENIPrivateIPNotFound(err) {
+				eniLog.WithError(err).
+					WithField("eni", eni.Name).
+					WithField("secondaryIPs", batch).
+					Info("secondary IPs already released or ENI missing, skip delete")
+				continue
+			}
+			return err
+		}
 	}
 	return nil
 }

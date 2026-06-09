@@ -4,13 +4,24 @@
 package enim
 
 import (
+	"errors"
+
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamopt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+)
+
+var (
+	enimLog           = logging.NewSubysLogger("enim")
+	getRdmaIFsInfoAll = bceutils.GetRdmaIFsInfoAll
 )
 
 // ENIManagerServer It is mainly used when assigning ENI manager,
@@ -43,13 +54,43 @@ type ENIManagerServer interface {
 // If the Primary mode is used, the management of endpoint association relationships
 // will be provided for ENI
 func NewENIManager(c ipam.Configuration, watcher *watchers.K8sWatcher) ENIManagerServer {
-	if option.Config.IPAM == ipamopt.IPAMVpcEni {
+	switch option.Config.IPAM {
+	case ipamopt.IPAMVpcEni:
 		if option.Config.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 			agent.RegisterENIInitFatory(watcher)
 			return newENIEndpointAllocator(option.Config, watcher)
 		}
 		agent.RegisterENIInitFatory(watcher)
 		return &noopENIM{}
+	case ipamopt.IPAMVpcRoute:
+		enable, err := shouldEnableENIInitFactoryForVpcRoute()
+		if err != nil {
+			enimLog.WithError(err).Fatal("failed to detect RDMA interfaces in vpc-route mode")
+			return &noopENIM{}
+		}
+		if !enable {
+			return &noopENIM{}
+		}
+		return NewENIInitFactoryENIM(c, watcher)
+	default:
+		return &noopENIM{}
 	}
-	return &noopENIM{}
+}
+
+func shouldEnableENIInitFactoryForVpcRoute() (bool, error) {
+	rdmaIFs, err := getRdmaIFsInfoAll(nodeTypes.GetName(), enimLog)
+	if err != nil {
+		if errors.Is(err, metadata.ErrorNotImplemented) {
+			enimLog.WithError(err).Info("RDMA metadata not implemented, skip ENI init factory in vpc-route mode")
+			return false, nil
+		}
+		return false, err
+	}
+
+	if len(rdmaIFs) == 0 {
+		enimLog.Info("no RDMA interface detected in vpc-route mode, skip ENI init factory")
+		return false, nil
+	}
+
+	return true, nil
 }

@@ -2169,25 +2169,24 @@ func TestRdmaRefreshBCCInfo_Success(t *testing.T) {
 	assert.Equal(t, 2, result.EriQuota)
 }
 
-// TestRdmaRefreshBCCInfo_ValidationFailure tests BCC info refresh with validation failure
-func TestRdmaRefreshBCCInfo_ValidationFailure(t *testing.T) {
+// TestRdmaRefreshBCCInfo_NoValidation tests BCC info refresh without validation
+func TestRdmaRefreshBCCInfo_NoValidation(t *testing.T) {
 	wrapper := createTestRdmaNetResourceSetWrapper()
 
-	// Mock GetBCCInstanceDetail to return instance with missing required fields
+	// Mock GetBCCInstanceDetail to return instance with missing fields
 	patches := gomonkey.ApplyMethod(reflect.TypeOf(wrapper.manager.bceClientd), "GetBCCInstanceDetail",
 		func(_ *bceclound.Client, _ context.Context, instanceID string) (*bccapi.InstanceModel, error) {
 			return &bccapi.InstanceModel{
 				InstanceId: instanceID,
-				EriQuota:   0, // Missing required field - should fail validation
-				// Missing EniQuota and NicInfo
+				EriQuota:   0,
 			}, nil
 		})
 	defer patches.Reset()
 
 	result, err := wrapper.refreshBCCInfo()
-	assert.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "validation failed")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 0, result.EriQuota)
 }
 
 // TestRdmaRefreshBCCInfo_APIError tests BCC info refresh with API error

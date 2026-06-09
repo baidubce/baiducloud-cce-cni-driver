@@ -140,7 +140,7 @@ func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) 
 		return nil, err
 	}
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).WithField("node", n.k8sObj.Name).Infof("Get bcc instance detail response: %+v", bccInfo)
-	// Validate response to detect API degradation (BCC/ENI needs eniQuota and nicInfo)
+	// Validate response to detect API degradation (needs nicInfo)
 	// Skip validation for HPAS instances as they don't return NicInfo
 	if n.instanceType != string(metadata.InstanceTypeExHPAS) {
 		if err := validate.Struct(bccInfo); err != nil {

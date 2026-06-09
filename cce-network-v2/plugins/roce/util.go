@@ -180,26 +180,35 @@ func DetectDefaultRouteInterfaceName() (string, error) {
 	return "", fmt.Errorf("no default route interface found")
 }
 
+// GetLinkByMacAddress 根据MAC地址查找对应的网络连接
+//
+// 该函数会遍历系统所有网络接口，查找与指定MAC地址匹配的连接
+// 匹配策略: 返回第一个 bond 口或独立网卡
+//
+// 参数:
+//
+//	macAddress: 要查找的MAC地址字符串
+//
+// 返回值:
+//
+//	netlink.Link: 匹配的网络连接
+//	error: 查找失败时返回错误信息
 func GetLinkByMacAddress(macAddress string) (netlink.Link, error) {
 	interfaces, err := netlink.LinkList()
 	if err != nil {
 		return nil, err
 	}
 
-	var link netlink.Link
-
 	for _, intf := range interfaces {
-		if intf.Attrs().HardwareAddr.String() == macAddress {
-			link = intf
-			break
+		if strings.EqualFold(intf.Attrs().HardwareAddr.String(), macAddress) {
+			// MasterIndex 等于0说明该卡是 bond 口或独立网卡
+			if intf.Attrs().MasterIndex == 0 {
+				return intf, nil
+			}
 		}
 	}
 
-	if link == nil {
-		return nil, fmt.Errorf("link with MAC %s not found", macAddress)
-	}
-
-	return link, nil
+	return nil, fmt.Errorf("link with MAC %s not found", macAddress)
 }
 
 type K8SArgs struct {

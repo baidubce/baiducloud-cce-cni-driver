@@ -339,11 +339,7 @@ func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() (*bccapi.InstanceModel, err
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return nil, err
 	}
-	// Validate response to detect API degradation (RDMA/ERI needs eriQuota)
-	if err := validate.Struct(bccInfo); err != nil {
-		n.log.WithError(err).Error("BCC instance response validation failed (possible API degradation)")
-		return nil, fmt.Errorf("BCC instance response validation failed: %w", err)
-	}
+	// In RDMA mode, do not validate bccInfo after retrieval.
 	n.log.WithField("bccInfo", logfields.Repr(bccInfo)).Infof("Get bcc instance detail")
 
 	n.limiterLock.Lock()

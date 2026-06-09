@@ -8,14 +8,27 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.5[暂未发布]
+#### 2.13.6[暂未发布]
+1. [Bug] 修复 meta api 异常时 Pod 缺少部分 RDMA 网卡的问题
+2. [Optimize] 优化资源同步逻辑，降低对 iaas 侧 ENI 和 Subnet 资源相关接口的 QPS
+3. [Feature] cce-network-agent 组件提供 ip 分配与回收耗时 Prometheus 指标
+4. [Optimize] 请求 meta api 增加 useragent
+5. [Optimize] 增加 hpas 标准版兼容代码，去掉header，并针对hpas类型的机器使用hpas-id
+6. [Bug] 修改 cce-network-agent 初始化逻辑，将所有当前nrs的待释放IP标记为 do-not-release 解决 agent 同步 cep 卡住的问题
+7. [Bug] 修复分配已释放的 IP 给 Pod，导致 Pod 网络不通的问题。
+8. [Optimize] cce-network-agent 组件提供 ENI 异常状态相关指标
+9. [Optimize] cce-network-agent 组件优化 eni sync 时日志量过大问题，同时解决组件的 eni k8s 资源同步周期过小
+10. [Feature] 兼容内部上云镜像，修改 gc 逻辑实现，新增由 owner 加 IP 释放IP的方法
+11. [Bug] 修复由于命令行执行卡住导致 eri 状态异常的情况
+
+#### 2.13.5[20251106]
 1. [Bug] 修复在 rdma 网卡子设备配置错误时 POD 依然正常就绪导致缺卡的问题
 2. [Bug] 修复 centos7 rule list不全导致 ENI 状态为 erroronnode 从而导致节点不 Ready 的问题
 3. [Bug] 修复 IPv6 模式下重复设置 ENI 网卡 IPv6 地址的问题
 4. [Bug] 解决 DEL 请求误删除不属于自身的 IP 的问题
 
 #### 2.13.4[20251028]
-1. [Oprimize] 支持 RDMA 场景下，在申请 rdmaroce 类型网卡 ip 时遭遇 cce-network-operator 意外重启，导致 RDMA 网卡 ip 泄露与其网卡所在节点的 cce-network-agent 无法就绪问题
+1. [Optimize] 支持 RDMA 场景下，在申请 rdmaroce 类型网卡 ip 时遭遇 cce-network-operator 意外重启，导致 RDMA 网卡 ip 泄露与其网卡所在节点的 cce-network-agent 无法就绪问题
 2. [Bug] 修复 eni 异常状态下由于状态码不一致导致下无法写入 nrs 的status的情况
 3. [Optimize] 支持 RDMA 场景下，在 RDMA 网卡意外掉卡时，弹性网卡 ENI 的使用在重启节点或者重启节点操作系统网络守护进程时不受影响
 4. [Bug] 修复当用户手动挂载弹性网卡后，网络组件无法申请新的弹性网卡的问题

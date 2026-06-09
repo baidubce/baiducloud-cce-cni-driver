@@ -24,6 +24,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/check.v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
@@ -33,18 +34,10 @@ import (
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	listerv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
-
-// init init 函数用于初始化 fake k8s 客户端，避免 nil 指针解引用
-// 如果初始化失败则 panic 出错误信息
-func init() {
-	// 初始化 fake k8s 客户端，避免 nil 指针解引用
-	if err := k8s.InitNewFakeK8sClient(); err != nil {
-		panic(fmt.Sprintf("failed to initialize fake k8s client: %v", err))
-	}
-}
 
 type testNeededDef struct {
 	available   int
@@ -94,6 +87,14 @@ var excessDef = []testExcessDef{
 	{12, 3, 8, 0, 1, 5, 5}, // available=12, used=3, pre=8, max=1 => excess=0, but readyForRelease=5 => total=5
 	{15, 3, 8, 0, 1, 3, 3}, // available=15, used=3, pre=8, max=1 => excess=3, but readyForRelease=3 => total=3 (returns readyForReleaseCount)
 	{10, 5, 8, 0, 2, 2, 2}, // available=10, used=5, pre=8, max=2 => excess=0, readyForRelease=2 => total=2
+}
+
+// SetUpTest initializes a fresh fake Kubernetes client before each test to ensure test isolation.
+func (e *IPAMSuite) SetUpTest(c *check.C) {
+	// Initialize a new fake k8s client for each test to avoid test interference
+	if err := k8s.InitNewFakeK8sClient(); err != nil {
+		c.Fatalf("failed to initialize fake k8s client: %v", err)
+	}
 }
 
 func (e *IPAMSuite) TestCalculateNeededIPs(c *check.C) {
@@ -165,6 +166,7 @@ type mockNetResourceOperations struct {
 	onIsPrefixDelegated                  func() bool
 	onGetMaximumBurstableAllocatableIPv4 func() int
 	onGetUsedIPWithPrefixes              func() int
+	onPopulateStatusFields               func(resource *ccev2.NetResourceSet)
 }
 
 // GetUsedIPWithPrefixes 获取已使用的IP地址，包括前缀。如果设置了回调函数onGetUsedIPWithPrefixes，则会调用该函数返回结果；否则返回0
@@ -177,7 +179,11 @@ func (m *mockNetResourceOperations) GetUsedIPWithPrefixes() int {
 
 func (m *mockNetResourceOperations) UpdatedNode(obj *ccev2.NetResourceSet) {}
 
-func (m *mockNetResourceOperations) PopulateStatusFields(resource *ccev2.NetResourceSet) {}
+func (m *mockNetResourceOperations) PopulateStatusFields(resource *ccev2.NetResourceSet) {
+	if m.onPopulateStatusFields != nil {
+		m.onPopulateStatusFields(resource)
+	}
+}
 
 func (m *mockNetResourceOperations) CreateInterface(ctx context.Context, allocation *AllocationAction, scopedLog *logrus.Entry) (int, string, error) {
 	return 0, "", fmt.Errorf("not implemented")
@@ -1531,6 +1537,783 @@ func (e *IPAMSuite) TestPopulateIPReleaseStatus_GivenNilNodeStatus_WhenCalled_Th
 	// Then
 	c.Assert(len(targetNode.Status.IPAM.ReleaseIPs), check.Equals, 1)
 	c.Assert(targetNode.Status.IPAM.ReleaseIPs["192.168.1.10"], check.Equals, ipamTypes.IPReleaseStatus(ipamOption.IPAMMarkForRelease))
+}
+
+// Mock for NetResourceSetGetterUpdater interface
+type mockK8sAPI struct {
+	onUpdate       func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error)
+	onUpdateStatus func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error)
+	onGet          func(name string) (*ccev2.NetResourceSet, error)
+	onCreate       func(node *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error)
+}
+
+func (m *mockK8sAPI) Update(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+	if m.onUpdate != nil {
+		return m.onUpdate(origResource, newResource)
+	}
+	return newResource.DeepCopy(), nil
+}
+
+func (m *mockK8sAPI) UpdateStatus(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+	if m.onUpdateStatus != nil {
+		return m.onUpdateStatus(origResource, newResource)
+	}
+	return newResource.DeepCopy(), nil
+}
+
+func (m *mockK8sAPI) Get(name string) (*ccev2.NetResourceSet, error) {
+	if m.onGet != nil {
+		return m.onGet(name)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockK8sAPI) Create(node *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+	if m.onCreate != nil {
+		return m.onCreate(node)
+	}
+	return node.DeepCopy(), nil
+}
+
+func (m *mockK8sAPI) Lister() listerv2.NetResourceSetLister {
+	return nil
+}
+
+// Test syncToAPIServer method
+func (e *IPAMSuite) TestSyncToAPIServer_GivenNilResource_WhenCalled_ThenReturnsEarly(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.resource = nil
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenValidResource_WhenSpecUpdateSucceeds_ThenUpdatesSpecAndStatus(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	// Set PreAllocate to 0 so syncToAPIServer will set it to GetMinimumAllocatableIPv4()
+	node.resource.Spec.IPAM.PreAllocate = 0
+
+	// Set up pool
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	// Mock k8s API
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			// Ensure the pool is preserved in the returned node
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			// Update status fields
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// Mock ops
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(node.resource.Spec.IPAM.Pool, check.DeepEquals, pool)
+	c.Assert(node.resource.Spec.IPAM.PreAllocate, check.Equals, 8)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenSpecUpdateFailsOnFirstAttempt_WhenSecondAttemptSucceeds_ThenSucceeds(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	callCount := 0
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, fmt.Errorf("first attempt failed")
+			}
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return the current node when Get is called during retry
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(callCount, check.Equals, 2)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenSpecUpdateFailsBothAttempts_WhenCalled_ThenReturnsError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	expectedError := fmt.Errorf("update failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, expectedError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return error to simulate Get failure as well
+			return nil, expectedError
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.Equals, expectedError)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenStatusUpdateFailsOnFirstAttempt_WhenSecondAttemptSucceeds_ThenSucceeds(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	statusCallCount := 0
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			statusCallCount++
+			if statusCallCount == 1 {
+				return nil, fmt.Errorf("first status update failed")
+			}
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return the current node when Get is called during retry
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(statusCallCount, check.Equals, 2)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenStatusUpdateFailsBothAttempts_WhenCalled_ThenReturnsError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	expectedError := fmt.Errorf("status update failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, expectedError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return error to simulate Get failure as well
+			return nil, expectedError
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.Equals, expectedError)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenStatusUpdateReturnsNotFound_WhenCalled_ThenReturnsNil(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, kerrors.NewNotFound(ccev2.Resource("netresourceset"), "test-node")
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return the current node when Get is called
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenPreAllocateAlreadySet_WhenCalled_ThenDoesNotOverridePreAllocate(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.resource.Spec.IPAM.PreAllocate = 16 // Already set
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(node.resource.Spec.IPAM.PreAllocate, check.Equals, 16) // Should remain unchanged
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenNilStatusUsed_WhenCalled_ThenInitializesUsedMap(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.resource.Status.IPAM.Used = nil // Set to nil
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			// Verify that Used map is initialized
+			c.Assert(newResource.Status.IPAM.Used, check.NotNil)
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(node.resource.Status.IPAM.Used, check.NotNil)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenTriggerError_WhenCalled_ThenTriggersRetry(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+	}
+	node.available = pool
+
+	expectedError := fmt.Errorf("update failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, expectedError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			// Return error to simulate Get failure as well
+			return nil, expectedError
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// Track if retry trigger was called
+	retryTriggered := false
+	originalTrigger := node.retrySyncToAPIServer
+	mockTrigger, _ := trigger.NewTrigger(trigger.Parameters{
+		MinInterval: time.Millisecond,
+		TriggerFunc: func([]string) {
+			retryTriggered = true
+		},
+		Name: "mock-retry-trigger",
+	})
+	node.retrySyncToAPIServer = mockTrigger
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.Equals, expectedError)
+	// Give trigger time to execute
+	time.Sleep(2 * time.Millisecond)
+	c.Assert(retryTriggered, check.Equals, true)
+
+	// Restore original trigger
+	node.retrySyncToAPIServer = originalTrigger
+}
+
+// Test update method
+func (e *IPAMSuite) TestUpdate_GivenSuccessfulSpecUpdate_WhenCalled_ThenReturnsNil(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+	newNode.Spec.IPAM.PreAllocate = 16
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return newResource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.IsNil)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenSuccessfulStatusUpdate_WhenCalled_ThenReturnsNil(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+	newNode.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{},
+	}
+
+	mockAPI := &mockK8sAPI{
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return newResource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, true)
+
+	// Then
+	c.Assert(err, check.IsNil)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateFailsAndGetSucceeds_WhenCalled_ThenReturnsUpdateError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+
+	updateError := fmt.Errorf("update failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, updateError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.Equals, updateError)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateFailsAndGetFails_WhenCalled_ThenReturnsGetError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+
+	updateError := fmt.Errorf("update failed")
+	getError := fmt.Errorf("get failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, updateError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			return nil, getError
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.Equals, getError)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateReturnsNilNodeWithError_WhenCalled_ThenReturnsError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+
+	updateError := fmt.Errorf("update failed")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return nil, updateError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.Equals, updateError)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateReturnsNodeWithEmptyName_WhenGetSucceeds_ThenUpdatesNodesAndReturnsError(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+
+	updateError := fmt.Errorf("update failed")
+	emptyNameNode := node.resource.DeepCopy()
+	emptyNameNode.Name = ""
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return emptyNameNode, updateError
+		},
+		onGet: func(name string) (*ccev2.NetResourceSet, error) {
+			return node.resource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.Equals, updateError)
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateSucceedsWithValidNode_WhenCalled_ThenUpdatesNodeAndReturnsNil(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+	newNode.Spec.IPAM.PreAllocate = 16
+
+	updatedNode := newNode.DeepCopy()
+	updatedNode.Spec.IPAM.PreAllocate = 20 // API server returns modified version
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return updatedNode, nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(newNode.Spec.IPAM.PreAllocate, check.Equals, 20) // Should be updated to API server version
+}
+
+func (e *IPAMSuite) TestUpdate_GivenUpdateSucceedsButReturnsError_WhenCalled_ThenUpdatesNodeAndReturnsNil(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	origNode := node.resource.DeepCopy()
+	newNode := node.resource.DeepCopy()
+
+	updatedNode := newNode.DeepCopy()
+	updatedNode.Spec.IPAM.PreAllocate = 20
+
+	updateError := fmt.Errorf("update failed but node returned")
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return updatedNode, updateError
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	// When
+	err := node.update(origNode, newNode, 0, false)
+
+	// Then
+	c.Assert(err, check.IsNil) // Should return nil because valid node was returned
+	c.Assert(newNode.Spec.IPAM.PreAllocate, check.Equals, 20)
+}
+
+// Additional edge case tests for syncToAPIServer
+func (e *IPAMSuite) TestSyncToAPIServer_GivenComplexScenario_WhenCalled_ThenHandlesAllOperations(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.resource.Spec.IPAM.PreAllocate = 0 // Will be set by ops
+	node.resource.Status.IPAM.Used = nil    // Will be initialized
+
+	pool := ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{Resource: "test-resource"},
+		"192.168.1.11": ipamTypes.AllocationIP{Resource: "test-resource-2"},
+	}
+	node.available = pool
+
+	// Set up IP release status
+	node.ipReleaseStatus = map[string]string{
+		"192.168.1.12": ipamOption.IPAMMarkForRelease,
+	}
+
+	specUpdateCalled := false
+	statusUpdateCalled := false
+	populateStatusFieldsCalled := false
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			specUpdateCalled = true
+			// Verify pool is set
+			c.Assert(newResource.Spec.IPAM.Pool, check.DeepEquals, pool)
+			// Verify PreAllocate is set
+			c.Assert(newResource.Spec.IPAM.PreAllocate, check.Equals, 8)
+			updatedNode := newResource.DeepCopy()
+			updatedNode.Spec.IPAM.Pool = newResource.Spec.IPAM.Pool
+			updatedNode.Spec.IPAM.PreAllocate = newResource.Spec.IPAM.PreAllocate
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			statusUpdateCalled = true
+			// Verify Used map is initialized
+			c.Assert(newResource.Status.IPAM.Used, check.NotNil)
+			// Verify release status is populated
+			c.Assert(len(newResource.Status.IPAM.ReleaseIPs), check.Equals, 1)
+			// Start from current node.resource to preserve spec fields
+			updatedNode := node.resource.DeepCopy()
+			updatedNode.Status.IPAM.Used = newResource.Status.IPAM.Used
+			updatedNode.Status.IPAM.ReleaseIPs = newResource.Status.IPAM.ReleaseIPs
+			// Update node.resource to simulate what K8s watcher would do
+			node.resource = updatedNode.DeepCopy()
+			return updatedNode, nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+		onPopulateStatusFields: func(resource *ccev2.NetResourceSet) {
+			populateStatusFieldsCalled = true
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(specUpdateCalled, check.Equals, true)
+	c.Assert(statusUpdateCalled, check.Equals, true)
+	c.Assert(populateStatusFieldsCalled, check.Equals, true)
+	c.Assert(node.resource.Spec.IPAM.Pool, check.DeepEquals, pool)
+	c.Assert(node.resource.Spec.IPAM.PreAllocate, check.Equals, 8)
+}
+
+func (e *IPAMSuite) TestSyncToAPIServer_GivenEmptyPool_WhenCalled_ThenSetsEmptyPool(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.available = ipamTypes.AllocationMap{} // Empty pool
+
+	mockAPI := &mockK8sAPI{
+		onUpdate: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			c.Assert(len(newResource.Spec.IPAM.Pool), check.Equals, 0)
+			return newResource.DeepCopy(), nil
+		},
+		onUpdateStatus: func(origResource, newResource *ccev2.NetResourceSet) (*ccev2.NetResourceSet, error) {
+			return newResource.DeepCopy(), nil
+		},
+	}
+	node.manager.k8sAPI = mockAPI
+
+	mockOps := &mockNetResourceOperations{
+		onGetMinimumAllocatableIPv4: func() int {
+			return 8
+		},
+	}
+	node.ops = mockOps
+
+	// When
+	err := node.syncToAPIServer()
+
+	// Then
+	c.Assert(err, check.IsNil)
+	c.Assert(len(node.resource.Spec.IPAM.Pool), check.Equals, 0)
 }
 
 func (e *IPAMSuite) TestPopulateIPReleaseStatus_GivenStaleReleasedIPs_WhenCalled_ThenRemovesStaleEntries(c *check.C) {

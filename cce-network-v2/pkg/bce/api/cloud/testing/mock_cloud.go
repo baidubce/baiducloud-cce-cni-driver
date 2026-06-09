@@ -587,10 +587,10 @@ func (mr *MockInterfaceMockRecorder) ListSecurityGroup(ctx, vpcID, instanceID in
 }
 
 // ListSubnets mocks base method.
-func (m *MockInterface) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
+func (m *MockInterface) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListSubnets", ctx, args)
-	ret0, _ := ret[0].([]vpc.Subnet)
+	ret0, _ := ret[0].(*vpc.ListSubnetResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

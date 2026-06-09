@@ -16,6 +16,8 @@
 package common
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -144,4 +146,14 @@ func getNumPossibleCPUsFromReader(log *logrus.Entry, r io.Reader) int {
 	}
 
 	return count
+}
+
+// VethNameForPod generates host-side veth name for pod
+// max veth length is 15
+// A SHA1 is always 20 bytes long, and so is sufficient for generating the
+// veth name and mac addr.
+func VethNameForPod(name, namespace, prefix string) string {
+	h := sha1.New()
+	h.Write([]byte(namespace + "." + name))
+	return fmt.Sprintf("%s%s", prefix, hex.EncodeToString(h.Sum(nil))[:11])
 }

@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -70,4 +72,121 @@ func TestGetFeatureList_ReturnType(t *testing.T) {
 		assert.IsType(t, "", result.ENIQuota)
 		assert.IsType(t, "", result.ERIQuota)
 	}
+}
+
+// mockMetadataClient is a mock implementation of the metadataClient interface for testing.
+type mockMetadataClient struct {
+	resourceID          string
+	featureList         *metadata.FeatureList
+	genericErr          error
+	sourceType          string
+	getSourceTypeCalled int
+}
+
+func (m *mockMetadataClient) GetVPCID() (string, error) { return "", m.genericErr }
+func (m *mockMetadataClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
+	return "", m.genericErr
+}
+func (m *mockMetadataClient) GetSourceType() (string, error) {
+	m.getSourceTypeCalled++
+	return m.sourceType, m.genericErr
+}
+func (m *mockMetadataClient) GetInstanceType() (metadata.InstanceType, error) {
+	return "", m.genericErr
+}
+func (m *mockMetadataClient) GetAvailabilityZone() (string, error) { return "", m.genericErr }
+func (m *mockMetadataClient) GetInstanceID() (string, error)       { return "", m.genericErr }
+func (m *mockMetadataClient) GetResourceID() (string, error)       { return m.resourceID, m.genericErr }
+func (m *mockMetadataClient) GetSubnetID() (string, error)         { return "", m.genericErr }
+func (m *mockMetadataClient) GetLinkPrimaryIP(macAddress string) (string, error) {
+	return "", m.genericErr
+}
+func (m *mockMetadataClient) GetLinkGateway(macAddress, ip string) (string, error) {
+	return "", m.genericErr
+}
+func (m *mockMetadataClient) GetLinkMTU(macAddress string) (int, error) { return 0, m.genericErr }
+func (m *mockMetadataClient) GetFeatureList() (*metadata.FeatureList, error) {
+	return m.featureList, m.genericErr
+}
+
+// TestGetHpasID covers GetHpasID, SetMetadataClient, and ResetMetadataClient.
+func TestGetHpasID(t *testing.T) {
+	tests := []struct {
+		name           string
+		mockResourceID string
+		mockError      error
+		expectID       string
+		expectError    bool
+	}{
+		{
+			name:           "Successfully retrieve HPAS ID",
+			mockResourceID: "hpas-12345",
+			mockError:      nil,
+			expectID:       "hpas-12345",
+			expectError:    false,
+		},
+		{
+			name:           "Metadata service returns an error",
+			mockResourceID: "",
+			mockError:      fmt.Errorf("metadata service unavailable"),
+			expectID:       "",
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create and set the mock client
+			mockClient := &mockMetadataClient{
+				resourceID: tt.mockResourceID,
+				genericErr: tt.mockError,
+			}
+			SetMetadataClient(mockClient)
+			// Ensure the client is reset after the test
+			defer ResetMetadataClient()
+
+			// Call the function under test
+			hpasID, err := GetHpasID()
+
+			// Assert the results
+			assert.Equal(t, tt.expectID, hpasID)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestGetSourceType verifies GetSourceType delegates to metadata client and propagates return values
+func TestGetSourceType(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		mockClient := &mockMetadataClient{
+			sourceType: "HPAS",
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		st, err := GetSourceType()
+
+		assert.NoError(t, err)
+		assert.Equal(t, "HPAS", st)
+		assert.Equal(t, 1, mockClient.getSourceTypeCalled)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		mockErr := fmt.Errorf("metadata service unavailable")
+		mockClient := &mockMetadataClient{
+			genericErr: mockErr,
+		}
+		SetMetadataClient(mockClient)
+		defer ResetMetadataClient()
+
+		st, err := GetSourceType()
+
+		assert.Error(t, err)
+		assert.Equal(t, "", st)
+		assert.Equal(t, 1, mockClient.getSourceTypeCalled)
+	})
 }

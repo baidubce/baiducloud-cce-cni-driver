@@ -70,6 +70,7 @@ func (list AddressPairList) ToIPsString() string {
 // +kubebuilder:subresource:status
 //
 // +kubebuilder:printcolumn:JSONPath=".spec.instance-id",description="",name="ID",type=string
+// +kubebuilder:printcolumn:JSONPath=".spec.hpas-id",description="",name="HPASID",type=string
 // +kubebuilder:printcolumn:JSONPath=".spec.eni.useMode",description="",name="MODE",type=string,priority=0
 // +kubebuilder:printcolumn:JSONPath=".spec.eni.instance-type",description="",name="TYPE",type=string,priority=0
 // NetResourceSet represents a node managed by CCE. It contains a specification
@@ -107,6 +108,16 @@ type NetResourceSpec struct {
 	// typically refers to the identifier used by the cloud provider or
 	// some other means of identification.
 	InstanceID string `json:"instance-id,omitempty"`
+
+	// hpasID is the identifier of the HPAS. This is different
+	// from the HPAS name which is typically the FQDN of the node. The
+	// hpasID typically refers to the identifier used by the cloud
+	// provider or some other means of identification. If the instance type
+	// is not hpas, the hpasID will be none.
+	HPASID string `json:"hpas-id,omitempty"`
+
+	// InstanceType is the type of the instance.
+	InstanceType string `json:"instance-type,omitempty"`
 
 	// Addresses is the list of all node addresses.
 	//

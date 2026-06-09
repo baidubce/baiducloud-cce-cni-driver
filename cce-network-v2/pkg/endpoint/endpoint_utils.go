@@ -17,10 +17,9 @@ package endpoint
 import (
 	"context"
 	"fmt"
-	"strings"
+	"net"
 	"time"
 
-	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	corev1 "k8s.io/api/core/v1"
@@ -29,13 +28,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/common"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	netlinkwrapper "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/netlinkwrapper"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
-	pluginManager "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/plugins/pluginmanager"
 )
 
 // GetEndpointFromCache
@@ -193,7 +192,133 @@ func getIpFromLink(netlink netlinkwrapper.NetLink, link netlink.Link, family int
 	return false, nil
 }
 
-func isThisCEPReadyForDelete(logEntry *logrus.Entry, ep *ccev2.CCEEndpoint) bool {
+// findVethInterface finds veth interface by pod name and containerID
+func findVethInterface(netlinkImpl netlinkwrapper.NetLink, podName, containerID, namespace string, logEntry *logrus.Entry, epName string) (netlink.Link, string) {
+	// generate veth name from pod name and namespace
+	vethName1 := common.VethNameForPod(podName, namespace, "veth")
+	vethLink1, err1 := netlinkImpl.LinkByName(vethName1)
+
+	// generate veth name from containerID and namespace (if containerID is available)
+	var vethName2 string
+	var vethLink2 netlink.Link
+	var err2 error
+	if containerID != "" {
+		vethName2 = common.VethNameForPod(containerID, namespace, "veth")
+		vethLink2, err2 = netlinkImpl.LinkByName(vethName2)
+	}
+
+	// use the veth that exists (prefer containerID-based veth if both exist)
+	if err2 == nil && vethLink2 != nil {
+		// containerID-based veth exists
+		return vethLink2, vethName2
+	}
+	if err1 == nil && vethLink1 != nil {
+		// podName-based veth exists
+		return vethLink1, vethName1
+	}
+
+	// neither veth exists, pod resources are not present on the node
+	logEntry.WithField("vethName1", vethName1).
+		WithField("vethName2", vethName2).
+		WithField("CCEEndpoint", epName).
+		WithField("ContainerID", containerID).
+		WithField("Error1", err1).
+		WithField("Error2", err2).
+		Debug("veth link not found by pod name or containerID, pod resources not present")
+	return nil, ""
+}
+
+// checkRoutesExistInMainTable checks if routes exist in main routing table for the given IPs.
+// It returns true if at least one route is found matching any of the IPs with the specified link index.
+// Returns an error if route listing fails.
+func checkRoutesExistInMainTable(netlinkImpl netlinkwrapper.NetLink, ips []net.IP, linkIndex int) (bool, error) {
+	if len(ips) == 0 {
+		return false, nil
+	}
+
+	// Group IPs by family to minimize route list calls
+	ipv4IPs := make([]net.IP, 0)
+	ipv6IPs := make([]net.IP, 0)
+
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		if ip.To4() != nil {
+			ipv4IPs = append(ipv4IPs, ip)
+		} else {
+			ipv6IPs = append(ipv6IPs, ip)
+		}
+	}
+
+	// Check IPv4 routes
+	if len(ipv4IPs) > 0 {
+		routes, err := netlinkImpl.RouteList(nil, netlink.FAMILY_V4)
+		if err != nil {
+			return false, fmt.Errorf("failed to list IPv4 routes: %w", err)
+		}
+
+		if found := checkRoutesForIPs(routes, ipv4IPs, linkIndex); found {
+			return true, nil
+		}
+	}
+
+	// Check IPv6 routes
+	if len(ipv6IPs) > 0 {
+		routes, err := netlinkImpl.RouteList(nil, netlink.FAMILY_V6)
+		if err != nil {
+			return false, fmt.Errorf("failed to list IPv6 routes: %w", err)
+		}
+
+		if found := checkRoutesForIPs(routes, ipv6IPs, linkIndex); found {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// checkRoutesForIPs checks if any route in the routes list matches any of the given IPs with the specified link index.
+func checkRoutesForIPs(routes []netlink.Route, ips []net.IP, linkIndex int) bool {
+	for _, route := range routes {
+		// Check if route is in main table (Table == 0 means main table)
+		if route.Table != 0 {
+			continue
+		}
+
+		// Check if route device matches the link index
+		if route.LinkIndex != linkIndex {
+			continue
+		}
+
+		// Check if route destination matches any of the IPs
+		if route.Dst != nil && route.Dst.IP != nil {
+			for _, ip := range ips {
+				if route.Dst.IP.Equal(ip) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// cleanupVethInterface deletes the veth interface
+func cleanupVethInterface(netlinkImpl netlinkwrapper.NetLink, vethLink netlink.Link, vethName string, logEntry *logrus.Entry) bool {
+	logEntry.Infof("node network resources still exist, cleaning up veth interface")
+	err := netlinkImpl.LinkDel(vethLink)
+	if err != nil {
+		logEntry.WithField("VethName", vethName).
+			WithError(err).
+			Error("failed to delete veth interface during cleanup")
+		return false
+	}
+	logEntry.WithField("VethName", vethName).
+		Infof("deleted veth interface during cleanup")
+	return true
+}
+
+func isThisCEPReadyForDelete(logEntry *logrus.Entry, ep *ccev2.CCEEndpoint, cleanupIfNotReady bool) bool {
 	isReadyForDelete := true
 
 	defer func() {
@@ -203,77 +328,65 @@ func isThisCEPReadyForDelete(logEntry *logrus.Entry, ep *ccev2.CCEEndpoint) bool
 			Infof("The state of ReadyForDelete is %v", isReadyForDelete)
 	}()
 
-	if ep.Status.Networking != nil && ep.Status.ExternalIdentifiers != nil {
-		// 0. init netlinkImpl and nsImpl from netlinkwrapper and nswrapper
-		netlinkImpl := netlinkImpl
-		nsImpl := nsImpl
-
-		// 1. check netns exists
-		netnsPath := ep.Status.ExternalIdentifiers.Netns
-		if netnsPath == "" {
-			isReadyForDelete = true
-			return isReadyForDelete
-		}
-		// The ep.Status.ExternalIdentifiers is netns,
-		// it is a path like "/var/run/netns/cni-bad2142b-a133-ec2e-f1b7-6b00ce41f023"
-		if !strings.HasPrefix(netnsPath, "/var/run/netns") {
-			isReadyForDelete = true
-			return isReadyForDelete
-		}
-
-		// 2. check ips exists in netns
-		for _, address := range ep.Status.Networking.Addressing {
-			var family int
-			eniId := address.Interface
-			ip := address.IP
-			familyStr := string(address.Family)
-			if familyStr == "4" {
-				family = netlink.FAMILY_V4
-			} else if familyStr == "6" {
-				family = netlink.FAMILY_V6
-			} else {
-				err := fmt.Errorf("unknown family: %s", familyStr)
-				logEntry.WithField("isThisCEPReadyForDelete(CurrentValue)", isReadyForDelete).
-					WithField("CCEEndpoint", ep.Name).
-					WithField("ENIID", eniId).
-					WithField("Family", familyStr).
-					WithField("IP", ip).
-					WithField("Link", pluginManager.ContainerInterfaceName).
-					WithError(err).
-					Warning("get ip from netns error")
-				continue
-			}
-			if eniId == "" || ip == "" {
-				continue
-			}
-			// check ip exists in netns
-			err := nsImpl.WithNetNSPath(netnsPath, func(netns ns.NetNS) error {
-				link, err := netlinkImpl.LinkByName(pluginManager.ContainerInterfaceName)
-				if err != nil {
-					return err
-				}
-				IsExist, err := getIpFromLink(netlinkImpl, link, family, ip)
-				if err == nil && IsExist {
-					isReadyForDelete = false
-				}
-				return err
-			})
-			if err != nil {
-				logEntry.WithField("isThisCEPReadyForDelete(CurrentValue)", isReadyForDelete).
-					WithField("CCEEndpoint", ep.Name).
-					WithField("ENIID", eniId).
-					WithField("Family", familyStr).
-					WithField("IP", ip).
-					WithField("Link", pluginManager.ContainerInterfaceName).
-					WithError(err).
-					Warning("get ip from netns error")
-			}
-			if !isReadyForDelete {
-				break
-			}
-		}
-		return isReadyForDelete
-	} else {
+	if ep.Status.Networking == nil || ep.Status.ExternalIdentifiers == nil {
 		return true
 	}
+
+	// get pod name and namespace from CEP
+	namespace, podName := GetPodNameFromCEP(ep)
+	if namespace == "" || podName == "" {
+		return true
+	}
+
+	// get containerID from CEP
+	containerID := ""
+	if ep.Spec.ExternalIdentifiers != nil {
+		containerID = ep.Spec.ExternalIdentifiers.ContainerID
+	}
+
+	// find veth interface
+	vethLink, vethName := findVethInterface(netlinkImpl, podName, containerID, namespace, logEntry, ep.Name)
+	if vethLink == nil {
+		// no veth found, ready for delete
+		return true
+	}
+
+	// extract IPs from endpoint
+	ips := make([]net.IP, 0)
+	if ep.Status.Networking != nil && len(ep.Status.Networking.Addressing) != 0 {
+		for _, address := range ep.Status.Networking.Addressing {
+			ipStr := address.IP
+			if ipStr == "" {
+				continue
+			}
+			ip := net.ParseIP(ipStr)
+			if ip != nil {
+				ips = append(ips, ip)
+			}
+		}
+	}
+
+	// check if routes exist in main routing table
+	hasRoutes, err := checkRoutesExistInMainTable(netlinkImpl, ips, vethLink.Attrs().Index)
+	if err != nil {
+		logEntry.WithError(err).Error("failed to check routes in main routing table")
+		return false
+	}
+	if !hasRoutes {
+		// no routes found, ready for delete
+		return true
+	}
+
+	// routes exist, cleanup if requested
+	if cleanupIfNotReady {
+		if !cleanupVethInterface(netlinkImpl, vethLink, vethName, logEntry) {
+			// cleanup failed
+			return false
+		}
+		// cleanup succeeded
+		return true
+	}
+
+	// routes exist and cleanup not requested
+	return false
 }

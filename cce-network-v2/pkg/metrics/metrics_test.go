@@ -225,3 +225,26 @@ func (s *MetricsSuite) TestCreateConfiguration_GivenMixedMetrics_WhenCalled_Then
 	c.Assert(config.VersionMetric, Equals, true)
 	c.Assert(len(collectors), Equals, 3)
 }
+
+// TestCreateConfiguration_GivenENIStatusMetric_WhenCalled_ThenCreatesENIStatusGauge verifies ENI status metric wiring
+func (s *MetricsSuite) TestCreateConfiguration_GivenENIStatusMetric_WhenCalled_ThenCreatesENIStatusGauge(c *C) {
+	// Preserve and restore the global ENIStatus gauge vector to avoid side effects
+	originalENIStatus := ENIStatus
+	defer func() {
+		ENIStatus = originalENIStatus
+	}()
+
+	metrics := []string{Namespace + "_" + SubsystemAgent + "_eni_status"}
+
+	_, collectors := CreateConfiguration(metrics)
+
+	c.Assert(len(collectors), Equals, 1)
+	gaugeVec, ok := collectors[0].(*prometheus.GaugeVec)
+	c.Assert(ok, Equals, true)
+	c.Assert(gaugeVec, NotNil)
+	c.Assert(ENIStatus, Equals, gaugeVec)
+
+	// Ensure the expected label set is available
+	_, err := gaugeVec.GetMetricWithLabelValues("cluster", "eni", "node", "pod", "reason")
+	c.Assert(err, IsNil)
+}

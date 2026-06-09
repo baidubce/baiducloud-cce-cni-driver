@@ -20,6 +20,8 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	osutil "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,8 +31,15 @@ var initLog = logging.NewSubysLogger("agent-eni-init-factory")
 
 const (
 	pciDevicesPath = "/sys/bus/pci/devices"
-	virtioVendorID = 0x1af4 // Virtio 设备的厂商ID
-	networkClass   = 0x0200 // 网络设备的类代码
+	virtioVendorID = 0x1af4 // Virtio device vendor ID
+	networkClass   = 0x0200 // Network device class code
+
+	// Environment variable names for metrics
+	envK8SNodeName = "K8S_NODE_NAME"
+	envPodName     = "POD_NAME"
+
+	// Default values for metrics
+	defaultUnknownValue = "unknown"
 )
 
 // eniInitFactory bce ENI provider for k8s
@@ -277,24 +286,13 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	eh.fullENIs[resource.Spec.ENI.ID] = resource
 	scopedLog := initLog.WithError(err).WithField("eni", resource.Spec.ENI.ID)
 
-	if resource.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-		scopedLog.Debugf("eni is not in use, skip status [%s]", resource.Status.VPCStatus)
-		return nil
-	}
-
-	if resource.Spec.MacAddress == "" {
-		scopedLog.Debug("mac address is empty, skip update ENI")
-		return nil
-	}
-
-	// downward compatibility with BBC models
-	// TODO 2021-03-08: remove this after BBC secondary models are deprecated
-	if resource.Spec.Type == ccev2.ENIForBBC {
-		resource.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
-	}
-
 	if !bceutils.IsAgentMgrENI(resource) {
 		scopedLog.Debugf("secondary eni %s is not created by cce, skip update ENI", resource.Spec.ENI.ID)
+		return nil
+	}
+
+	if resource.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+		scopedLog.Debugf("eni is not in use, skip status [%s]", resource.Status.VPCStatus)
 		return nil
 	}
 
@@ -304,7 +302,22 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 		} else {
 			delete(eh.localENIs, resource.Spec.ENI.ID)
 		}
+
+		setENIStatusMetric(resource)
 	}()
+
+	if resource.Spec.MacAddress == "" {
+		scopedLog.Errorf("mac address is empty, skip update ENI")
+		(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGNoMacAddress)
+		isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
+		return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
+	}
+
+	// downward compatibility with BBC models
+	// TODO 2021-03-08: remove this after BBC secondary models are deprecated
+	if resource.Spec.Type == ccev2.ENIForBBC {
+		resource.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
+	}
 
 	eniLink, err := newENILink(resource, eh.release)
 	if err != nil {
@@ -619,4 +632,39 @@ func shouldRenameENI(resource *ccev2.ENI) bool {
 		return false
 	}
 	return true
+}
+
+// setENIStatusMetric sets the ENI status metric based on the resource status
+// Status: 0=normal (ReadyOnNode), 1=abnormal (other states or empty state)
+func setENIStatusMetric(resource *ccev2.ENI) {
+	clusterID := option.Config.ClusterID
+	if clusterID == "" {
+		clusterID = defaultUnknownValue
+	}
+
+	eniID := resource.Spec.ENI.ID
+	if eniID == "" {
+		eniID = defaultUnknownValue
+	}
+
+	nodeName := os.Getenv(envK8SNodeName)
+	if nodeName == "" {
+		nodeName = defaultUnknownValue
+	}
+
+	podName := os.Getenv(envPodName)
+	if podName == "" {
+		podName = defaultUnknownValue
+	}
+
+	// Determine status: 0=normal, 1=abnormal
+	// Only ReadyOnNode is considered normal, all other states (including empty) are abnormal
+	status := float64(0)
+	reason := ""
+	if resource.Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
+		status = 1
+		reason = string(resource.Status.CCEStatus)
+	}
+
+	metrics.ENIStatus.WithLabelValues(clusterID, eniID, nodeName, podName, reason).Set(status)
 }

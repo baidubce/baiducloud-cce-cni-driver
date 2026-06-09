@@ -52,7 +52,8 @@ func NewMockNrs(name, instanceType, useMode string, subnetIDs []string) *ccev2.N
 			},
 		},
 		Spec: ccev2.NetResourceSpec{
-			InstanceID: AppendHashString("i"),
+			InstanceType: instanceType,
+			InstanceID:   AppendHashString("i"),
 			ENI: &api.ENISpec{
 				SubnetIDs:                 subnetIDs,
 				AvailabilityZone:          "zoneD",

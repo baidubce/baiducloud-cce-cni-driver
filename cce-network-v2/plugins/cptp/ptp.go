@@ -15,8 +15,6 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/common"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/sirupsen/logrus"
@@ -188,7 +187,7 @@ func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, 
 	err := netns.Do(func(hostNS ns.NetNS) error {
 		var hostInterfaceNameTmp string
 
-		hostInterfaceNameTmp = vethNameForPod(podname, namespace, "veth")
+		hostInterfaceNameTmp = common.VethNameForPod(podname, namespace, "veth")
 		hostVeth, contVeth0, err := ip.SetupVethWithName(ifName, hostInterfaceNameTmp, mtu, "", hostNS)
 		if err != nil {
 			return err
@@ -704,16 +703,6 @@ func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdAr
 
 	// Return the IPAM result for further use
 	return result, nil
-}
-
-// VethNameForPod return host-side veth name for pod
-// max veth length is 15
-func vethNameForPod(name, namespace, prefix string) string {
-	// A SHA1 is always 20 bytes long, and so is sufficient for generating the
-	// veth name and mac addr.
-	h := sha1.New()
-	h.Write([]byte(namespace + "." + name))
-	return fmt.Sprintf("%s%s", prefix, hex.EncodeToString(h.Sum(nil))[:11])
 }
 
 func loadK8SArgs(envArgs string) (*K8SArgs, error) {

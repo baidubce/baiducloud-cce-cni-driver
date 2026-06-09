@@ -62,6 +62,7 @@ type IPAMAllocator interface {
 	AllocateIPString(ipAddr, owner string) error
 	AllocateIPWithoutSyncUpstream(ip net.IP, owner string) (result *AllocationResult, err error)
 	ReleaseIPString(releaseArg string) (err error)
+	ReleaseIPWithOwner(ipStr string, owner string) error
 	AllocateNextWithExpiration(family, owner string, timeout time.Duration) (ipv4Result, ipv6Result *AllocationResult, err error)
 	AllocateNext(family, owner string) (ipv4Result, ipv6Result *AllocationResult, err error)
 	AllocateNextFamilyWithoutSyncUpstream(family Family, owner string) (result *AllocationResult, err error)
@@ -355,6 +356,31 @@ func (ipam *IPAM) ReleaseIPString(releaseArg string) (err error) {
 		}
 	}
 	return
+}
+
+// ReleaseIPWithOwner verifies that the IP matches the owner before releasing it.
+// It only releases the IP if the owner associated with the IP matches the provided owner.
+// Returns an error if the IP is not found, or if the owner doesn't match.
+func (ipam *IPAM) ReleaseIPWithOwner(ipStr string, owner string) error {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return fmt.Errorf("invalid IP address: %s", ipStr)
+	}
+
+	ipam.allocatorMutex.Lock()
+	defer ipam.allocatorMutex.Unlock()
+
+	storedOwner, exists := ipam.owner[ip.String()]
+	if !exists {
+		return fmt.Errorf("IP %s is not allocated", ipStr)
+	}
+
+	if storedOwner != owner {
+		return fmt.Errorf("IP %s owner mismatch: expected %s, got %s", ipStr, owner, storedOwner)
+	}
+
+	// Owner matches, proceed with release using the locked version
+	return ipam.releaseIPLocked(ip)
 }
 
 // Dump dumps the list of allocated IP addresses

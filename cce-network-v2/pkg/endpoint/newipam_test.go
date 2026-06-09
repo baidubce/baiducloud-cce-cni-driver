@@ -140,18 +140,18 @@ func TestNewIPAM_GivenNormalParameters_WhenCreated_ThenReturnsValidIPAMServer(t 
 	mockMtu := &mockMtuConfiguration{}
 
 	// Setup expectations - add all possible method calls
-	mockConfig.On("IPv4Enabled").Return(true)
-	mockConfig.On("IPv6Enabled").Return(false)
-	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool)
-	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute)
-	mockConfig.On("HealthCheckingEnabled").Return(true)
-	mockConfig.On("UnreachableRoutesEnabled").Return(false)
-	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil)
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
-	mockOwner.On("ResourceType").Return("node")
-	mockOwner.On("UpdateNetResourceSetResource")
-	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything)
-	mockMtu.On("GetDeviceMTU").Return(1500)
+	mockConfig.On("IPv4Enabled").Return(true).Maybe()
+	mockConfig.On("IPv6Enabled").Return(false).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
+	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute).Maybe()
+	mockConfig.On("HealthCheckingEnabled").Return(true).Maybe()
+	mockConfig.On("UnreachableRoutesEnabled").Return(false).Maybe()
+	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil).Maybe()
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockOwner.On("ResourceType").Return("node").Maybe()
+	mockOwner.On("UpdateNetResourceSetResource").Maybe()
+	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything).Maybe()
+	mockMtu.On("GetDeviceMTU").Return(1500).Maybe()
 
 	// Create watcher
 	watcher := watchers.NewK8sWatcher()
@@ -208,19 +208,19 @@ func TestNewIPAM_GivenRDMAParameters_WhenCreated_ThenReturnsValidIPAMServerWithR
 	mockMtu := &mockMtuConfiguration{}
 
 	// Setup expectations - allow any number of calls to handle background goroutines
-	mockConfig.On("IPv4Enabled").Return(true)
-	mockConfig.On("IPv6Enabled").Return(false)
-	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool)
+	mockConfig.On("IPv4Enabled").Return(true).Maybe()
+	mockConfig.On("IPv6Enabled").Return(false).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
 	// Use mock.AnythingOfType to match any call to GetCCEEndpointGC
-	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute)
-	mockConfig.On("HealthCheckingEnabled").Return(true)
-	mockConfig.On("UnreachableRoutesEnabled").Return(false)
-	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil)
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
-	mockOwner.On("ResourceType").Return("node")
-	mockOwner.On("UpdateNetResourceSetResource")
-	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything)
-	mockMtu.On("GetDeviceMTU").Return(1500)
+	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute).Maybe()
+	mockConfig.On("HealthCheckingEnabled").Return(true).Maybe()
+	mockConfig.On("UnreachableRoutesEnabled").Return(false).Maybe()
+	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil).Maybe()
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockOwner.On("ResourceType").Return("node").Maybe()
+	mockOwner.On("UpdateNetResourceSetResource").Maybe()
+	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything).Maybe()
+	mockMtu.On("GetDeviceMTU").Return(1500).Maybe()
 
 	// Create watcher
 	watcher := watchers.NewK8sWatcher()
@@ -275,18 +275,18 @@ func TestNewIPAM_Simple(t *testing.T) {
 	mockMtu := &mockMtuConfiguration{}
 
 	// Setup all possible expectations to avoid unexpected method calls
-	mockConfig.On("IPv4Enabled").Return(true)
-	mockConfig.On("IPv6Enabled").Return(false)
-	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool)
-	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute)
-	mockConfig.On("HealthCheckingEnabled").Return(true)
-	mockConfig.On("UnreachableRoutesEnabled").Return(false)
-	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil)
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
-	mockOwner.On("ResourceType").Return("node")
-	mockOwner.On("UpdateNetResourceSetResource")
-	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything)
-	mockMtu.On("GetDeviceMTU").Return(1500)
+	mockConfig.On("IPv4Enabled").Return(true).Maybe()
+	mockConfig.On("IPv6Enabled").Return(false).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
+	mockConfig.On("GetCCEEndpointGC").Return(5 * time.Minute).Maybe()
+	mockConfig.On("HealthCheckingEnabled").Return(true).Maybe()
+	mockConfig.On("UnreachableRoutesEnabled").Return(false).Maybe()
+	mockConfig.On("GetIPv4NativeRoutingCIDR").Return(nil).Maybe()
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockOwner.On("ResourceType").Return("node").Maybe()
+	mockOwner.On("UpdateNetResourceSetResource").Maybe()
+	mockOwner.On("LocalAllocCIDRsUpdated", mock.Anything, mock.Anything).Maybe()
+	mockMtu.On("GetDeviceMTU").Return(1500).Maybe()
 
 	// Create watcher
 	watcher := watchers.NewK8sWatcher()
@@ -396,7 +396,8 @@ func TestADD_RDMA_Logic(t *testing.T) {
 	mockConfig := &mockIPAMConfiguration{}
 
 	// Setup minimal expectations
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
 
 	// Test case 1: Normal IPAM with RDMA pod (covers lines 307-309)
 	allocator1 := &EndpointAllocator{
@@ -489,8 +490,8 @@ func TestADD_CoverLines295to316(t *testing.T) {
 
 	// Setup mocks
 	mockConfig := &mockIPAMConfiguration{}
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
-	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool)
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
 
 	// Create watcher and pod client
 	watcher := watchers.NewK8sWatcher()
@@ -533,7 +534,8 @@ func TestADD_Lines295to316_Coverage(t *testing.T) {
 
 	// Setup mocks
 	mockConfig := &mockIPAMConfiguration{}
-	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute)
+	mockConfig.On("GetFixedIPTimeout").Return(1 * time.Minute).Maybe()
+	mockConfig.On("IPAMMode").Return(ipamOption.IPAMClusterPool).Maybe()
 
 	// Create allocator that will trigger the RDMA logic
 	allocator := &EndpointAllocator{

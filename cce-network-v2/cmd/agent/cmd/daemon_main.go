@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -711,6 +712,15 @@ func runDaemon() {
 	defer srv.Shutdown()
 
 	srv.ConfigureAPI()
+
+	// Attach /metrics to the existing health HTTP server to reuse the same port
+	// Reuse shared helper from metrics to avoid duplicating handler setup logic.
+	{
+		mux := http.NewServeMux()
+		mux.Handle("/", srv.GetHandler())
+		metrics.AttachHandler(mux, "/metrics")
+		srv.SetHandler(mux)
+	}
 	bootstrapStats.initAPI.End(true)
 
 	log.WithField("bootstrapTime", time.Since(bootstrapTimestamp)).

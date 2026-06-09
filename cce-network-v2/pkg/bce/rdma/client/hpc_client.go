@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	bceclound "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
@@ -30,7 +31,7 @@ func (c *HpcClient) ListEnis(ctx context.Context, _, instanceID string) ([]EniRe
 	}
 
 	var hpcEniList *hpc.EniList
-	if instanceType == string(metadata.InstanceTypeExHPAS) {
+	if instanceType == string(metadata.InstanceTypeExHPAS) && !operatorOption.Config.HPASStanderd {
 		hpcEniList, err = c.hpasCloud.GetHPCEniID(ctx, instanceID)
 	} else {
 		hpcEniList, err = c.cloud.GetHPCEniID(ctx, instanceID)

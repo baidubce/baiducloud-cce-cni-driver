@@ -440,6 +440,7 @@ type ModifyInstancePasswordArgs struct {
 
 type BatchAddIpArgs struct {
 	InstanceId                     string   `json:"instanceId"`
+	DeviceType                     string   `json:"instanceType,omitempty"`
 	PrivateIps                     []string `json:"privateIps"`
 	SecondaryPrivateIpAddressCount int      `json:"secondaryPrivateIpAddressCount"`
 	AllocateMultiIpv6Addr          bool     `json:"allocateMultiIpv6Addr"`
@@ -448,6 +449,7 @@ type BatchAddIpArgs struct {
 
 type BatchAddIpCrossSubnetArgs struct {
 	InstanceId            string                 `json:"instanceId"`
+	DeviceType            string                 `json:"instanceType,omitempty"`
 	SingleEniAndSubentIps []SingleEniAndSubentIp `json:"singleEniAndSubentIps"`
 	ClientToken           string                 `json:"-"`
 }
@@ -470,6 +472,7 @@ type BatchAddIpResponse struct {
 
 type BatchDelIpArgs struct {
 	InstanceId  string   `json:"instanceId"`
+	DeviceType  string   `json:"instanceType,omitempty"`
 	PrivateIps  []string `json:"privateIps"`
 	ClientToken string   `json:"-"`
 }

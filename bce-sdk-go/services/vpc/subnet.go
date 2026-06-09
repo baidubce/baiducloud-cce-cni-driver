@@ -76,6 +76,7 @@ func (c *Client) ListSubnets(args *ListSubnetArgs) (*ListSubnetResult, error) {
 		WithQueryParamFilter("vpcId", args.VpcId).
 		WithQueryParamFilter("zoneName", args.ZoneName).
 		WithQueryParamFilter("subnetType", string(args.SubnetType)).
+		WithQueryParamFilter("subnetIds", args.SubnetIds).
 		WithQueryParamFilter("maxKeys", strconv.Itoa(args.MaxKeys)).
 		WithResult(result).
 		Do()

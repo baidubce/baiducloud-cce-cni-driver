@@ -76,7 +76,9 @@ type Interface interface {
 	DeleteRouteRule(ctx context.Context, routeID string) error
 
 	DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subnet, error)
-	ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error)
+	// ListSubnets returns full pagination info including IsTruncated and NextMarker
+	// to support proper pagination when listing subnets
+	ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error)
 
 	ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error)
 	ListAclEntrys(ctx context.Context, vpcID string) ([]vpc.AclEntry, error)

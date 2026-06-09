@@ -713,6 +713,11 @@ func (m *MockIPAMAllocator) ReleaseIPString(owner string) error {
 	return args.Error(0)
 }
 
+func (m *MockIPAMAllocator) ReleaseIPWithOwner(ipStr string, owner string) error {
+	args := m.Called(ipStr, owner)
+	return args.Error(0)
+}
+
 func (m *MockIPAMAllocator) Dump() (allocv4 map[string]string, allocv6 map[string]string, status string) {
 	args := m.Called()
 	return args.Get(0).(map[string]string), args.Get(1).(map[string]string), args.String(2)
@@ -784,6 +789,39 @@ func TestRestoreEndpointCIDRMismatch(t *testing.T) {
 
 	// Verify all expectations were met
 	mockIPAM.AssertExpectations(t)
+}
+
+func TestEndpointAllocatorResetReleaseHandshakeState(t *testing.T) {
+	oldResetFunc := resetMarkedReleaseIPs
+	t.Cleanup(func() {
+		resetMarkedReleaseIPs = oldResetFunc
+	})
+
+	t.Run("successful reset", func(t *testing.T) {
+		callCount := 0
+		resetMarkedReleaseIPs = func(nrsName string) (int, error) {
+			callCount++
+			assert.Equal(t, "test-nrs", nrsName)
+			return 2, nil
+		}
+
+		allocator := &EndpointAllocator{nrsName: "test-nrs"}
+		allocator.resetReleaseHandshakeState()
+		require.Equal(t, 1, callCount)
+	})
+
+	t.Run("reset error is handled", func(t *testing.T) {
+		callCount := 0
+		resetMarkedReleaseIPs = func(nrsName string) (int, error) {
+			callCount++
+			assert.Equal(t, "error-nrs", nrsName)
+			return 0, fmt.Errorf("boom")
+		}
+
+		allocator := &EndpointAllocator{nrsName: "error-nrs"}
+		allocator.resetReleaseHandshakeState()
+		require.Equal(t, 1, callCount)
+	})
 }
 
 // CCEEndpointClientInterface defines the interface we need to mock

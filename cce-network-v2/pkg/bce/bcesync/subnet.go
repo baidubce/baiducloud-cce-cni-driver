@@ -2,7 +2,9 @@ package bcesync
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
@@ -62,26 +64,128 @@ func (ss *subnetSyncher) StartSubnetSyncher(ctx context.Context, updater syncer.
 }
 
 // sync subnet from vpc
-// don't use the bceclient.ListSubnets method to get all subnets case by
-// this method can't get available ip num of subnet
+// Use ListSubnets method with subnetIds parameter to get subnets in batch
+// This is more efficient than querying by VPC as it only returns the subnets we need
 func (ss *subnetSyncher) syncSubnet(ctx context.Context) (result []vpc.Subnet, err error) {
 	cluserSubnets, err := ss.updater.Lister().List(labels.Everything())
 	if err != nil {
 		return
 	}
+
+	// If no cluster subnets, return empty result
+	if len(cluserSubnets) == 0 {
+		return
+	}
+
+	// Collect all subnet IDs that need to be queried
+	var subnetIDs []string
 	for i := range cluserSubnets {
 		if !cluserSubnets[i].Status.Enable && cluserSubnets[i].Status.Reason != "" {
 			continue
 		}
-		sbn, err := ss.bceclient.DescribeSubnet(ctx, cluserSubnets[i].Name)
-		if err != nil {
-			log.WithField(taskLogField, subnetControllerName).WithField("subnetId", cluserSubnets[i].Name).WithError(err).Errorf("failed to describe subnet")
-			continue
-		}
-		result = append(result, *sbn)
+		subnetIDs = append(subnetIDs, cluserSubnets[i].Name)
 	}
+
+	if len(subnetIDs) == 0 {
+		return
+	}
+
+	log.WithField(taskLogField, subnetControllerName).
+		WithField("totalSubnets", len(subnetIDs)).
+		Debug("syncing subnets using batch query with subnetIds parameter")
+
+	// Use ListSubnets with subnetIds parameter to get all subnets in batch
+	// API supports multiple subnet IDs separated by comma
+	result, err = ss.listSubnetsByIDs(ctx, subnetIDs)
+	if err != nil {
+		log.WithField(taskLogField, subnetControllerName).
+			WithField("totalSubnets", len(subnetIDs)).
+			WithError(err).
+			Errorf("failed to list subnets by IDs")
+		return
+	}
+
+	log.WithField(taskLogField, subnetControllerName).
+		WithField("requested", len(subnetIDs)).
+		WithField("found", len(result)).
+		Debug("completed subnet batch query using subnetIds parameter")
+
 	resyncBSM()
 	return
+}
+
+// listSubnetsByIDs lists subnets by their IDs using the subnetIds parameter
+// This is the most efficient way as it only returns the subnets we need without filtering
+// API supports multiple subnet IDs separated by comma: subnetIds=sbn-xxx,sbn-yyy,sbn-zzz
+// Note: We limit to 100 subnet IDs per request, and API maxKeys=1000, so pagination is not needed
+func (ss *subnetSyncher) listSubnetsByIDs(ctx context.Context, subnetIDs []string) ([]vpc.Subnet, error) {
+	if len(subnetIDs) == 0 {
+		return nil, nil
+	}
+
+	// Split into batches if needed (conservative limit: 100 IDs per request)
+	// Since we limit to 100 IDs and API maxKeys=1000, no pagination is needed
+	const maxSubnetIDsPerRequest = 100
+	var result []vpc.Subnet
+
+	for i := 0; i < len(subnetIDs); i += maxSubnetIDsPerRequest {
+		end := i + maxSubnetIDsPerRequest
+		if end > len(subnetIDs) {
+			end = len(subnetIDs)
+		}
+		batch := subnetIDs[i:end]
+
+		// Join subnet IDs with comma
+		subnetIDsParam := strings.Join(batch, ",")
+
+		log.WithField(taskLogField, subnetControllerName).
+			WithField("batchSize", len(batch)).
+			WithField("totalBatches", (len(subnetIDs)+maxSubnetIDsPerRequest-1)/maxSubnetIDsPerRequest).
+			WithField("currentBatch", i/maxSubnetIDsPerRequest+1).
+			Debug("querying subnets by IDs")
+
+		// Call API with subnetIds parameter
+		listResult, err := ss.bceclient.ListSubnets(ctx, &vpc.ListSubnetArgs{
+			SubnetIds: subnetIDsParam,
+			MaxKeys:   1000, // API limit, much larger than our batch size
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list subnets by IDs, index starting from 0: (index %d-%d, IDs: %v): %w",
+				i, end-1, batch, err)
+		}
+
+		result = append(result, listResult.Subnets...)
+
+		log.WithField(taskLogField, subnetControllerName).
+			WithField("batchSize", len(batch)).
+			WithField("returned", len(listResult.Subnets)).
+			Debug("completed batch query")
+	}
+
+	// Check if we got all requested subnets
+	if len(result) != len(subnetIDs) {
+		foundIDs := make(map[string]bool)
+		for _, subnet := range result {
+			foundIDs[subnet.SubnetId] = true
+		}
+
+		var missingIDs []string
+		for _, reqID := range subnetIDs {
+			if !foundIDs[reqID] {
+				missingIDs = append(missingIDs, reqID)
+			}
+		}
+
+		if len(missingIDs) > 0 {
+			log.WithField(taskLogField, subnetControllerName).
+				WithField("requested", len(subnetIDs)).
+				WithField("found", len(result)).
+				WithField("missing", missingIDs).
+				Warning("some requested subnets not found")
+		}
+	}
+
+	return result, nil
 }
 
 // Create Process synchronization of new subnets

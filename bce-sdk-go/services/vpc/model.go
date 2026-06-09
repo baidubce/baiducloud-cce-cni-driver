@@ -221,6 +221,7 @@ type ListSubnetArgs struct {
 	VpcId      string
 	ZoneName   string
 	SubnetType SubnetType
+	SubnetIds  string // 指定查询的子网，多个子网id用,分割
 }
 
 // ListSubnetResult defines the structure of the output parameters for the ListSubnet api

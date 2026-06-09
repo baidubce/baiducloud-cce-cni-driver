@@ -167,6 +167,17 @@ spec:
                   InstanceID typically refers to the identifier used by the cloud
                   provider or some other means of identification.
                 type: string
+              hpas-id:
+                description: hpasID is the identifier of the HPAS. This is different
+                  from the HPAS name which is typically the FQDN of the node. The
+                  hpasID typically refers to the identifier used by the cloud
+                  provider or some other means of identification. If the instance type
+                  is not hpas, the hpasID will be none.
+                type: string
+              instance-type:
+                description: InstanceType is the type of the instance. Different from instance-type
+                  in spec.ENI, this is turely instance-type.
+                type: string
               ipam:
                 description: IPAM is the address management specification. This section
                   can be populated by a user or it can be automatically populated

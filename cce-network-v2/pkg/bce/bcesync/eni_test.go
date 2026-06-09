@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/baidubce/bce-sdk-go/services/bbc"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -24,12 +26,12 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
-	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
 
 type mockBCEClient struct {
@@ -94,6 +96,41 @@ func TestRemoveENI_InuseStatus(t *testing.T) {
 
 	err := removeENI(es, eniObj)
 	assert.NoError(t, err)
+
+	mockClient.AssertExpectations(t)
+	mockUpdater.AssertExpectations(t)
+}
+
+func TestRemoveENI_GivenInuse_WhenGetNrsTypeFails_ThenReturnError(t *testing.T) {
+	mockClient := new(mockBCEClient)
+	mockUpdater := new(mockENIUpdater)
+
+	es := &eniSyncher{
+		bceclient: mockClient,
+		updater:   mockUpdater,
+	}
+
+	eniObj := &ccev2.ENI{
+		Spec: ccev2.ENISpec{
+			ENI: models.ENI{
+				InstanceID: "test-instance",
+			},
+		},
+	}
+
+	mockClient.On("StatENI", mock.Anything, eniObj.Name).Return(&enisdk.Eni{
+		Status: string(ccev2.VPCENIStatusInuse),
+	}, nil)
+
+	expectedErr := errors.New("mock get nrs type failed")
+	patches := gomonkey.ApplyFunc(bceutils.GetNrsTypeByInstanceID, func(instanceID string) (string, error) {
+		return "", expectedErr
+	})
+	defer patches.Reset()
+
+	err := removeENI(es, eniObj)
+	assert.Error(t, err)
+	assert.Equal(t, expectedErr, err)
 
 	mockClient.AssertExpectations(t)
 	mockUpdater.AssertExpectations(t)

@@ -323,7 +323,7 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 			allENIId = append(allENIId, e.Name)
 
 			// underlay-RDMA and e-RDMA(ERI) is need to check ENI VPCStatus
-			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse || e.Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
 				return nil
 			}
 
@@ -506,6 +506,17 @@ func (n *bceRDMANetResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 		}
 		eni = eni.DeepCopy()
 
+		effectiveInstanceId, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+		if err != nil {
+			return fmt.Errorf("get effective instance id failed: %v", err)
+		}
+
+		if eni.Spec.InstanceID != effectiveInstanceId ||
+			eni.Labels[k8s.LabelInstanceID] != effectiveInstanceId {
+			eni.Spec.InstanceID = effectiveInstanceId
+			eni.Labels[k8s.LabelInstanceID] = effectiveInstanceId
+		}
+
 		var (
 			ipv4ToAllocate = 0
 			ipv6ToAllocate = 0
@@ -586,6 +597,7 @@ func (n *bceRDMANetResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeNormal, "AllocateIPsSuccess",
 			"allocate RDMA IPs %d on NRS %s success", ipv4PaticalToAllocate, n.k8sObj.Name) // IPv6 is not supported
 
+		log.Infof("update eni %s from AllocateIPs", eni.Name)
 		return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 			eni.Spec.ENI.PrivateIPSet = appenUniqueElement(eni.Spec.PrivateIPSet, ipv4AllocatedSet)
 			eni.Spec.ENI.IPV6PrivateIPSet = appenUniqueElement(eni.Spec.IPV6PrivateIPSet, ipv6AllocatedSet)
@@ -858,6 +870,7 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 		return nil, fmt.Errorf("both IPv4 and IPv6 release failed: IPv4 error: %v, IPv6 error: %v", ipv4Err, ipv6Err)
 	}
 
+	log.Infof("update eni %s from Release", eni.Name)
 	// 3. update IP on eni
 	err = n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 		var (

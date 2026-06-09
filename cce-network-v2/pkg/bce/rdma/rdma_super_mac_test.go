@@ -16,7 +16,7 @@ package rdma
 
 import (
 	"context"
-	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,10 +24,12 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	fakev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/clientset/versioned/typed/cce.baidubce.com/v2/fake"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 )
 
@@ -121,13 +123,12 @@ func TestUpdateERIMacAddressAnnotation_GivenPatchFailure_WhenUpdate_ThenRetryAnd
 	newMac := "aa:bb:cc:dd:ee:ff"
 	scopedLog := logrus.NewEntry(logrus.New())
 
-	conditionExecuted := false
+	pollCalled := false
 	// Mock wait.PollImmediate to simulate retry behavior with failures
 	patches := gomonkey.ApplyFunc(wait.PollImmediate, func(interval, timeout time.Duration, condition wait.ConditionFunc) error {
-		conditionExecuted = true
-
+		pollCalled = true
 		// Return timeout error to simulate failure
-		return errors.New("timeout")
+		return wait.ErrWaitTimeout
 	})
 	defer patches.Reset()
 
@@ -135,7 +136,7 @@ func TestUpdateERIMacAddressAnnotation_GivenPatchFailure_WhenUpdate_ThenRetryAnd
 	nrs.updateERIMacAddressAnnotation(ctx, newMac, scopedLog)
 
 	// Assert
-	assert.True(t, conditionExecuted, "Condition function should be executed")
+	assert.True(t, pollCalled, "PollImmediate should be called")
 }
 
 // TestUpdateERIMacAddressAnnotation_GivenContextCancellation_WhenUpdate_ThenHandleGracefully tests context cancellation
@@ -178,13 +179,13 @@ func TestUpdateERIMacAddressAnnotation_GivenSimpleSuccess_WhenUpdate_ThenPatchSu
 		},
 	}
 
-	// Mock wait.PollImmediate to simulate successful patch without actually calling k8s API
-	patches := gomonkey.ApplyFunc(wait.PollImmediate, func(interval, timeout time.Duration, condition wait.ConditionFunc) error {
-		// Simulate successful patch by directly updating the local object
-		nrs.k8sObj = updatedNRS
-		// Return success immediately without calling the condition function
-		return nil
-	})
+	// Mock NetResourceSets().Patch to return the updated object immediately so the patch loop can exit
+	patches := gomonkey.ApplyMethod(reflect.TypeOf(k8s.CCEClient().CceV2().NetResourceSets()), "Patch",
+		func(_ *fakev2.FakeNetResourceSets, ctx context.Context, name string, pt types.PatchType,
+			data []byte, opts metav1.PatchOptions, subresources ...string) (*ccev2.NetResourceSet, error) {
+			assert.Equal(t, nrs.k8sObj.Name, name, "Patch should target the current NRS")
+			return updatedNRS, nil
+		})
 	defer patches.Reset()
 
 	// Act

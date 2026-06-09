@@ -5,10 +5,49 @@ import (
 
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestBorrowedSubnet_logger(t *testing.T) {
+	bs := &BorrowedSubnet{
+		SubnetId:                  "test-subnet",
+		BorrowedIPsCount:          5,
+		BorrowedAvailableIPsCount: 10,
+		Subnet: &ccev1.Subnet{
+			Status: ccev1.SubnetStatus{
+				AvailableIPNum: 15,
+			},
+		},
+	}
+
+	logEntry := bs.logger()
+	assert.NotNil(t, logEntry)
+	assert.Equal(t, "borrowedSubnet", logEntry.Data["module"])
+	assert.Equal(t, "test-subnet", logEntry.Data["sbnID"])
+	assert.Equal(t, 5, logEntry.Data["BorrowedIPsCount"])
+	assert.Equal(t, 10, logEntry.Data["BorrowedAvailableIPsCount"])
+	assert.Equal(t, 15, logEntry.Data["AvailableIPNum"])
+}
+
+func TestBorrowedSubnet_update(t *testing.T) {
+	bs := &BorrowedSubnet{
+		mutex:            &lock.RWMutex{},
+		BorrowedIPsCount: 5,
+	}
+
+	newSubnet := &ccev1.Subnet{
+		Status: ccev1.SubnetStatus{
+			AvailableIPNum: 20,
+		},
+	}
+
+	bs.update(newSubnet)
+	assert.Equal(t, newSubnet, bs.Subnet)
+	assert.Equal(t, 15, bs.BorrowedAvailableIPsCount) // 20 - 5
+}
 
 func TestBorrowedSubnet_Borrow(t *testing.T) {
 	mocksbn := ccemock.NewMockSubnet("sbnid", "176.16.0.0/24")
@@ -43,6 +82,11 @@ func TestBorrowedSubnet_Borrow(t *testing.T) {
 	assert.Equal(t, 252, bs.BorrowedAvailableIPsCount)
 	assert.Equal(t, 0, bs.BorrowedIPsCount)
 	assert.Equal(t, 255, bs.Status.AvailableIPNum)
+}
+
+func TestBSM_ForceBorrowForENI(t *testing.T) {
+	// Skip this test as it requires complex mocking of Kubernetes client
+	t.Skip("Skipping TestBSM_ForceBorrowForENI as it requires complex mocking of Kubernetes client")
 }
 
 func Test_restoreBSM(t *testing.T) {

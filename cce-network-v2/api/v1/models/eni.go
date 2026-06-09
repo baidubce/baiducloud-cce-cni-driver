@@ -51,6 +51,8 @@ type ENI struct {
 	//
 	InstanceID string `json:"instanceID,omitempty"`
 
+	DeviceType string `json:"instanceType,omitempty"`
+
 	// ipv6 private IP set
 	IPV6PrivateIPSet []*PrivateIP `json:"ipv6PrivateIPSet,omitempty"`
 

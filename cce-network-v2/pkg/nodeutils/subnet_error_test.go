@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -42,7 +43,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{"subnet-1", "subnet-2"},
 			nodeName:        "node-1",
 			expectedCode:    ccev2.ErrorCodeNoAvailableSubnet,
-			expectedReason:  ReasonNoAvailableSubnet,
+			expectedReason:  watchers.ReasonNoAvailableSubnet,
 			expectedMessage: "subnets [[subnet-1 subnet-2]] are not available for node node-1",
 		},
 		{
@@ -51,7 +52,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{"subnet-1"},
 			nodeName:        "node-1",
 			expectedCode:    ccev2.ErrorCodeNoAvailableSubnet,
-			expectedReason:  ReasonSubnetZoneMismatch,
+			expectedReason:  watchers.ReasonSubnetZoneMismatch,
 			expectedMessage: "zone mismatch for node node-1: no subnets available in required zone zone-a",
 		},
 		{
@@ -60,7 +61,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{"subnet-1"},
 			nodeName:        "node-1",
 			expectedCode:    ccev2.ErrorCodeENISubnetNoMoreIP,
-			expectedReason:  ReasonSubnetInsufficientIPs,
+			expectedReason:  watchers.ReasonSubnetInsufficientIPs,
 			expectedMessage: "insufficient IPs for node node-1: insufficient IPs in zone zone-a subnets [subnet-1], required 5 IPs",
 		},
 		{
@@ -69,7 +70,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{"subnet-1"},
 			nodeName:        "node-1",
 			expectedCode:    ccev2.ErrorCodeNoAvailableSubnet,
-			expectedReason:  ReasonNoAvailableSubnet,
+			expectedReason:  watchers.ReasonNoAvailableSubnet,
 			expectedMessage: "subnets not available for node node-1: some other error",
 		},
 		{
@@ -78,7 +79,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{},
 			nodeName:        "node-1",
 			expectedCode:    ccev2.ErrorCodeNoAvailableSubnet,
-			expectedReason:  ReasonNoAvailableSubnet,
+			expectedReason:  watchers.ReasonNoAvailableSubnet,
 			expectedMessage: "subnets [[]] are not available for node node-1",
 		},
 		{
@@ -87,7 +88,7 @@ func TestCategorizeSubnetError(t *testing.T) {
 			subnetIDs:       []string{"subnet-1"},
 			nodeName:        "",
 			expectedCode:    ccev2.ErrorCodeNoAvailableSubnet,
-			expectedReason:  ReasonNoAvailableSubnet,
+			expectedReason:  watchers.ReasonNoAvailableSubnet,
 			expectedMessage: "subnets [[subnet-1]] are not available for node ",
 		},
 	}

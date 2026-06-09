@@ -93,6 +93,9 @@ func (c *Client) listEniAndEris(args *eni.ListEniArgs) (*ListEniResult, error) {
 		WithQueryParamFilter("name", args.Name).
 		WithQueryParamFilter("marker", args.Marker).
 		WithQueryParamFilter("maxKeys", strconv.Itoa(args.MaxKeys))
+	if args.DeviceType != "" {
+		builder.WithQueryParamFilter("deviceType", args.DeviceType)
+	}
 
 	if len(args.PrivateIpAddress) != 0 {
 		builder.WithQueryParam("privateIpAddress",

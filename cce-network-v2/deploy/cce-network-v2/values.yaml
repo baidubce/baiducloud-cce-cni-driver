@@ -246,7 +246,7 @@ ccedConfig:
   # vpc 资源同步周期
   resource-resync-interval: 10s
   # eni 资源同步周期
-  resource-eni-resync-interval: 5s
+  resource-eni-resync-interval: 30s
   # 资源重新同步的并发协程数
   resource-resync-workers: 64
   nrs-resource-resync-workers: 1000

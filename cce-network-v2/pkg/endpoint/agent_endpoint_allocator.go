@@ -44,6 +44,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
@@ -53,6 +54,7 @@ import (
 var (
 	allocatorComponentName = "cce-ipam-endpoint-allocator"
 	allocatorLog           = logging.DefaultLogger.WithField(logfields.LogSubsys, allocatorComponentName)
+	resetMarkedReleaseIPs  = ipam.ResetMarkedForReleaseIPs
 )
 
 type rdmaEndpointAllocatorAttr struct {
@@ -109,6 +111,10 @@ func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primar
 				DoFunc:      gcer.gc,
 			})
 	}()
+
+	// Start Pod tracker cleaner for observability metrics
+	StartPodTrackerCleaner()
+
 	return e
 }
 
@@ -122,6 +128,28 @@ func (e *EndpointAllocator) DebugStatus() string {
 
 func (e *EndpointAllocator) RestoreFinished() {
 	e.dynamicIPAM.RestoreFinished()
+}
+
+func (e *EndpointAllocator) resetReleaseHandshakeState() {
+	if e == nil || resetMarkedReleaseIPs == nil {
+		return
+	}
+
+	resetCount, err := resetMarkedReleaseIPs(e.nrsName)
+	if err != nil {
+		allocatorLog.WithFields(logrus.Fields{
+			"nrsName": e.nrsName,
+		}).WithError(err).Warn("failed to reset marked-for-release IPs before restore")
+		return
+	}
+
+	if resetCount > 0 {
+		allocatorLog.WithFields(logrus.Fields{
+			"nrsName":    e.nrsName,
+			"resetIPs":   resetCount,
+			"isRDMAIPAM": e.rdmaAttr.isRdmaEndpointAllocator,
+		}).Info("Reset marked-for-release IPs before restore")
+	}
 }
 
 // UpdatePrimaryMacAddress updates the primary MAC address for RDMA Endpoint Allocator
@@ -160,6 +188,11 @@ func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
 	// cep name is like "podname"
 	name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, podName, e.rdmaAttr.primaryMacAddress)
 
+	// 插桩点2-开始：Pod端到端IP回收监控（异步执行，不影响主流程）
+	go func() {
+		podReleaseTracker.StartTracking(owner) // Pod级别计时（首次或继续）
+	}()
+
 	var (
 		logEntry = allocatorLog.WithFields(logrus.Fields{
 			"namespace":   namespace,
@@ -171,6 +204,37 @@ func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
 	logEntry.Debug("start cni del ip")
 
 	defer func() {
+		// 异步记录指标，不影响主流程
+		go func() {
+			// 无论成功失败都记录当前的端到端耗时，重试时覆盖上一次的时间
+			if trackedStartTime, wasTracked := podReleaseTracker.GetTrackingStartTime(owner); wasTracked {
+				currentDuration := time.Since(trackedStartTime).Seconds() // 当前端到端计时结束
+
+				outcome := metrics.LabelValueOutcomeSuccess
+				if err != nil {
+					outcome = metrics.LabelValueOutcomeFail
+				}
+
+				// 指标2：记录Pod端到端回收耗时（无论成功失败都记录）
+				metrics.PodIPReleaseDuration.WithLabelValues(
+					outcome, nodeTypes.GetName(),
+				).Observe(currentDuration)
+
+				if err == nil {
+					// 成功时清理跟踪记录
+					podReleaseTracker.StopTracking(owner)
+					logEntry.WithFields(logrus.Fields{
+						"pod_e2e_duration": currentDuration,
+					}).Info("Pod IP release completed (Pod level success)")
+				} else {
+					logEntry.WithFields(logrus.Fields{
+						"pod_current_duration": currentDuration,
+						"error":                err,
+					}).Info("Pod IP release attempt failed (Pod level timing recorded)")
+				}
+			}
+		}()
+
 		if err != nil {
 			logEntry.WithError(err).Error("release ip error")
 		}
@@ -330,6 +394,11 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 	// cep name is like "podname"
 	name = bceutils.GetCEPNameFromPodName(e.rdmaAttr.isRdmaEndpointAllocator, podName, e.rdmaAttr.primaryMacAddress)
 
+	// 插桩点1-开始：Pod端到端IP分配监控（异步执行，不影响主流程）
+	go func() {
+		podTracker.StartTracking(owner) // Pod级别计时（首次或继续）
+	}()
+
 	var (
 		ctx, cancelFun = context.WithTimeout(logfields.NewContext(), e.c.GetFixedIPTimeout())
 		logEntry       = allocatorLog.WithFields(logrus.Fields{
@@ -347,6 +416,39 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 	logEntry.Debug("start cni ADD")
 
 	defer func() {
+		// 异步记录指标，不影响主流程
+		go func() {
+			// 无论成功失败都记录Pod级别的指标，重试时覆盖上一次的时间
+			if trackedStartTime, wasTracked := podTracker.GetTrackingStartTime(owner); wasTracked {
+				podE2EDuration := time.Since(trackedStartTime).Seconds() // Pod端到端计时结束
+
+				outcome := metrics.LabelValueOutcomeSuccess
+				if err != nil {
+					outcome = metrics.LabelValueOutcomeFail
+				}
+
+				// 指标1：记录Pod端到端分配耗时（无论成功失败都记录）
+				metrics.PodIPAllocationDuration.WithLabelValues(
+					outcome, e.c.IPAMMode(), nodeTypes.GetName(),
+				).Observe(podE2EDuration)
+
+				if err == nil {
+					// 清理跟踪记录（成功时）
+					podTracker.StopTracking(owner)
+					logEntry.WithFields(logrus.Fields{
+						"pod_e2e_duration": podE2EDuration,
+						"ipam_mode":        e.c.IPAMMode(),
+					}).Info("Pod IP allocation completed (Pod level success)")
+				} else {
+					logEntry.WithFields(logrus.Fields{
+						"pod_e2e_duration": podE2EDuration,
+						"ipam_mode":        e.c.IPAMMode(),
+						"error":            err,
+					}).Info("Pod IP allocation attempt failed (Pod level timing recorded)")
+				}
+			}
+		}()
+
 		if err != nil {
 			logEntry.WithError(err).Error("cni ADD error")
 			return
@@ -501,6 +603,7 @@ func (e *EndpointAllocator) isRDMAMode() bool {
 
 // Restore all the IP addresses applied for by the current machine to the node cache pool
 func (e *EndpointAllocator) Restore() {
+	e.resetReleaseHandshakeState()
 	if e.rdmaAttr.isRdmaEndpointAllocator {
 		// restore dynamic rdma ip if need
 		logEntry := allocatorLog.WithField("module", "Restore")
@@ -597,10 +700,6 @@ func (e *EndpointAllocator) Restore() {
 		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
-		// skip the cceendpoint which is deleting or deleted
-		if ep.GetDeletionTimestamp() != nil || !ep.GetDeletionTimestamp().IsZero() {
-			continue
-		}
 		ips, err := e.extractEndpointIPs(ep)
 		if err != nil {
 			epLog.WithError(err).Error("extract endpoint ip error")
@@ -615,6 +714,10 @@ func (e *EndpointAllocator) Restore() {
 				if err == nil {
 					if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
 						epLog.Infof("pod is not running or pending, try to delete expired endpoint")
+						// check and cleanup node network resources before deleting endpoint
+						if !isThisCEPReadyForDelete(epLog, ep, true) {
+							epLog.Fatal("failed to cleanup node network resources before deleting endpoint")
+						}
 						e.tryDeleteEndpointAfterPodDeleted(ep, true, epLog)
 						continue
 					}
@@ -638,6 +741,10 @@ func (e *EndpointAllocator) Restore() {
 				} else {
 					if kerrors.IsNotFound(err) {
 						epLog.Infof("pod not found, try to delete expired endpoint")
+						// check and cleanup node network resources before deleting endpoint
+						if !isThisCEPReadyForDelete(epLog, ep, true) {
+							epLog.Fatal("failed to cleanup node network resources before deleting endpoint")
+						}
 						e.tryDeleteEndpointAfterPodDeleted(ep, false, epLog)
 						continue
 					}
@@ -913,9 +1020,19 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 	}()
 
 	if releaseByOwner {
-		err = e.dynamicIPAM.ReleaseIPString(owner)
-		if err != nil {
-			logEntry.WithField("err", err).Warningf("failed to release ip by oner")
+		if ep.Status.Networking != nil && len(ep.Status.Networking.Addressing) != 0 {
+			for _, pair := range ep.Status.Networking.Addressing {
+				ips = append(ips, pair.IP)
+			}
+		}
+
+		for _, ip := range ips {
+			if ip != "" {
+				err = e.dynamicIPAM.ReleaseIPWithOwner(ip, owner)
+				if err != nil {
+					logEntry.WithField("err", err).Warningf("failed to release ip %s by owner", ip)
+				}
+			}
 		}
 	} else {
 		if ep.Status.Networking != nil && len(ep.Status.Networking.Addressing) != 0 {

@@ -183,7 +183,7 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 	ec.log.WithFields(logrus.Fields{
 		"interface":   linkName,
 		"expectedIPs": expectedIPs,
-	}).Info("Ensuring correct IP configuration from MetaAPI")
+	}).Debug("Ensuring correct IP configuration from MetaAPI")
 
 	// Get current IP addresses on the interface
 	actualAddrs, err := netlink.AddrList(ec.link, netlink.FAMILY_ALL)
@@ -192,6 +192,7 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 	}
 
 	actualIPs := make(map[string]struct{})
+
 	// Step 1: Remove incorrect/extra IP addresses
 	for _, addr := range actualAddrs {
 		ipStr := addr.IP.String()
@@ -280,7 +281,7 @@ func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error 
 		}
 	}
 
-	ec.log.WithField("interface", linkName).Info("IP configuration correction completed")
+	ec.log.WithField("interface", linkName).Debug("IP configuration correction completed")
 	return nil
 }
 
@@ -496,8 +497,8 @@ func (ec *eniLink) rename(isPrimary bool) error {
 	}
 
 	// rename link to cce-eni-{index} or cce-eri-{index}
+	var cceName string
 	if !strings.HasPrefix(udevName, namePrefix) {
-		var cceName string
 		if !isPrimary {
 			// find the first unused index using thread-safe function
 			availableIndex, err := findAvailableENIIndex()
@@ -527,22 +528,30 @@ func (ec *eniLink) rename(isPrimary bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to find device %q: %v", cceName, err)
 		}
-
-		// Ensure NetworkManager stops managing the renamed interface
 		err = ec.release.HostOS().EnsureNetworkManagerUnmanaged(cceName)
 		if err != nil {
-			ec.log.WithError(err).Warnf("failed to ensure NetworkManager stops managing %s", cceName)
+			return fmt.Errorf("failed to ensure NetworkManager stops managing %s: %v", cceName, err)
 		}
+	} else {
+		// Interface already has the correct prefix, use current name
+		cceName = elink.Attrs().Name
+	}
 
-		// Disable IPv6 for the interface if IPv6 is not enabled in configuration
-		if !option.Config.EnableIPv6 {
-			if err = sysctl.Write(fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6", cceName), "1"); err != nil {
-				ec.log.WithError(err).Errorf("failed to disable IPv6 for interface %s", cceName)
-				return err
-			}
-			ec.log.Infof("successfully disabled IPv6 for interface %s", cceName)
+	// Ensure NetworkManager stops managing the renamed interface
+	// Only execute when status is ErrorOnNode
+	if ec.eni != nil && ec.eni.Status.CCEStatus == ccev2.ENIStatusErrorOnNode {
+		err = ec.release.HostOS().EnsureNetworkManagerUnmanaged(cceName)
+		if err != nil {
+			return fmt.Errorf("failed to ensure NetworkManager stops managing %s: %v", cceName, err)
 		}
+	}
 
+	// Disable IPv6 for the interface if IPv6 is not enabled in configuration
+	if !option.Config.EnableIPv6 {
+		disableIPv6Key := fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6", cceName)
+		if err = sysctl.SetIfNeededFunc(disableIPv6Key, "1"); err != nil {
+			return fmt.Errorf("failed to disable IPv6 for interface %s: %v", cceName, err)
+		}
 	}
 
 	if strings.HasPrefix(elink.Attrs().Name, namePrefix) {
@@ -1114,6 +1123,6 @@ func (ec *eniLink) ensureENIConfiguration() error {
 		return err
 	}
 
-	ec.log.WithField("eniID", eniID).Info("ENI configuration validation completed")
+	ec.log.WithField("eniID", eniID).Debug("ENI configuration validation completed")
 	return nil
 }

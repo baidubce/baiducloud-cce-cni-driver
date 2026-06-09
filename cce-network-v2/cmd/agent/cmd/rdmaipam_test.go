@@ -18,16 +18,19 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/go-openapi/swag"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	rdmaipamapi "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/server/restapi/rdmaipam"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -73,6 +76,52 @@ func (m *MockCNIIPAMServer) DebugStatus() string {
 func (m *MockCNIIPAMServer) RestoreFinished() {
 	m.Called()
 }
+
+// mockMetadataClient is a mock implementation of metadata.Interface for testing
+type mockMetadataClient struct {
+	instanceID       string
+	instanceIDError  error
+	macList          []string
+	macListError     error
+	vifFeatures      map[string]string
+	vifFeaturesError map[string]error
+}
+
+func (m *mockMetadataClient) GetInstanceID() (string, error) {
+	return m.instanceID, m.instanceIDError
+}
+
+func (m *mockMetadataClient) ListMacs() ([]string, error) {
+	return m.macList, m.macListError
+}
+
+func (m *mockMetadataClient) GetVifFeatures(macAddress string) (string, error) {
+	if m.vifFeaturesError != nil {
+		if err, ok := m.vifFeaturesError[macAddress]; ok {
+			return "", err
+		}
+	}
+	if m.vifFeatures != nil {
+		if vif, ok := m.vifFeatures[macAddress]; ok {
+			return vif, nil
+		}
+	}
+	return "", nil
+}
+
+// Implement other required methods from metadata.Interface
+func (m *mockMetadataClient) GetInstanceName() (string, error)                    { return "", nil }
+func (m *mockMetadataClient) GetInstanceType() (metadata.InstanceType, error)     { return "", nil }
+func (m *mockMetadataClient) GetInstanceTypeEx() (metadata.InstanceTypeEx, error) { return "", nil }
+func (m *mockMetadataClient) GetLocalIPv4() (string, error)                       { return "", nil }
+func (m *mockMetadataClient) GetAvailabilityZone() (string, error)                { return "", nil }
+func (m *mockMetadataClient) GetRegion() (string, error)                          { return "", nil }
+func (m *mockMetadataClient) GetVPCID() (string, error)                           { return "", nil }
+func (m *mockMetadataClient) GetSourceType() (string, error)                      { return "", nil }
+func (m *mockMetadataClient) GetSubnetID() (string, error)                        { return "", nil }
+func (m *mockMetadataClient) GetLinkGateway(string, string) (string, error)       { return "", nil }
+func (m *mockMetadataClient) GetLinkMask(string, string) (string, error)          { return "", nil }
+func (m *mockMetadataClient) GetFeatureList() (*metadata.FeatureList, error)      { return nil, nil }
 
 func TestUpdateERIManagedIPAMMAC_CoverageTest_GivenVariousInputs_WhenCalled_ThenAllPathsExecute(t *testing.T) {
 	// This test is designed to achieve good code coverage by testing various paths
@@ -238,50 +287,84 @@ func TestStartRDMAIPAM(t *testing.T) {
 	}
 }
 
-// TestHasRoCE tests the hasRoCE function
+// TestHasRoCE tests the hasRoCE function with mock metadata client
 func TestHasRoCE(t *testing.T) {
 	tests := []struct {
 		name           string
-		rdmaIfMapsData map[string]bceutils.RdmaIfInfo
+		mockClient     *mockMetadataClient
 		expectedResult bool
+		expectError    bool
 		description    string
 	}{
 		{
-			name:           "TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalse",
-			rdmaIfMapsData: map[string]bceutils.RdmaIfInfo{},
+			name: "TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalse",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "normal", // Not a RoCE interface
+				},
+			},
 			expectedResult: false,
-			description:    "When no RoCE interfaces are found, should return false",
+			expectError:    false,
+			description:    "When no RoCE interfaces are found, should return false (covers line 423)",
 		},
 		{
 			name: "TestHasRoCE_GivenRoCEInterfaces_WhenCalled_ThenReturnTrue",
-			rdmaIfMapsData: map[string]bceutils.RdmaIfInfo{
-				"fa:27:00:07:83:01": {
-					MacAddress:         "fa:27:00:07:83:01",
-					NetResourceSetName: "test-node-fa2700078301-rdmaroce",
-					VifFeatures:        "rdma_roce",
-					LabelSelectorValue: "test-node-fa2700078301-rdmaroce",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "rdma_roce", // RoCE interface
 				},
 			},
-			expectedResult: false, // Will be false due to metadata service error in test environment
-			description:    "When RoCE interfaces are found, should return true (but false in test due to metadata service)",
+			expectedResult: true,
+			expectError:    false,
+			description:    "When RoCE interfaces are found, should return true (covers line 425)",
+		},
+		{
+			name: "TestHasRoCE_GivenListMacsError_WhenCalled_ThenReturnError",
+			mockClient: &mockMetadataClient{
+				macListError: fmt.Errorf("failed to list MACs"),
+			},
+			expectedResult: false,
+			expectError:    true,
+			description:    "When ListMacs fails, should return error (covers line 418)",
+		},
+		{
+			name: "TestHasRoCE_GivenGetVifFeaturesError_WhenCalled_ThenReturnError",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01"},
+				vifFeaturesError: map[string]error{
+					"fa:27:00:07:83:01": fmt.Errorf("failed to get VIF features"),
+				},
+			},
+			expectedResult: false,
+			expectError:    true,
+			description:    "When GetVifFeatures fails, should return error (covers line 418)",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save original rdmaIfMaps
-			originalRdmaIfMaps := rdmaIfMaps
-			defer func() {
-				rdmaIfMaps = originalRdmaIfMaps
-			}()
+			// Given: Mock metadata client
+			originalClient := bceutils.GetDefaultMetaClient()
+			bceutils.SetDefaultMetaClient(tt.mockClient)
+			defer bceutils.SetDefaultMetaClient(originalClient)
 
 			// Create test daemon
 			daemon := &Daemon{}
 
-			// Call the function under test
-			result := daemon.hasRoCE()
+			// When: Call hasRoCE()
+			result, err := daemon.hasRoCE()
 
-			// Verify results
+			// Then: Verify results
+			if tt.expectError {
+				assert.Error(t, err, tt.description)
+			} else {
+				assert.NoError(t, err, "hasRoCE should not return error")
+			}
 			assert.Equal(t, tt.expectedResult, result, tt.description)
 		})
 	}
@@ -1001,6 +1084,297 @@ func TestUpdateERIManagedIPAMMAC_Lines414to421_Coverage(t *testing.T) {
 		// Assert - The function should complete without panic, executing line 421
 		// The error log "IPAM instance is not EndpointAllocator type" verifies line 421 execution
 	})
+}
+
+// TestHasRoCE_GivenGetRdmaIFsInfoError_WhenCalled_ThenReturnError tests line 418
+func TestHasRoCE_GivenGetRdmaIFsInfoError_WhenCalled_ThenReturnError(t *testing.T) {
+	// This test covers line 418: return false, err
+	// When GetRdmaIFsInfo returns an error, hasRoCE should return false and the error
+
+	// Note: In the actual implementation, GetRdmaIFsInfo is called directly and modifies
+	// the global rdmaIfMaps variable. To test the error path, we would need to mock
+	// the GetRdmaIFsInfo function, which requires gomonkey or similar mocking framework.
+	// Since the test environment may not support gomonkey, we document the expected behavior:
+	//
+	// Given: GetRdmaIFsInfo returns an error
+	// When: hasRoCE() is called
+	// Then: It should return (false, error) at line 418
+	//
+	// The error path at line 418 is triggered when:
+	// - The metadata service is unavailable
+	// - The node name cannot be retrieved
+	// - Network errors occur during the API call
+	//
+	// This test documents that line 418 handles error cases from GetRdmaIFsInfo
+
+	t.Run("TestHasRoCE_GivenGetRdmaIFsInfoError_WhenCalled_ThenReturnFalseAndError", func(t *testing.T) {
+		// Given: Mock metadata client to return an error
+		mockError := fmt.Errorf("failed to list MACs")
+		mockClient := &mockMetadataClient{
+			macListError: mockError,
+		}
+
+		// Replace the default metadata client
+		originalClient := bceutils.GetDefaultMetaClient()
+		bceutils.SetDefaultMetaClient(mockClient)
+		defer bceutils.SetDefaultMetaClient(originalClient)
+
+		// Create test daemon
+		daemon := &Daemon{}
+
+		// When: Call hasRoCE()
+		result, err := daemon.hasRoCE()
+
+		// Then: Should return false and the error (line 418)
+		assert.False(t, result, "When GetRdmaIFsInfo returns error, hasRoCE should return false")
+		assert.Error(t, err, "When GetRdmaIFsInfo returns error, hasRoCE should return the error")
+		t.Logf("Successfully tested line 418 error path: %v", err)
+	})
+}
+
+// TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalse tests line 423
+func TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalse(t *testing.T) {
+	// This test covers line 423: return false, nil
+	// When no RoCE interfaces are found (len(rdmaIfMaps) == 0), hasRoCE should return false
+
+	t.Run("TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalseAndNil", func(t *testing.T) {
+		// Given: Mock metadata client to return no RoCE interfaces
+		mockClient := &mockMetadataClient{
+			instanceID: "i-12345678",
+			macList:    []string{"fa:27:00:07:83:01"},
+			vifFeatures: map[string]string{
+				"fa:27:00:07:83:01": "normal", // Not a RoCE interface
+			},
+		}
+
+		// Replace the default metadata client
+		originalClient := bceutils.GetDefaultMetaClient()
+		bceutils.SetDefaultMetaClient(mockClient)
+		defer bceutils.SetDefaultMetaClient(originalClient)
+
+		// Create test daemon
+		daemon := &Daemon{}
+
+		// When: Call hasRoCE()
+		result, err := daemon.hasRoCE()
+
+		// Then: Should return false and nil (line 423)
+		assert.False(t, result, "When no RoCE interfaces found, hasRoCE should return false")
+		assert.NoError(t, err, "When no RoCE interfaces found, hasRoCE should not return error")
+		t.Logf("Successfully tested line 423: no RoCE interfaces found")
+	})
+}
+
+// TestHasRoCE_GivenRoCEInterfacesFound_WhenCalled_ThenReturnTrue tests line 425
+func TestHasRoCE_GivenRoCEInterfacesFound_WhenCalled_ThenReturnTrue(t *testing.T) {
+	// This test covers line 425: return true, nil
+	// When RoCE interfaces are found (len(rdmaIfMaps) > 0), hasRoCE should return true
+
+	t.Run("TestHasRoCE_GivenRoCEInterfacesFound_WhenCalled_ThenReturnTrueAndNil", func(t *testing.T) {
+		// Given: Mock metadata client to return RoCE interfaces
+		mockClient := &mockMetadataClient{
+			instanceID: "i-12345678",
+			macList:    []string{"fa:27:00:07:83:01"},
+			vifFeatures: map[string]string{
+				"fa:27:00:07:83:01": "rdma_roce", // RoCE interface
+			},
+		}
+
+		// Replace the default metadata client
+		originalClient := bceutils.GetDefaultMetaClient()
+		bceutils.SetDefaultMetaClient(mockClient)
+		defer bceutils.SetDefaultMetaClient(originalClient)
+
+		// Create test daemon
+		daemon := &Daemon{}
+
+		// When: Call hasRoCE()
+		result, err := daemon.hasRoCE()
+
+		// Then: Should return true and nil (line 425)
+		assert.True(t, result, "When RoCE interfaces are found, hasRoCE should return true")
+		assert.NoError(t, err, "When RoCE interfaces are found, hasRoCE should not return error")
+		t.Logf("Successfully tested line 425 success path with RoCE interfaces")
+	})
+}
+
+// TestStartRDMAIPAM_GivenHasRoCEError_WhenStarting_ThenLogFatal tests line 390
+func TestStartRDMAIPAM_GivenHasRoCEError_WhenStarting_ThenLogFatal(t *testing.T) {
+	// This test covers line 390: rdmaIpamLog.Fatalf("Check RoCE failed, err: %s", err)
+	// When hasRoCE() returns an error, startRDMAIPAM should call log.Fatalf
+
+	// Note: Testing log.Fatalf is challenging because it calls os.Exit(1).
+	// We use gomonkey to mock GetRdmaIFsInfo to return an error, which will trigger line 390.
+	// The test will verify that the error path is reached, but we cannot verify the actual
+	// os.Exit() call without using subprocess testing pattern.
+
+	t.Run("TestStartRDMAIPAM_GivenHasRoCEError_WhenStarting_ThenShouldLogFatal", func(t *testing.T) {
+		// Save original configuration
+		originalEnableRDMA := option.Config.EnableRDMA
+		defer func() {
+			option.Config.EnableRDMA = originalEnableRDMA
+		}()
+
+		// Set test configuration
+		option.Config.EnableRDMA = true
+
+		// Given: Mock metadata client to return an error
+		mockError := fmt.Errorf("metadata service unavailable")
+		mockClient := &mockMetadataClient{
+			macListError: mockError,
+		}
+
+		// Replace the default metadata client
+		originalClient := bceutils.GetDefaultMetaClient()
+		bceutils.SetDefaultMetaClient(mockClient)
+		defer bceutils.SetDefaultMetaClient(originalClient)
+
+		// Mock logrus.Fatalf to prevent actual process exit
+		fatalCalled := false
+		patchesFatal := gomonkey.ApplyMethod(&logrus.Entry{}, "Fatalf", func(entry *logrus.Entry, format string, args ...interface{}) {
+			fatalCalled = true
+			// Don't actually call os.Exit() in test
+			t.Logf("Fatal log called with format: %s, args: %v", format, args)
+		})
+		defer patchesFatal.Reset()
+
+		// Create test daemon
+		daemon := &Daemon{
+			rdmaIpam: nil,
+		}
+
+		// When: Call startRDMAIPAM()
+		daemon.startRDMAIPAM()
+
+		// Then: Fatalf should have been called (line 390)
+		assert.True(t, fatalCalled, "rdmaIpamLog.Fatalf should be called when hasRoCE returns error")
+		t.Log("Successfully tested line 390: Fatalf called when hasRoCE returns error")
+	})
+}
+
+// TestHasRoCE_AllPaths_Coverage tests all code paths in hasRoCE function with multiple scenarios
+func TestHasRoCE_AllPaths_Coverage(t *testing.T) {
+	// This test ensures comprehensive coverage of all paths in hasRoCE function:
+	// - Line 418: return false, err (when GetRdmaIFsInfo fails)
+	// - Line 423: return false, nil (when no RoCE interfaces found)
+	// - Line 425: return true, nil (when RoCE interfaces found)
+
+	tests := []struct {
+		name           string
+		mockClient     *mockMetadataClient
+		expectedResult bool
+		expectError    bool
+		description    string
+		linesCovered   string
+	}{
+		{
+			name: "TestHasRoCE_GivenGetRdmaIFsInfoError_WhenCalled_ThenReturnError",
+			mockClient: &mockMetadataClient{
+				macListError: fmt.Errorf("metadata service error"),
+			},
+			expectedResult: false,
+			expectError:    true,
+			description:    "When GetRdmaIFsInfo fails, should return (false, error)",
+			linesCovered:   "Line 418: return false, err",
+		},
+		{
+			name: "TestHasRoCE_GivenNoRoCEInterfaces_WhenCalled_ThenReturnFalseNil",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "normal", // Not a RoCE interface
+				},
+			},
+			expectedResult: false,
+			expectError:    false,
+			description:    "When no RoCE interfaces found, should return (false, nil)",
+			linesCovered:   "Line 423: return false, nil",
+		},
+		{
+			name: "TestHasRoCE_GivenSingleRoCEInterface_WhenCalled_ThenReturnTrueNil",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "rdma_roce", // RoCE interface
+				},
+			},
+			expectedResult: true,
+			expectError:    false,
+			description:    "When single RoCE interface found, should return (true, nil)",
+			linesCovered:   "Line 425: return true, nil",
+		},
+		{
+			name: "TestHasRoCE_GivenMultipleRoCEInterfaces_WhenCalled_ThenReturnTrueNil",
+			mockClient: &mockMetadataClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
+				vifFeatures: map[string]string{
+					"fa:27:00:07:83:01": "rdma_roce", // RoCE interface
+					"fa:27:00:07:83:02": "rdma_roce", // RoCE interface
+				},
+			},
+			expectedResult: true,
+			expectError:    false,
+			description:    "When multiple RoCE interfaces found, should return (true, nil)",
+			linesCovered:   "Line 425: return true, nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given: Mock metadata client with test data
+			originalClient := bceutils.GetDefaultMetaClient()
+			bceutils.SetDefaultMetaClient(tt.mockClient)
+			defer bceutils.SetDefaultMetaClient(originalClient)
+
+			// Create test daemon
+			daemon := &Daemon{}
+
+			// When: Call hasRoCE()
+			result, err := daemon.hasRoCE()
+
+			// Then: Verify the result matches expectations
+			if tt.expectError {
+				assert.False(t, result, tt.description)
+				assert.Error(t, err, tt.description)
+			} else {
+				assert.Equal(t, tt.expectedResult, result, tt.description)
+				assert.NoError(t, err, tt.description)
+			}
+			t.Logf("%s covered: %s", tt.linesCovered, tt.description)
+		})
+	}
+}
+
+// TestMockMetadataClient_Simple tests that mock metadata client works
+func TestMockMetadataClient_Simple(t *testing.T) {
+	// Given: Mock metadata client
+	mockClient := &mockMetadataClient{
+		instanceID: "i-test",
+		macList:    []string{"aa:bb:cc:dd:ee:ff"},
+		vifFeatures: map[string]string{
+			"aa:bb:cc:dd:ee:ff": "normal",
+		},
+	}
+
+	// When: Set mock client
+	originalClient := bceutils.GetDefaultMetaClient()
+	bceutils.SetDefaultMetaClient(mockClient)
+	defer bceutils.SetDefaultMetaClient(originalClient)
+
+	// Then: Verify mock client is set
+	currentClient := bceutils.GetDefaultMetaClient()
+	assert.Equal(t, mockClient, currentClient, "Mock client should be set")
+
+	// And: Call GetRdmaIFsInfo
+	result, err := bceutils.GetRdmaIFsInfo("test-node", nil)
+
+	// Then: Should not error and return empty result (no RoCE interfaces)
+	assert.NoError(t, err, "GetRdmaIFsInfo should not error with mock client")
+	assert.Empty(t, result, "Should return empty result when no RoCE interfaces")
+	t.Logf("Mock client test passed: result=%+v", result)
 }
 
 func init() {

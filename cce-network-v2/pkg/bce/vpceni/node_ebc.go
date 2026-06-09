@@ -53,7 +53,7 @@ func (n *ebcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 
 	// may should create a new primary ENI
 	if a.AvailableInterfaces == 0 && a.InterfaceID == "" && n.usePrimaryENIWithSecondaryMode {
-		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
+		foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				_, ok := iface.Resource.(*eniResource)
 				if !ok {
@@ -110,6 +110,11 @@ func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, s
 		return err
 	}
 
+	effectiveInstanceID, err := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return err
+	}
+
 	// create subnet object
 	zone := api.TransAvailableZoneToZoneName(operatorOption.Config.BCECloudContry, operatorOption.Config.BCECloudRegion, resource.Spec.ENI.AvailabilityZone)
 	eni, err := n.manager.enilister.Get(bccInfo.NicInfo.EniId)
@@ -117,7 +122,7 @@ func (n *ebcNetworkResourceSet) createPrimaryENIOnCluster(ctx context.Context, s
 		eni = &ccev2.ENI{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{
-					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelInstanceID: effectiveInstanceID,
 					k8s.LabelNodeName:   resource.Name,
 					k8s.LabelENIType:    resource.Spec.ENI.InstanceType,
 					k8s.LabelENIUseMode: string(ccev2.ENIUseModePrimaryWithSecondaryIP),

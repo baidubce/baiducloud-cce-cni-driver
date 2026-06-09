@@ -56,6 +56,16 @@ var (
 	defaultMetaClient metadata.Interface = metadata.NewClient()
 )
 
+// GetDefaultMetaClient returns the default metadata client (for testing purposes)
+func GetDefaultMetaClient() metadata.Interface {
+	return defaultMetaClient
+}
+
+// SetDefaultMetaClient sets the default metadata client (for testing purposes)
+func SetDefaultMetaClient(client metadata.Interface) {
+	defaultMetaClient = client
+}
+
 type RdmaIfInfo struct {
 	MacAddress         string
 	NetResourceSetName string
@@ -88,7 +98,17 @@ func generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeature
 }
 
 func GetNrsTypeByInstanceID(instanceID string) (string, error) {
-	nrsList, err := watchers.NetResourceSetClient.GetByInstanceID(instanceID)
+	var nrsList []*ccev2.NetResourceSet
+	var err error
+
+	// Determine whether to use GetByHPASID or GetByInstanceID based on instanceID format
+	// HPAS IDs start with "hpas-" prefix, regular instance IDs typically start with "i-"
+	if strings.HasPrefix(instanceID, "hpas-") {
+		nrsList, err = watchers.NetResourceSetClient.GetByHPASID(instanceID)
+	} else {
+		nrsList, err = watchers.NetResourceSetClient.GetByInstanceID(instanceID)
+	}
+
 	if err != nil || len(nrsList) == 0 {
 		return "", err
 	}
@@ -229,7 +249,7 @@ func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIf
 			} else {
 				log.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
 			}
-			continue
+			return nil, vifErr
 		}
 		if _, ok := roceVFs[vifFeatures]; ok {
 			// Skip processing if ERI management is enabled and current is ERI interface
@@ -287,7 +307,7 @@ func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]Rdm
 			} else {
 				log.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
 			}
-			continue
+			return nil, vifErr
 		}
 		if _, ok := roceVFs[vifFeatures]; ok {
 			var rdmaIfInfo RdmaIfInfo

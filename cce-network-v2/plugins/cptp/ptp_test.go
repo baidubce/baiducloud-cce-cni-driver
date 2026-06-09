@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/common"
 	"github.com/containernetworking/cni/pkg/types"
 	types020 "github.com/containernetworking/cni/pkg/types/020"
 	types040 "github.com/containernetworking/cni/pkg/types/040"
@@ -538,7 +539,7 @@ var _ = Describe("configureNetworkWithIPAM", func() {
 })
 
 // 新增的测试函数
-var _ = Describe("vethNameForPod", func() {
+var _ = Describe("VethNameForPod", func() {
 	It("Given_ValidPodNameAndNamespace_When_CallingVethNameForPod_Then_ReturnsCorrectVethName", func() {
 		// Given
 		podName := "test-pod"
@@ -546,7 +547,7 @@ var _ = Describe("vethNameForPod", func() {
 		prefix := "veth"
 
 		// When
-		result := vethNameForPod(podName, namespace, prefix)
+		result := common.VethNameForPod(podName, namespace, prefix)
 
 		// Then
 		Expect(result).To(HavePrefix(prefix))
@@ -561,7 +562,7 @@ var _ = Describe("vethNameForPod", func() {
 		prefix := "veth"
 
 		// When
-		result := vethNameForPod(podName, namespace, prefix)
+		result := common.VethNameForPod(podName, namespace, prefix)
 
 		// Then
 		Expect(result).To(HavePrefix(prefix))
@@ -575,7 +576,7 @@ var _ = Describe("vethNameForPod", func() {
 		prefix := "veth"
 
 		// When
-		result := vethNameForPod(podName, namespace, prefix)
+		result := common.VethNameForPod(podName, namespace, prefix)
 
 		// Then
 		Expect(result).To(HavePrefix(prefix))
@@ -589,7 +590,7 @@ var _ = Describe("vethNameForPod", func() {
 		prefix := "eth"
 
 		// When
-		result := vethNameForPod(podName, namespace, prefix)
+		result := common.VethNameForPod(podName, namespace, prefix)
 
 		// Then
 		Expect(result).To(HavePrefix(prefix))
@@ -603,8 +604,8 @@ var _ = Describe("vethNameForPod", func() {
 		prefix := "veth"
 
 		// When
-		result1 := vethNameForPod(podName, namespace, prefix)
-		result2 := vethNameForPod(podName, namespace, prefix)
+		result1 := common.VethNameForPod(podName, namespace, prefix)
+		result2 := common.VethNameForPod(podName, namespace, prefix)
 
 		// Then
 		Expect(result1).To(Equal(result2))

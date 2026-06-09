@@ -63,7 +63,7 @@ func (gcer *agentGCer) dynamicEndpointsGC() {
 
 	now := time.Now()
 	for _, ep := range eps {
-		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) {
+		if IsFixedIPEndpoint(ep) || IsPSTSEndpoint(ep) || bceutils.IsCCERdmaEndpointName(ep.Name) {
 			continue
 		}
 		_, podName := GetPodNameFromCEP(ep)
@@ -76,7 +76,7 @@ func (gcer *agentGCer) dynamicEndpointsGC() {
 				gcer.ea.tryDeleteEndpointAfterPodDeleted(ep, true, gcer.logEntry)
 				delete(gcer.expiredCepMap, key)
 			}
-			if !ok && isThisCEPReadyForDelete(gcer.logEntry, ep) {
+			if !ok && isThisCEPReadyForDelete(gcer.logEntry, ep, false) {
 				gcer.expiredCepMap[key] = now
 			}
 		}
@@ -177,7 +177,7 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 				continue
 			}
 
-			if !ok && (cep == nil || isThisCEPReadyForDelete(scopedLog, cep)) {
+			if !ok && cep == nil {
 				gcer.expiredIPMap[addr] = &ipOwnerTime{
 					owner:      owner,
 					time:       now,

@@ -353,5 +353,9 @@ func init() {
 
 	flags.Int(operatorOption.BCECustomerMaxRdmaIP, 0, "max rdma ip number of rdma-interface for customer")
 	option.BindEnv(operatorOption.BCECustomerMaxRdmaIP)
+
+	flags.Bool(operatorOption.HPASStanderd, false, "Enable the use of standardized HPAS interface")
+	option.BindEnv(operatorOption.HPASStanderd)
+
 	viper.BindPFlags(flags)
 }

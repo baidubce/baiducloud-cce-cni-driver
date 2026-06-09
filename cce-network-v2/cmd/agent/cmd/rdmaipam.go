@@ -385,7 +385,11 @@ func (d *Daemon) startRDMAIPAM() {
 		d.rdmaIpam = make(map[string]ipam.CNIIPAMServer)
 	}
 
-	if d.hasRoCE() {
+	hasRoCE, err := d.hasRoCE()
+	if err != nil {
+		rdmaIpamLog.Fatalf("Check RoCE failed, err: %s", err)
+	}
+	if hasRoCE {
 		bootstrapStats.rdmaIpam.Start()
 		rdmaIpamLog.Info("Initializing rdmaIpam")
 
@@ -404,21 +408,21 @@ func (d *Daemon) startRDMAIPAM() {
 	d.createERIManagedIPAMInstance()
 }
 
-func (d *Daemon) hasRoCE() bool {
+func (d *Daemon) hasRoCE() (bool, error) {
 	var err error
 
 	nodeName := nodeTypes.GetName()
 	rdmaIfMaps, err = bceutils.GetRdmaIFsInfo(nodeName, rdmaIpamLog)
 	if err != nil {
 		rdmaIpamLog.Errorf("get Roce NetResourceSetName(s) failed: %v", err)
-		return false
+		return false, err
 	}
 
 	if len(rdmaIfMaps) == 0 {
 		rdmaIpamLog.Info("No Roce vif found, skip rdmaIpam initialization.")
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // UpdateERIManagedIPAMMAC updates the MAC address of ERI managed IPAM instance after obtaining real MAC address

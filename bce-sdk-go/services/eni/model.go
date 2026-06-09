@@ -19,6 +19,7 @@ type CreateEniArgs struct {
 	Name                        string      `json:"name"`
 	SubnetId                    string      `json:"subnetId"`
 	InstanceId                  string      `json:"instanceId,omitempty"`
+	DeviceType                  string      `json:"instanceType,omitempty"`
 	SecurityGroupIds            []string    `json:"securityGroupIds"`
 	EnterpriseSecurityGroupIds  []string    `json:"enterpriseSecurityGroupIds"`
 	PrivateIpSet                []PrivateIp `json:"privateIpSet"`
@@ -46,6 +47,7 @@ type DeleteEniArgs struct {
 type ListEniArgs struct {
 	VpcId            string
 	InstanceId       string
+	DeviceType       string
 	Name             string
 	Marker           string
 	MaxKeys          int
@@ -123,6 +125,7 @@ type BatchAddPrivateIpResult struct {
 type EniInstance struct {
 	EniId       string `json:"-"`
 	InstanceId  string `json:"instanceId"`
+	DeviceType  string `json:"instanceType,omitempty"`
 	ClientToken string `json:"-"`
 }
 
@@ -154,6 +157,7 @@ type UpdateEniEnterpriseSecurityGroupArgs struct {
 type EniQuoteArgs struct {
 	EniId      string `json:"-"`
 	InstanceId string `json:"-"`
+	DeviceType string `json:"instanceType,omitempty"`
 }
 
 type EniQuoteInfo struct {

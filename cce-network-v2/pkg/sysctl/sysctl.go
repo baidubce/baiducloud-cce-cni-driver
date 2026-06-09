@@ -47,6 +47,9 @@ var (
 	// procFsRead is mark as true if procFs changes value.
 	procFsRead bool
 	procFs     = procFsDefault
+
+	// SetIfNeededFunc can be replaced in tests
+	SetIfNeededFunc = SetIfNeeded
 )
 
 // An ErrInvalidSysctlParameter is returned when a parameter is invalid.
@@ -182,4 +185,22 @@ func CompareAndSet(name string, oldVal string, val string) error {
 	}
 
 	return Write(name, val)
+}
+
+// SetIfNeeded reads the current sysctl value and sets it to the target value if different
+// Returns error if setting fails, or nil if already set to target value or successfully set
+func SetIfNeeded(paramName, targetValue string) error {
+	// Get current state before setting
+	currentValue, readErr := Read(paramName)
+	if readErr != nil {
+		// Continue to set even if read fails
+		currentValue = ""
+	}
+
+	// Only set if not already at target value
+	if currentValue != targetValue {
+		return Write(paramName, targetValue)
+	}
+
+	return nil
 }

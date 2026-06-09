@@ -561,6 +561,19 @@ func (n *NetResource) recalculate() {
 	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, preAllocate, minAllocate, maxAllocate, burstableIPCount)
 	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, preAllocate, minAllocate, maxAboveWatermark, burstableIPCount, readyForReleaseCount)
 
+	// If NeededIPs is 0, it means the node has sufficient IPs and subnets are available
+	// Set CCESubnetUnavailable to False to indicate healthy subnet status
+	if n.stats.NeededIPs == 0 {
+		watchers.SetNodeCondition(
+			n.name,
+			watchers.CCESubnetUnavailable,
+			v1.ConditionFalse,
+			watchers.ReasonSubnetsAvailable,
+			"Node has sufficient IPs, no allocation needed",
+			scopedLog,
+		)
+	}
+
 	scopedLog.WithFields(logrus.Fields{
 		"available":                 n.stats.AvailableIPs,
 		"used":                      n.stats.UsedIPs,
@@ -1169,9 +1182,32 @@ func (n *NetResource) syncToAPIServer() (err error) {
 	// released IP in the pool is fine, as the agent will ignore it.
 	pool := n.Pool()
 
-	// Always update the status first to ensure that the IPAM information
-	// is synced for all addresses that are marked as available.
-	//
+	// bugfix assign released ip to pod.
+	// Update pool before update status, avoid status remove release ip, but pool still have the ip.
+	for retry := 0; retry < 2; retry++ {
+		node.Spec.IPAM.Pool = pool
+		scopedLog.WithField("poolSize", len(node.Spec.IPAM.Pool)).Debug("Updating node in apiserver")
+
+		// The PreAllocate value is added here rather than where the NetResourceSet
+		// resource is created ((*NodeDiscovery).mutateNodeResource() inside
+		// pkg/nodediscovery), because mutateNodeResource() does not have
+		// access to the ipam.Node object. Since we are in the NetResourceSet
+		// update sync loop, we can compute the value.
+		if node.Spec.IPAM.PreAllocate == 0 {
+			node.Spec.IPAM.PreAllocate = n.ops.GetMinimumAllocatableIPv4()
+		}
+
+		err = n.update(origNode, node, retry, false)
+		if err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		scopedLog.WithError(err).Warning("Unable to update NetResourceSet spec")
+		return err
+	}
+
 	// Two attempts are made in case the local resource is outdated. If the
 	// second attempt fails as well we are likely under heavy contention,
 	// fall back to the controller based background interval to retry.
@@ -1198,30 +1234,7 @@ func (n *NetResource) syncToAPIServer() (err error) {
 		return err
 	}
 
-	for retry := 0; retry < 2; retry++ {
-		node.Spec.IPAM.Pool = pool
-		scopedLog.WithField("poolSize", len(node.Spec.IPAM.Pool)).Debug("Updating node in apiserver")
-
-		// The PreAllocate value is added here rather than where the NetResourceSet
-		// resource is created ((*NodeDiscovery).mutateNodeResource() inside
-		// pkg/nodediscovery), because mutateNodeResource() does not have
-		// access to the ipam.Node object. Since we are in the NetResourceSet
-		// update sync loop, we can compute the value.
-		if node.Spec.IPAM.PreAllocate == 0 {
-			node.Spec.IPAM.PreAllocate = n.ops.GetMinimumAllocatableIPv4()
-		}
-
-		err = n.update(origNode, node, retry, false)
-		if err == nil {
-			break
-		}
-	}
-
-	if err != nil {
-		scopedLog.WithError(err).Warning("Unable to update NetResourceSet spec")
-	}
-
-	return err
+	return nil
 }
 
 // update is a helper function for syncToAPIServer(). This function updates the

@@ -29,6 +29,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
@@ -83,6 +84,7 @@ func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResource
 // find eni by mac address, return matched eni.
 func (n *rdmaNetResourceSetWrapper) findMatchedEniByMac(ctx context.Context, iaasClient client.IaaSClient,
 	vpcID, instanceID, vifFeatures, macAddress string) (*client.EniResult, error) {
+
 	log.Infof("start to find suitable %s eni by mac for instanceID %v/%v", vifFeatures, instanceID, macAddress)
 	eniList, listErr := iaasClient.ListEnis(ctx, vpcID, instanceID)
 	if listErr != nil {
@@ -104,6 +106,12 @@ func (n *rdmaNetResourceSetWrapper) findMatchedEniByMac(ctx context.Context, iaa
 // ensureRdmaENI means create a eni object for rdma interface
 // rdma interface has only one eni, so we use rdma interface id as eni name
 func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
+	// Get the effective instance ID, which will be HPAS ID for HPAS instances.
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get effective instance ID: %w", err)
+	}
+
 	getOwnerReference := func() string {
 		or := n.k8sObj.GetOwnerReferences()
 		for _, ref := range or {
@@ -132,6 +140,14 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		if eni.Status.VPCStatus != ccev2.VPCENIStatusInuse {
 			isNeedUpdate = true
 		}
+
+		if eni.Spec.InstanceID != effectiveInstanceID ||
+			eni.Labels[k8s.LabelInstanceID] != effectiveInstanceID {
+			eni.Spec.InstanceID = effectiveInstanceID
+			eni.Labels[k8s.LabelInstanceID] = effectiveInstanceID
+			isNeedUpdate = true
+		}
+
 		if bceutils.IsCCERdmaNetRourceSetName(eni.Labels[k8s.LabelNodeName]) &&
 			eni.Labels[k8s.LabelNodeName] != n.k8sObj.Name {
 			// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
@@ -143,6 +159,7 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		}
 
 		if isNeedUpdate {
+			n.log.Infof("force get eni %s from local", n.rdmaENIName)
 			err = n.updateENIWithPoll(context.TODO(), eni, func(eni *ccev2.ENI) *ccev2.ENI {
 				// do nothing
 				return eni
@@ -156,6 +173,7 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 	}
 
 forceGetFromIaaS:
+	n.log.Debugf("force get eni %s from iaas", n.rdmaENIName)
 	// the hpc or eri api do not use vpcID, subnetID and zoneName
 	vpcID := n.k8sObj.Spec.ENI.VpcID
 	// the macAddress and vifFeatures is decided by the NetResourceSet's annotation
@@ -191,7 +209,8 @@ forceGetFromIaaS:
 	var rdmaEni *client.EniResult
 	iaasClient := n.manager.getIaaSClient(vifFeatures)
 	if rdmaEniId == "" {
-		rdmaEni, err = n.findMatchedEniByMac(context.Background(), iaasClient, vpcID, n.instanceID, vifFeatures, macAddress)
+		// Get effective instance ID based on instance type
+		rdmaEni, err = n.findMatchedEniByMac(context.Background(), iaasClient, vpcID, effectiveInstanceID, vifFeatures, macAddress)
 		if err != nil {
 			n.log.WithError(err).Errorf("failed to get instance %s eni", vifFeatures)
 			return nil, err
@@ -224,7 +243,7 @@ forceGetFromIaaS:
 				// use rdma interface id as eni name
 				Name: rdmaEni.Id,
 				Labels: map[string]string{
-					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelInstanceID: effectiveInstanceID,
 					k8s.LabelNodeName:   labelSelectorValue,
 					k8s.LabelENIType:    iaasClient.GetRDMAIntType(),
 					k8s.VPCIDLabel:      vpcID,
@@ -246,7 +265,7 @@ forceGetFromIaaS:
 					SubnetID:         rdmaEni.SubnetID,
 					VpcID:            vpcID,
 					ZoneName:         rdmaEni.ZoneName,
-					InstanceID:       n.instanceID,
+					InstanceID:       effectiveInstanceID,
 					PrivateIPSet:     ipv4IPSet,
 					IPV6PrivateIPSet: ipv6IPSet,
 					MacAddress:       macAddress,
@@ -274,6 +293,12 @@ forceGetFromIaaS:
 		n.log.Errorf("failed to get %s ENI %s resource: %v", vifFeatures, eni.Name, err)
 		return nil, err
 	} else {
+		n.log.Infof("update eni %s from iaas", eni.Name)
+		if eni.Spec.InstanceID != effectiveInstanceID ||
+			eni.Labels[k8s.LabelInstanceID] != effectiveInstanceID {
+			eni.Spec.InstanceID = effectiveInstanceID
+			eni.Labels[k8s.LabelInstanceID] = effectiveInstanceID
+		}
 		err = n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 			// do nothing
 			return eni
@@ -296,17 +321,10 @@ func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() (*bccapi.InstanceModel, err
 	}
 	n.limiterLock.Unlock()
 
-	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
-	if err != nil {
-		return nil, err
-	}
-	var bccInfo *bccapi.InstanceModel
-	if nrsType == string(metadata.InstanceTypeExHPAS) {
-		bccInfo, err = n.manager.hpasClient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
-	} else {
-		bccInfo, err = n.manager.bceClientd.GetBCCInstanceDetail(context.TODO(), n.instanceID)
-	}
-
+	log := n.log.WithField("method", "refreshBCCInfo")
+	log.Infof("refresh bcc info")
+	// Always use base instance-id for BCC
+	bccInfo, err := n.manager.bceClientd.GetBCCInstanceDetail(context.TODO(), n.instanceID)
 	if err != nil {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return nil, err
@@ -348,13 +366,8 @@ func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (Rdm
 
 	n.limiterLock.Lock()
 	defer n.limiterLock.Unlock()
-	var eniQuota RdmaEniQuotaManager
-	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
-	if nrsType == string(metadata.InstanceTypeExHPAS) {
-		eniQuota = newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.hpasClient)
-	} else {
-		eniQuota = newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClientd)
-	}
+
+	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClientd)
 
 	// Expect all BCC models to support ERI
 	if bccInfo.EriQuota != 0 {
@@ -389,9 +402,11 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 
 				scopedLog.WithError(err).Info("RDMA ENI already has IPs in VPC, recovering all from VPC")
 				// Try to recover IPs from VPC as fallback (for restart recovery)
-				if recoveredIPs := n.tryRecoverIPsFromVPC(ctx, scopedLog, eni, allocation); recoveredIPs != nil {
+				if recoveredIPs, err := n.tryRecoverIPsFromVPC(ctx, scopedLog, eni, allocation); err == nil {
 					scopedLog.Info("Successfully recovered IPs from VPC after batch allocation failure")
 					return recoveredIPs, ipv6PrivateIPSet, nil
+				} else {
+					return nil, nil, err
 				}
 			}
 			// For other errors or if recovery failed, return the original error
@@ -454,8 +469,16 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 		return
 	}
 
+	// Get effective instance ID based on instance type
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		msg = fmt.Sprintf("unable to get effective instance ID: %v", err)
+		err = errors.New(msg)
+		return
+	}
+
 	// Count current available ERI numbers
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+	n.manager.ForeachInstance(effectiveInstanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -517,7 +540,7 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 		// Categorize subnet error and set node condition (referencing node_super.go)
 		errorCode, reason, errStr := nodeutils.CategorizeSubnetError(filterErr, resource.Spec.ENI.SubnetIDs, resource.Name)
 		metrics.IPAMErrorCounter.WithLabelValues(errorCode, "NetResourceSet", resource.Name).Inc()
-		nodeutils.SetNodeCondition(nodeName, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
+		watchers.SetNodeCondition(nodeName, watchers.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
 
 		// Use filterErr if available, otherwise use default message (referencing node_super.go)
 		if filterErr != nil {
@@ -536,7 +559,7 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 	// Set node condition to False when subnets are available (referencing node_super.go)
 	subnetIDs := nodeutils.ExtractSubnetIDs(availableSubnets)
 	successMsg := fmt.Sprintf("subnets [%v] are available for ERI creation on node %s, total %d subnets ready", subnetIDs, nodeName, len(availableSubnets))
-	nodeutils.SetNodeCondition(nodeName, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetsAvailable, successMsg, n.log)
+	watchers.SetNodeCondition(nodeName, watchers.CCESubnetUnavailable, corev1.ConditionFalse, watchers.ReasonSubnetsAvailable, successMsg, n.log)
 
 	// Select the best subnet
 	bestSubnet := n.searchMaxAvailableSubnet(availableSubnets)
@@ -548,7 +571,7 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 
 	scopedLog = scopedLog.WithFields(logrus.Fields{
 		"vpcID":      vpcID,
-		"instanceID": n.instanceID,
+		"instanceID": effectiveInstanceID,
 		"node":       resource.Name,
 		"subnetID":   bestSubnet.Name,
 	})
@@ -593,7 +616,16 @@ func (n *rdmaNetResourceSetWrapper) createERIOnCluster(ctx context.Context, scop
 	iaasClient := n.manager.getIaaSClient(vifFeatures)
 
 	// First check if ERI already exists
-	eriList, err := iaasClient.ListEnis(ctx, vpcID, n.instanceID)
+	idToUse := n.instanceID
+
+	if effID, e := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); e == nil {
+		idToUse = effID
+	} else {
+		scopedLog.WithError(e).Warn("failed to get effective instance ID for ERI; falling back to base instanceID")
+		return e
+	}
+
+	eriList, err := iaasClient.ListEnis(ctx, vpcID, idToUse)
 	if err != nil {
 		scopedLog.WithError(err).Error("Failed to list existing ERIs")
 		return fmt.Errorf("failed to list existing ERIs: %w", err)
@@ -602,11 +634,21 @@ func (n *rdmaNetResourceSetWrapper) createERIOnCluster(ctx context.Context, scop
 	var rdmaEni *client.EniResult
 	if len(eriList) == 0 {
 		// 1. First build the spec for ENI CR (based on known information)
-		eniSpec := n.buildENISpecForERI(resource, vifFeatures, vpcID, bestSubnet)
+		eniSpec, err := n.buildENISpecForERI(resource, vifFeatures, vpcID, bestSubnet)
+		if err != nil {
+			scopedLog.WithError(err).Error("Failed to build ENI spec for ERI")
+			return fmt.Errorf("failed to build ENI spec for ERI: %w", err)
+		}
 
 		// 2. Actually create the ERI, return ERI ID if successful
 		scopedLog.Info("Creating new ERI via IaaS API")
-		eriID, err := n.createERI(ctx, vpcID, n.instanceID, vifFeatures, bestSubnet)
+		// Get effective instance ID for ERI creation
+		effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+		if err != nil {
+			scopedLog.WithError(err).Error("Failed to get effective instance ID for ERI creation")
+			return fmt.Errorf("failed to get effective instance ID for ERI creation: %w", err)
+		}
+		eriID, err := n.createERI(ctx, vpcID, effectiveInstanceID, vifFeatures, bestSubnet)
 		if err != nil {
 			scopedLog.WithError(err).Error("Failed to create ERI")
 			return fmt.Errorf("failed to create ERI: %w", err)
@@ -636,7 +678,13 @@ func (n *rdmaNetResourceSetWrapper) createERIOnCluster(ctx context.Context, scop
 }
 
 // buildENISpecForERI builds the basic spec for ENI CR of ERI
-func (n *rdmaNetResourceSetWrapper) buildENISpecForERI(resource *ccev2.NetResourceSet, vifFeatures, vpcID string, bestSubnet *bcesync.BorrowedSubnet) *ccev2.ENISpec {
+func (n *rdmaNetResourceSetWrapper) buildENISpecForERI(resource *ccev2.NetResourceSet, vifFeatures, vpcID string, bestSubnet *bcesync.BorrowedSubnet) (*ccev2.ENISpec, error) {
+	// Get effective instance ID based on instance type
+	effectiveInstanceID, err := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get effective instance ID: %w", err)
+	}
+
 	return &ccev2.ENISpec{
 		NodeName: resource.Name,
 		Type:     ccev2.ENIForERI,
@@ -644,7 +692,7 @@ func (n *rdmaNetResourceSetWrapper) buildENISpecForERI(resource *ccev2.NetResour
 		ENI: models.ENI{
 			// Fill in with known information to avoid subsequent re-reading
 			VpcID:      vpcID,
-			InstanceID: n.instanceID,
+			InstanceID: effectiveInstanceID,
 			SubnetID:   bestSubnet.Name,
 			ZoneName:   bestSubnet.Spec.AvailabilityZone,
 			// ID, Name, MacAddress, PrivateIPSet will be filled after ERI creation
@@ -652,7 +700,7 @@ func (n *rdmaNetResourceSetWrapper) buildENISpecForERI(resource *ccev2.NetResour
 		// Other ENI spec fields
 		RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
 		InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
-	}
+	}, nil
 }
 
 // ENICRCreateOptions encapsulates the parameters for creating ENI CR
@@ -674,6 +722,12 @@ func (n *rdmaNetResourceSetWrapper) createENICR(ctx context.Context, scopedLog *
 	if opts.EniSpec != nil {
 		finalSpec = *opts.EniSpec // Copy the passed-in spec
 	} else {
+		// Get effective instance ID based on instance type
+		effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+		if err != nil {
+			return fmt.Errorf("failed to get effective instance ID: %w", err)
+		}
+
 		// Create default spec
 		finalSpec = ccev2.ENISpec{
 			NodeName: n.k8sObj.Name,
@@ -681,7 +735,7 @@ func (n *rdmaNetResourceSetWrapper) createENICR(ctx context.Context, scopedLog *
 			UseMode:  ccev2.ENIUseModeSecondaryIP,
 			ENI: models.ENI{
 				VpcID:      opts.VpcID,
-				InstanceID: n.instanceID,
+				InstanceID: effectiveInstanceID,
 			},
 		}
 	}
@@ -754,12 +808,18 @@ func (n *rdmaNetResourceSetWrapper) createENICR(ctx context.Context, scopedLog *
 		}
 	}
 
+	// Get effective instance ID for labels
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return fmt.Errorf("failed to get effective instance ID for labels: %w", err)
+	}
+
 	// Create new ENI CR
 	eni := &ccev2.ENI{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: opts.EniID,
 			Labels: map[string]string{
-				k8s.LabelInstanceID: n.instanceID,
+				k8s.LabelInstanceID: effectiveInstanceID,
 				k8s.LabelNodeName:   labelSelectorValue,
 				k8s.LabelENIType:    n.manager.getIaaSClient(opts.VifFeatures).GetRDMAIntType(),
 				k8s.VPCIDLabel:      opts.VpcID,
@@ -839,7 +899,7 @@ func (n *rdmaNetResourceSetWrapper) releaseIPs(ctx context.Context, iaasClient c
 		// release ips
 		err = iaasClient.BatchDeletePrivateIP(ctx, eni.Spec.ID, ipv4ToRelease)
 		if err != nil {
-			return fmt.Errorf("release the ips(%s) from hpc eni %s failed: %v", ipv4ToRelease, n.instanceID, err)
+			return fmt.Errorf("release the ips(%s) from hpc eni %s failed: %v", eni.Spec.ID, ipv4ToRelease, err)
 		}
 	}
 	return nil
@@ -907,16 +967,25 @@ func (n *rdmaNetResourceSetWrapper) getMinimumAllocatable() int {
 // This function is used as a fallback mechanism when batch allocation fails due to operator restart.
 // It directly queries VPC to get the current state of the ENI and returns whatever IPs are found.
 // The caller is responsible for determining whether the recovered IPs are sufficient.
-func (n *rdmaNetResourceSetWrapper) tryRecoverIPsFromVPC(ctx context.Context, scopedLog *logrus.Entry, eni *ccev2.ENI, allocation *ipam.AllocationAction) []*models.PrivateIP {
+func (n *rdmaNetResourceSetWrapper) tryRecoverIPsFromVPC(ctx context.Context, scopedLog *logrus.Entry, eni *ccev2.ENI, allocation *ipam.AllocationAction) ([]*models.PrivateIP, error) {
 	// For RDMA ENI, use the appropriate IaaS client to list ENIs and find the matching one
 	vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
 	iaasClient := n.manager.getIaaSClient(vifFeatures)
 
 	// List ENIs for this instance and find the matching one by ID
-	eniList, err := iaasClient.ListEnis(ctx, eni.Spec.VpcID, n.instanceID)
+	idToUse := n.instanceID
+
+	if effID, e := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); e == nil {
+		idToUse = effID
+	} else {
+		scopedLog.WithError(e).Warn("failed to get effective instance ID for ERI")
+		return nil, e
+	}
+
+	eniList, err := iaasClient.ListEnis(ctx, eni.Spec.VpcID, idToUse)
 	if err != nil {
 		scopedLog.WithError(err).Warning("Failed to list ENIs from VPC during recovery")
-		return nil
+		return nil, err
 	}
 
 	// Find the matching ENI by ID
@@ -930,7 +999,7 @@ func (n *rdmaNetResourceSetWrapper) tryRecoverIPsFromVPC(ctx context.Context, sc
 
 	if matchedEni == nil {
 		scopedLog.Warning("ENI not found in VPC during recovery")
-		return nil
+		return nil, fmt.Errorf("eni %s not found in vpc", eni.Spec.ID)
 	}
 
 	scopedLog.WithField("vpcIPCount", len(matchedEni.PrivateIpSet)).Info("Querying VPC for existing IPs on RDMA ENI")
@@ -956,7 +1025,7 @@ func (n *rdmaNetResourceSetWrapper) tryRecoverIPsFromVPC(ctx context.Context, sc
 		scopedLog.Info("No existing IPs found in VPC during recovery")
 	}
 
-	return recoveredIPs
+	return recoveredIPs, nil
 }
 
 // isERIManagedNRS checks whether the current NRS is an ERI managed NRS
@@ -1054,12 +1123,24 @@ func (n *rdmaNetResourceSetWrapper) createERI(ctx context.Context, vpcID, instan
 
 	scopedLog.Info("Creating ERI via cloud API")
 
-	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	// Get effective instance ID based on instance type
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get effective instance ID: %w", err)
 	}
+
+	// Update createArgs with effective instance ID
+	createArgs.InstanceId = effectiveInstanceID
+
 	var eriID string
-	if nrsType == string(metadata.InstanceTypeExHPAS) {
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	// HPAS 标准方案则使用bceClient + hpasid创建ENI，
+	//否则使用hpasClient带 header + instance-id创建ENI
+	if err != nil {
+		return "", fmt.Errorf("failed to get NRS type: %w", err)
+	}
+	if nrsType == string(metadata.InstanceTypeExHPAS) &&
+		!operatorOption.Config.HPASStanderd {
 		eriID, err = n.manager.hpasClient.CreateENI(ctx, createArgs)
 	} else {
 		eriID, err = n.manager.bceClientd.CreateENI(ctx, createArgs)
@@ -1090,15 +1171,16 @@ func (n *rdmaNetResourceSetWrapper) createNameForERI(clusterID, instanceID, node
 func (n *rdmaNetResourceSetWrapper) deleteERI(ctx context.Context, eriID string, scopedLog *logrus.Entry) {
 	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
 	if err != nil {
+		scopedLog.WithError(err).Error("Failed to get NRS type")
 		return
 	}
-
-	if nrsType == string(metadata.InstanceTypeExHPAS) {
+	// HPAS 非标方案带 header，使用hpasClient删除ENI
+	if nrsType == string(metadata.InstanceTypeExHPAS) &&
+		!operatorOption.Config.HPASStanderd {
 		err = n.manager.hpasClient.DeleteENI(ctx, eriID)
 	} else {
 		err = n.manager.bceClientd.DeleteENI(ctx, eriID)
 	}
-
 	if err != nil {
 		scopedLog.WithField("eriID", eriID).
 			WithError(err).Error("Failed to delete ERI")

@@ -5,6 +5,7 @@ import (
 
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	bceclound "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
@@ -29,11 +30,13 @@ func (c *EriClient) ListEnis(ctx context.Context, vpcID, instanceID string) ([]E
 	}
 	var eriList []enisdk.Eni
 	var listErr error
+
 	instanceType, err := utils.GetNrsTypeByInstanceID(instanceID)
 	if err != nil {
 		return nil, err
 	}
-	if instanceType == string(metadata.InstanceTypeExHPAS) {
+	if instanceType == string(metadata.InstanceTypeExHPAS) && !operatorOption.Config.HPASStanderd {
+		// 开关为非标准 hpas 接口使用方式，并且实例为 hpas 时，走带 header 的接口
 		eriList, listErr = c.hpasCloud.ListERIs(ctx, listArgs)
 	} else {
 		eriList, listErr = c.cloud.ListERIs(ctx, listArgs)

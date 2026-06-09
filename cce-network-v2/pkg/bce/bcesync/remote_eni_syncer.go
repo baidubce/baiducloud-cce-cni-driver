@@ -3,6 +3,7 @@ package bcesync
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/sirupsen/logrus"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
@@ -104,10 +106,19 @@ func (es *remoteVpcEniSyncher) syncENI(ctx context.Context) (result []eni.Eni, e
 	}
 	scopedLog := log.WithField(taskLogField, eniControllerName).
 		WithField("request", logfields.Json(listArgs))
+
 	// list eni from bce cloud, do not contain the eni which is underlay RDMA (HPC) or overlay RDMA (ERI)
 	// the underlay RDMA can be get by GetHPCEniID(ctx context.Context, instanceID string) (*hpc.EniList, error)
 	// the overlay RDMA can be get by ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error)
-	enis, err := es.bceclient.ListENIs(context.TODO(), listArgs)
+	var enis []enisdk.Eni
+	// 使用hpasclient的时候，返回的结果均为instance-id，
+	// 使用bceclient的时候，hpas类型的机器返回hpas-id，其他返回instance-id
+	if operatorOption.Config.HPASStanderd {
+		enis, err = es.bceclient.ListENIs(context.TODO(), listArgs)
+	} else {
+		enis, err = es.hpasclient.ListENIs(context.TODO(), listArgs)
+	}
+	// enis, err := es.bceclient.ListENIs(context.TODO(), listArgs)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("sync eni failed")
 		return result, err
@@ -177,8 +188,16 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 		"status":     eni.Status,
 	})
 
-	// find node by instanceID
-	nrsList, err := watchers.NetResourceSetClient.GetByInstanceID(eni.InstanceId)
+	// find node by instanceID; if HPAS-style ID, query by HPASID directly (only when standard mode is enabled)
+	var (
+		nrsList []*ccev2.NetResourceSet
+	)
+	useHPASLookup := operatorOption.Config.HPASStanderd && strings.HasPrefix(eni.InstanceId, "hpas-")
+	if useHPASLookup {
+		nrsList, err = watchers.NetResourceSetClient.GetByHPASID(eni.InstanceId)
+	} else {
+		nrsList, err = watchers.NetResourceSetClient.GetByInstanceID(eni.InstanceId)
+	}
 	if err != nil || len(nrsList) == 0 {
 		return
 	}
@@ -196,11 +215,21 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 	scopeLog.Debugf("find node by instanceID success")
 	scopeLog.Infof("start to create external eni")
 
+	effectiveInstanceID := eni.InstanceId
+	if eid, e := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); e != nil {
+		scopeLog.WithError(e).Error("failed to get effective instanceID")
+		es.eventRecorder.Eventf(resource, corev1.EventTypeWarning, "FailedGetEffectiveInstanceID",
+			"failed to get effective instanceID for ENI %s on nrs %s: %v", eni.EniId, resource.Name, e)
+		return false, nil
+	} else if eid != "" {
+		effectiveInstanceID = eid
+	}
+
 	newENI := &ccev2.ENI{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: eni.EniId,
 			Labels: map[string]string{
-				k8s.LabelInstanceID: eni.InstanceId,
+				k8s.LabelInstanceID: effectiveInstanceID,
 				k8s.LabelNodeName:   resource.Name,
 			},
 			Annotations: map[string]string{
@@ -220,7 +249,7 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 				ID:                         eni.EniId,
 				Name:                       eni.Name,
 				ZoneName:                   eni.ZoneName,
-				InstanceID:                 eni.InstanceId,
+				InstanceID:                 effectiveInstanceID,
 				VpcID:                      eni.VpcId,
 				SubnetID:                   eni.SubnetId,
 				SecurityGroupIds:           eni.SecurityGroupIds,
@@ -248,8 +277,9 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 // validateAndSyncENIIPs 校对现有ENI的spec中的IP是否和IaaS的一致，如不一致则同步
 func (es *remoteVpcEniSyncher) validateAndSyncENIIPs(existingENI *ccev2.ENI, iaasENI *enisdk.Eni) (bool, error) {
 	scopeLog := eniLog.WithFields(logrus.Fields{
-		"eniID": existingENI.Name,
-		"vpcID": existingENI.Spec.ENI.VpcID,
+		"eniID":            existingENI.Name,
+		"vpcID":            existingENI.Spec.ENI.VpcID,
+		"iaas instance-id": iaasENI.InstanceId,
 	})
 
 	// 比较K8s ENI CRD中的IP集合
@@ -290,6 +320,11 @@ func (es *remoteVpcEniSyncher) validateAndSyncENIIPs(existingENI *ccev2.ENI, iaa
 		}
 	}
 
+	if existingENI.Spec.InstanceID != iaasENI.InstanceId {
+		existingENI.Spec.InstanceID = iaasENI.InstanceId
+		needsUpdate = true
+	}
+
 	if !needsUpdate {
 		scopeLog.Debug("ENI IP sets are consistent")
 		return false, nil
@@ -302,6 +337,11 @@ func (es *remoteVpcEniSyncher) validateAndSyncENIIPs(existingENI *ccev2.ENI, iaa
 	updatedENI := existingENI.DeepCopy()
 	updatedENI.Spec.ENI.PrivateIPSet = ToModelPrivateIP(iaasENI.PrivateIpSet, iaasENI.VpcId, iaasENI.SubnetId)
 	updatedENI.Spec.ENI.IPV6PrivateIPSet = ToModelPrivateIP(iaasENI.Ipv6PrivateIpSet, iaasENI.VpcId, iaasENI.SubnetId)
+	// 同步 InstanceID 变更时的标签
+	if updatedENI.Labels == nil {
+		updatedENI.Labels = map[string]string{}
+	}
+	updatedENI.Labels[k8s.LabelInstanceID] = iaasENI.InstanceId
 
 	// 更新ENI CRD
 	_, err := es.updater.Update(updatedENI)

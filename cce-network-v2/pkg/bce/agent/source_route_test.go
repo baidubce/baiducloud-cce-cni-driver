@@ -1074,4 +1074,3 @@ func _TestNetlinkRuleListFilteredMock(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedRules, rules)
 }
-

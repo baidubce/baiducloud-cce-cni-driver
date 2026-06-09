@@ -88,9 +88,22 @@ func (eni *eniResource) ForeachAddress(instanceID string, fn ipamTypes.AddressIt
 // ForeachInstance will iterate over each instance inside `instances`, and call
 // `fn`. This function is read-locked for the entire execution.
 func (m *InstancesManager) ForeachInstanceReadyOnNode(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
-	// Select only the ENI of the local node
+	// Get effective instance ID from the node's NetResourceSet
+	effectiveInstanceID := instanceID
+
+	if nrs, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeName); err == nil {
+		if nrs != nil {
+			logrus.WithField("nrsName", nrs.Name).
+				WithField("instanceID", nrs.Spec.InstanceID).
+				WithField("hpasID", nrs.Spec.HPASID).Info("Found NRS for node")
+			if eid, err := nrs.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); err == nil {
+				effectiveInstanceID = eid
+			}
+		}
+	}
+	// Select only the ENI of the local node using effective instance id
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID: instanceID,
+		k8s.LabelInstanceID: effectiveInstanceID,
 		k8s.LabelNodeName:   nodeName,
 	}))
 	if err != nil {
@@ -130,9 +143,21 @@ func (m *InstancesManager) ForeachInstanceReadyOnNode(instanceID, nodeName strin
 // ForeachInstanceWithNotReady will iterate over each instance inside `instances`, and call
 // `fn`. This function is read-locked for the entire execution.
 func (m *InstancesManager) ForeachInstanceWithAllEni(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
-	// Select only the ENI of the local node
+	// Get effective instance ID from the node's NetResourceSet
+	effectiveInstanceID := instanceID
+	if nrs, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeName); err == nil {
+		if nrs != nil {
+			logrus.WithField("nrsName", nrs.Name).
+				WithField("instanceID", nrs.Spec.InstanceID).
+				WithField("hpasID", nrs.Spec.HPASID).Info("Found NRS for node")
+			if eid, err := nrs.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); err == nil {
+				effectiveInstanceID = eid
+			}
+		}
+	}
+	// Select only the ENI of the local node using effective instance id
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID: instanceID,
+		k8s.LabelInstanceID: effectiveInstanceID,
 		k8s.LabelNodeName:   nodeName,
 	}))
 	if err != nil {
@@ -310,11 +335,16 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 // will automatically create the ENI object from VPC.
 // The ENI object is created successfully and the node will record a status of "creating ENI".
 func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *bcesync.BorrowedSubnet) error {
-	eniName := CreateNameForENI(option.Config.ClusterID, n.instanceID, resource.Name)
+	// Get effective instance ID based on instance type and whether HPAS standard scheme is used
+	effectiveInstanceID, err := resource.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return fmt.Errorf("failed to get effective instance ID: %w", err)
+	}
+	eniName := CreateNameForENI(option.Config.ClusterID, effectiveInstanceID, resource.Name)
 	newENI := &ccev2.ENI{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{
-				k8s.LabelInstanceID: n.instanceID,
+				k8s.LabelInstanceID: effectiveInstanceID,
 				k8s.LabelNodeName:   resource.Name,
 			},
 			Annotations: map[string]string{},
@@ -331,7 +361,7 @@ func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLo
 			ENI: models.ENI{
 				Name:                       eniName,
 				ZoneName:                   subnet.Spec.AvailabilityZone,
-				InstanceID:                 n.instanceID,
+				InstanceID:                 effectiveInstanceID,
 				VpcID:                      subnet.Spec.VPCID,
 				SubnetID:                   subnet.Name,
 				SecurityGroupIds:           resource.Spec.ENI.SecurityGroups,
@@ -410,6 +440,7 @@ func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.E
 			Primary: true,
 		}},
 	}
+
 	if createENIArgs.EnterpriseSecurityGroupIds == nil {
 		createENIArgs.EnterpriseSecurityGroupIds = []string{}
 	}

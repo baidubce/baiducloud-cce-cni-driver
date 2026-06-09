@@ -212,6 +212,52 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 	return store
 }
 
+// getNodeStoreForNRS returns the nodeStore backing a specific NetResourceSet name.
+// For RDMA NetResourceSets, each node has its own store in sharedRdmaNetResourceSetStore.
+// For regular (ETH) NetResourceSets, there is a single shared store.
+func getNodeStoreForNRS(networkResourceSetName string) *nodeStore {
+	if networkResourceSetName != "" {
+		// 这里根据nrs的名字拿缓存，如果拿到了则是RDMA，否则就是ETH
+		// 普通的 ETH nrs name 会因为不在 map 中，而 !ok 回退到下面的返回 ETH 的缓存
+		if store, ok := sharedRdmaNetResourceSetStore[networkResourceSetName]; ok {
+			return store
+		}
+	}
+	return sharedNetResourceSetStore
+}
+
+// ResetMarkedForReleaseIPs iterates all marked-for-release IPs belonging to the provided NetResourceSet
+// and flips them to do-not-release. We use this during agent Restore() so that local IP reuse is not blocked
+// by stale release handshakes.
+func ResetMarkedForReleaseIPs(networkResourceSetName string) (int, error) {
+	log.WithField(fieldName, networkResourceSetName).Info("Resetting marked-for-release IPs")
+	// 这里 networkResourceSetName 可能是 ETH 的，也可能是 RDMA 的
+	store := getNodeStoreForNRS(networkResourceSetName)
+	if store == nil {
+		return 0, fmt.Errorf("netresourceset store for %s is not initialized", networkResourceSetName)
+	}
+
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.ownNode == nil || store.ownNode.Status.IPAM.ReleaseIPs == nil {
+		return 0, nil
+	}
+
+	resetCount := 0
+	for ip, status := range store.ownNode.Status.IPAM.ReleaseIPs {
+		if status == ipamOption.IPAMMarkForRelease {
+			store.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMDoNotRelease
+			resetCount++
+		}
+	}
+
+	if resetCount > 0 {
+		store.refreshTrigger.TriggerWithReason("restore release reset")
+	}
+
+	return resetCount, nil
+}
+
 func deriveVpcCIDRs(node *ccev2.NetResourceSet) (primaryCIDR *cidr.CIDR, secondaryCIDRs []*cidr.CIDR) {
 	// A node belongs to a single VPC so we can pick the first ENI
 	// in the list and derive the VPC CIDR from it.

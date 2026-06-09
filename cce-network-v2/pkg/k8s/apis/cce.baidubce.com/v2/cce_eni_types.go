@@ -218,6 +218,7 @@ const (
 	ENIMSGReNameFailed          CCEENIStatus = "ReNameFailed"
 	ENIMSGInstallRuleFailed     CCEENIStatus = "InstallRuleFailed"
 	ENIMSGInstallNeighborFailed CCEENIStatus = "InstallNeighborFailed"
+	ENIMSGNoMacAddress          CCEENIStatus = "NoMacAddress"
 )
 
 type ENIUseMode string

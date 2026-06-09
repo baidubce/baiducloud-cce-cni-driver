@@ -18,9 +18,11 @@ package nodediscovery
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/agent"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/sirupsen/logrus"
@@ -412,10 +414,20 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 
 	instanceID, err := agent.GetInstanceID()
 	if err != nil || instanceID == "" {
-		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError01", "failed to get instance id: %v", err)
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "failed to get instance id: %v", err)
 		log.WithError(err).Fatal("get instance id fail")
 	}
 	nodeResource.Spec.InstanceID = instanceID
+
+	// Get instance type to determine if HPASID is required
+	instanceTypeEx, err := agent.GetSourceType()
+	if err != nil {
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "failed to get instance type: %v", err)
+		log.WithError(err).Fatal("get instance type fail")
+	}
+
+	// Set HPASID only for HPAS instance types
+	n.setHPASIDIfNeeded(k8sNode, nodeResource, instanceTypeEx)
 
 	nrcs, err := n.nrcsNodeGetter.GetNodeNrcs(nodeTypes.GetName())
 	if err != nil {
@@ -477,6 +489,34 @@ func (n *NodeDiscovery) mutateNodeResource(nodeResource *ccev2.NetResourceSet) e
 // set max allocate ips to node default is 128
 // update subnet and security group ids
 // this update does not take effect on existing ENI
+
+// setHPASIDIfNeeded sets HPASID only for HPAS instance types; clears it otherwise
+func (n *NodeDiscovery) setHPASIDIfNeeded(k8sNode *k8sTypes.Node, nodeResource *ccev2.NetResourceSet, instanceTypeEx string) {
+	// If not HPAS type, ensure HPASID is empty
+
+	if !strings.EqualFold(instanceTypeEx, string(metadata.InstanceTypeExHPAS)) {
+		nodeResource.Spec.HPASID = ""
+		return
+	}
+
+	nodeResource.Spec.InstanceType = instanceTypeEx
+
+	// Get HPASID for HPAS instances
+	resourceID, err := agent.GetHpasID()
+	if err != nil {
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "failed to get hpas id: %v", err)
+		log.WithError(err).Fatal("get hpas id fail")
+	}
+
+	if resourceID == "" {
+		err := fmt.Errorf("HPAS instance type requires HPASID, but HPASID is empty")
+		n.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "HPAS instance requires HPASID: %v", err)
+		log.WithError(err).Fatal("HPAS instance requires HPASID")
+	}
+
+	nodeResource.Spec.HPASID = resourceID
+}
+
 func (n *NodeDiscovery) refreshVpcENIConfiguration(nodeResource *ccev2.NetResourceSet, nrcs *ccev2alpha1.NetResourceConfigSet, k8sNode *k8sTypes.Node) {
 	var (
 		preAllocateENI       = option.Config.ENI.PreAllocateENI

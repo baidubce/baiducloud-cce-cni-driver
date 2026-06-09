@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	unversionedvalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	k8sutilnet "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -19,8 +20,14 @@ import (
 	operatorWatchers "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	ccev1lister "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v1"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 )
+
+// SubnetClient defines the interface for subnet operations
+type SubnetClient interface {
+	Lister() ccev1lister.SubnetLister
+}
 
 var (
 	// HandlerMap contains admission webhook handlers
@@ -180,7 +187,7 @@ func (h *MutatingPSTSHandler) validateSubnet(
 			continue
 		}
 		if strategy.EnableReuseIPAddress {
-			allErrs = h.validateReuseSubnet(sbn, sbnSpec, fldPath.Child(sbnID), allErrs)
+			allErrs = h.validateReuseSubnet(sbn, sbnSpec, fldPath.Child(sbnID), allErrs, operatorWatchers.CCESubnetClient)
 		} else {
 			if len(sbnSpec) != 0 {
 				allErrs = append(allErrs, field.Invalid(fldPath.Child(sbnID), sbnID,
@@ -201,22 +208,43 @@ func (h *MutatingPSTSHandler) validateReuseSubnet(
 	customAllocation ccev2.CustomAllocationList,
 	fldPath *field.Path,
 	allErrs field.ErrorList,
+	subnetClient SubnetClient,
 ) field.ErrorList {
 	// mark subnet as exclusive
 	if !sbn.Spec.Exclusive {
 		return append(allErrs, field.Invalid(fldPath, sbn, "subnet is not exclusive"))
 	}
 
+	// Wait for CIDR information to be synced using wait.Poll
+	err := wait.Poll(200*time.Millisecond, 5*time.Second, func() (bool, error) {
+		// Check if CIDR is available
+		if sbn.Spec.CIDR != "" {
+			return true, nil
+		}
+
+		// Re-fetch the subnet to get updated information
+		updatedSbn, err := subnetClient.Lister().Get(sbn.Name)
+		if err == nil && updatedSbn != nil {
+			sbn = updatedSbn
+		}
+
+		return false, nil
+	})
+
+	if err != nil {
+		return append(allErrs, field.Invalid(fldPath, sbn, "subnet CIDR information is not yet available after waiting, please retry later"))
+	}
+
 	var (
 		cidrV4, cidrV6 *net.IPNet
-		err            error
+		parseErr       error
 
 		// indexRanges is used to record the range of the ip index
 		// this is used to check whether the custom allocation ip is out of range
 		indexRanges []*big.Int
 	)
-	_, cidrV4, err = net.ParseCIDR(sbn.Spec.CIDR)
-	if err != nil {
+	_, cidrV4, parseErr = net.ParseCIDR(sbn.Spec.CIDR)
+	if parseErr != nil {
 		return append(allErrs, field.Invalid(fldPath, sbn, "cidr of subnet is invalide"))
 	}
 	_, cidrV6, _ = net.ParseCIDR(sbn.Spec.IPv6CIDR)
@@ -241,7 +269,7 @@ func (h *MutatingPSTSHandler) validateReuseSubnet(
 			}
 			first := k8sutilnet.BigForIP(startIP)
 			last := k8sutilnet.BigForIP(endIP)
-			if first == nil || last == nil || first.Cmp(last) > 1 {
+			if first == nil || last == nil || first.Cmp(last) > 0 {
 				return append(allErrs, field.Invalid(fldPath, sbn, "ip range is invalid"))
 			}
 			indexRanges = append(indexRanges, first, last)

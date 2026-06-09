@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -91,16 +92,16 @@ func FilterAvailableSubnet(subnets []*bcesync.BorrowedSubnet, minAllocateIPs int
 func CategorizeSubnetError(filterErr error, subnetIDs []string, nodeName string) (string, string, string) {
 	if filterErr != nil {
 		if strings.Contains(filterErr.Error(), "no subnets available in required zone") {
-			return ccev2.ErrorCodeNoAvailableSubnet, ReasonSubnetZoneMismatch,
+			return ccev2.ErrorCodeNoAvailableSubnet, watchers.ReasonSubnetZoneMismatch,
 				fmt.Sprintf("zone mismatch for node %s: %v", nodeName, filterErr.Error())
 		} else if strings.Contains(filterErr.Error(), "insufficient IPs") {
-			return ccev2.ErrorCodeENISubnetNoMoreIP, ReasonSubnetInsufficientIPs,
+			return ccev2.ErrorCodeENISubnetNoMoreIP, watchers.ReasonSubnetInsufficientIPs,
 				fmt.Sprintf("insufficient IPs for node %s: %v", nodeName, filterErr.Error())
 		} else {
-			return ccev2.ErrorCodeNoAvailableSubnet, ReasonNoAvailableSubnet,
+			return ccev2.ErrorCodeNoAvailableSubnet, watchers.ReasonNoAvailableSubnet,
 				fmt.Sprintf("subnets not available for node %s: %v", nodeName, filterErr.Error())
 		}
 	}
-	return ccev2.ErrorCodeNoAvailableSubnet, ReasonNoAvailableSubnet,
+	return ccev2.ErrorCodeNoAvailableSubnet, watchers.ReasonNoAvailableSubnet,
 		fmt.Sprintf("subnets [%v] are not available for node %s", subnetIDs, nodeName)
 }

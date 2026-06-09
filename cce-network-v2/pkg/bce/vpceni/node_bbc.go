@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -57,7 +58,7 @@ func newBBCNetworkResourceSet(super *bceNetworkResourceSet) *bbcNetworkResourceS
 }
 
 func (n *bbcNetworkResourceSet) tryRefreshBBCENI() *ccev2.ENI {
-	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+	foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 		e, ok := iface.Resource.(*eniResource)
 		if !ok {
 			return nil
@@ -113,6 +114,10 @@ func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 			})
 		}
 	}
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return err
+	}
 
 	eni, err := n.manager.enilister.Get(bbceni.Id)
 	if errors.IsNotFound(err) {
@@ -121,7 +126,7 @@ func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 				// use bbc instance id as eni name
 				Name: bbceni.Id,
 				Labels: map[string]string{
-					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelInstanceID: effectiveInstanceID,
 					k8s.LabelNodeName:   n.k8sObj.Name,
 					k8s.LabelENIType:    string(ccev2.ENIForBBC),
 				},
@@ -275,7 +280,7 @@ func (n *bbcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 
 	eniQuota := n.getENIQuota()
 	if eniQuota != nil {
-		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil

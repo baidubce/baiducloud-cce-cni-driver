@@ -7,9 +7,40 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+	"github.com/baidubce/bce-sdk-go/util/log"
 )
 
-var defaultMetaClient = metadata.NewClient()
+// metadataClient is an interface that defines the methods needed from metadata client
+type metadataClient interface {
+	GetVPCID() (string, error)
+	GetInstanceTypeEx() (metadata.InstanceTypeEx, error)
+	GetSourceType() (string, error)
+	GetInstanceType() (metadata.InstanceType, error)
+	GetAvailabilityZone() (string, error)
+	GetInstanceID() (string, error)
+	GetResourceID() (string, error)
+	GetFeatureList() (*metadata.FeatureList, error)
+	GetSubnetID() (string, error)
+	GetLinkPrimaryIP(macAddress string) (string, error)
+	GetLinkGateway(macAddress, ip string) (string, error)
+	GetLinkMTU(macAddress string) (int, error)
+}
+
+var defaultMetaClient metadataClient = metadata.NewClient()
+
+// SetMetadataClient sets the metadata client for testing purposes
+// This function should only be used in tests
+func SetMetadataClient(client metadataClient) {
+	log.Debug("Setting metadata client to mock client")
+	defaultMetaClient = client
+}
+
+// ResetMetadataClient resets the metadata client to the default client
+// This function should only be used in tests
+func ResetMetadataClient() {
+	log.Debug("Resetting metadata client to default")
+	defaultMetaClient = metadata.NewClient()
+}
 
 // TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
 // GetInstanceMetadata get basic metadata information
@@ -52,12 +83,23 @@ func GetInstanceTypeEx() (metadata.InstanceTypeEx, error) {
 	return defaultMetaClient.GetInstanceTypeEx()
 }
 
+func GetSourceType() (string, error) {
+	return defaultMetaClient.GetSourceType()
+}
+
 func getVpcIDByName() (string, error) {
 	return defaultMetaClient.GetVPCID()
 }
 
 func GetInstanceID() (string, error) {
 	return defaultMetaClient.GetInstanceID()
+}
+
+// GetHpasID returns the HPAS ID if the instance is a HPAS instance,
+// otherwise returns an empty string
+func GetHpasID() (string, error) {
+	log.Debug("Getting HPAS ID from metadata client")
+	return defaultMetaClient.GetResourceID()
 }
 
 // GetFeatureList returns the feature list including ERI and ENI quota

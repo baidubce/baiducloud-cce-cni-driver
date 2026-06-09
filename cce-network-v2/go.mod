@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/agiledragon/gomonkey/v2 v2.7.0
 	github.com/blang/semver/v4 v4.0.0
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cilium/deepequal-gen v0.0.0-20200406125435-ad6a9003139e
 	github.com/cilium/ebpf v0.12.3
 	github.com/cilium/ipam v0.0.0-20211026130907-54a76012817c
@@ -61,7 +62,6 @@ require (
 )
 
 require (
-	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/coreos/go-iptables v0.6.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect

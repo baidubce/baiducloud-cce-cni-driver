@@ -234,6 +234,9 @@ const (
 
 	// EnableSecurityGroupSynerDuration is the duration of security group syner send alter event, default is 1h
 	SecurityGroupSynerDuration = "securitygroup-syner-duration"
+
+	// HPASStanderd enables the use of standardized HPAS interface
+	HPASStanderd = "hpas-standerd"
 )
 
 // OperatorConfig is the configuration used by the operator.
@@ -442,6 +445,9 @@ type OperatorConfig struct {
 
 	// SecurityGroupSynerDuration is the duration of security group syner send alter event
 	SecurityGroupSynerDuration time.Duration
+
+	// HPASStanderd enables the use of standardized HPAS interface
+	HPASStanderd bool
 }
 
 // Populate sets all options with the values from viper.
@@ -533,6 +539,9 @@ func (c *OperatorConfig) Populate() {
 
 	// secuirty group
 	c.SecurityGroupSynerDuration = viper.GetDuration(SecurityGroupSynerDuration)
+
+	// HPAS Standerd
+	c.HPASStanderd = viper.GetBool(HPASStanderd)
 
 	// Option maps and slices
 

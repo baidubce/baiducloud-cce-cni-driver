@@ -23,10 +23,12 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/sirupsen/logrus"
 )
 
 type eniResource ccev2.ENI
@@ -77,16 +79,33 @@ func (m *rdmaInstancesManager) ForeachInstance(instanceID, nodeName string, fn i
 		}
 		return ""
 	}
+	// Get effective instance ID from the node's NetResourceSet
+	effectiveInstanceID := instanceID
+
+	// 正常的rdma类型的机器保持不变使用instanceID
+	if nrs, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(nodeName); err == nil {
+		if nrs != nil {
+			logrus.WithField("nrsName", nrs.Name).
+				WithField("effectiveInstanceID", effectiveInstanceID).
+				WithField("hpasID", nrs.Spec.HPASID).Info("Found NRS for node")
+			if eid, err := nrs.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd); err == nil {
+				effectiveInstanceID = eid
+			}
+		}
+	} else {
+		logrus.WithError(err).WithField("nrsName", nodeName).Error("Failed to get NRS for node")
+		return err
+	}
 	// the macAddress and vifFeatures is decided by the NetResourceSet's annotation
 	macAddress := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoMacAddress]
 	vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
 	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
 	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
 	labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
-		getOwnerReference(), n.k8sObj.Spec.InstanceID, macAddress, vifFeatures)
+		getOwnerReference(), effectiveInstanceID, macAddress, vifFeatures)
 	// Select only the ENI of the local node's rdma interface
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID: instanceID,
+		k8s.LabelInstanceID: effectiveInstanceID,
 		k8s.LabelNodeName:   labelSelectorValue,
 	}))
 	if err != nil {
@@ -105,7 +124,7 @@ func (m *rdmaInstancesManager) ForeachInstance(instanceID, nodeName string, fn i
 			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted {
 			continue
 		}
-		fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
+		fn(effectiveInstanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
 			Resource: (*eniResource)(enis[i]),
 		})
 	}

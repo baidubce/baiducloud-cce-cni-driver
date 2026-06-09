@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	. "gopkg.in/check.v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/addressing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/checker"
@@ -34,6 +36,7 @@ import (
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
@@ -81,6 +84,77 @@ func TestIPNotAvailableInPoolError(t *testing.T) {
 	err2 = NewIPNotAvailableInPoolError(net.ParseIP("2.1.1.1"))
 	assert.NotEqual(t, err, err2)
 	assert.False(t, errors.Is(err, err2))
+}
+
+func TestResetMarkedForReleaseIPs(t *testing.T) {
+	makeReleaseNode := func(name string, release map[string]ipamTypes.IPReleaseStatus) *nodeStore {
+		store := newFakeNetResourceSetStore(&testConfigurationCRD{}, nil)
+		store.ownNode = &ccev2.NetResourceSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Status: ccev2.NetResourceStatus{
+				IPAM: ipamTypes.IPAMStatus{
+					ReleaseIPs: release,
+				},
+			},
+		}
+		return store
+	}
+
+	t.Run("regular store resets marked entries", func(t *testing.T) {
+		release := map[string]ipamTypes.IPReleaseStatus{
+			"10.0.0.1": ipamTypes.IPReleaseStatus(ipamOption.IPAMMarkForRelease),
+			"10.0.0.2": ipamTypes.IPReleaseStatus(ipamOption.IPAMDoNotRelease),
+		}
+		store := makeReleaseNode("node-1", release)
+
+		prevShared := sharedNetResourceSetStore
+		t.Cleanup(func() {
+			sharedNetResourceSetStore = prevShared
+		})
+		sharedNetResourceSetStore = store
+
+		resetCount, err := ResetMarkedForReleaseIPs("node-1")
+		require.NoError(t, err)
+		require.Equal(t, 1, resetCount)
+		assert.Equal(t, ipamOption.IPAMDoNotRelease, string(store.ownNode.Status.IPAM.ReleaseIPs["10.0.0.1"]))
+		assert.Equal(t, ipamOption.IPAMDoNotRelease, string(store.ownNode.Status.IPAM.ReleaseIPs["10.0.0.2"]))
+	})
+
+	t.Run("rdma store is selected by name", func(t *testing.T) {
+		release := map[string]ipamTypes.IPReleaseStatus{
+			"10.0.0.3": ipamTypes.IPReleaseStatus(ipamOption.IPAMMarkForRelease),
+		}
+		store := makeReleaseNode("rdma-node", release)
+
+		prevShared := sharedRdmaNetResourceSetStore
+		t.Cleanup(func() {
+			sharedRdmaNetResourceSetStore = prevShared
+		})
+		sharedRdmaNetResourceSetStore = map[string]*nodeStore{
+			"rdma-node": store,
+		}
+
+		resetCount, err := ResetMarkedForReleaseIPs("rdma-node")
+		require.NoError(t, err)
+		require.Equal(t, 1, resetCount)
+		assert.Equal(t, ipamOption.IPAMDoNotRelease, string(store.ownNode.Status.IPAM.ReleaseIPs["10.0.0.3"]))
+	})
+
+	t.Run("returns error when store missing", func(t *testing.T) {
+		prevShared := sharedNetResourceSetStore
+		prevRdma := sharedRdmaNetResourceSetStore
+		t.Cleanup(func() {
+			sharedNetResourceSetStore = prevShared
+			sharedRdmaNetResourceSetStore = prevRdma
+		})
+		sharedNetResourceSetStore = nil
+		sharedRdmaNetResourceSetStore = map[string]*nodeStore{}
+
+		_, err := ResetMarkedForReleaseIPs("missing-node")
+		require.Error(t, err)
+	})
 }
 
 type testConfigurationCRD struct{}

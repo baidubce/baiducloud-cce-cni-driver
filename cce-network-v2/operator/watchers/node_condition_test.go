@@ -13,19 +13,29 @@
  *
  */
 
-package nodeutils
+package watchers_test
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
+	applyv1 "k8s.io/client-go/applyconfigurations/core/v1"
+	typev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	listv1 "k8s.io/client-go/listers/core/v1"
 )
 
 func TestSetNodeCondition(t *testing.T) {
@@ -45,9 +55,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_ValidCondition_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       "zone mismatch for node test-node",
 			expectError:   false,
 			logger:        logger,
@@ -55,9 +65,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_EmptyNodeName_When_SetNodeCondition_Then_Continue",
 			nodeName:      "",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionFalse,
-			reason:        ReasonSubnetsAvailable,
+			reason:        watchers.ReasonSubnetsAvailable,
 			message:       "subnets are available",
 			expectError:   false,
 			logger:        logger,
@@ -65,9 +75,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_ValidFalseCondition_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-2",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionFalse,
-			reason:        ReasonSubnetsAvailable,
+			reason:        watchers.ReasonSubnetsAvailable,
 			message:       "subnets are available for node test-node-2",
 			expectError:   false,
 			logger:        logger,
@@ -85,9 +95,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_LongMessage_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-4",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetInsufficientIPs,
+			reason:        watchers.ReasonSubnetInsufficientIPs,
 			message:       "This is a very long message that tests the JSON marshaling functionality with special characters: !@#$%^&*()_+-=[]{}|;':\",./<>?",
 			expectError:   false,
 			logger:        logger,
@@ -95,9 +105,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_EmptyMessage_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-5",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionFalse,
-			reason:        ReasonSubnetsAvailable,
+			reason:        watchers.ReasonSubnetsAvailable,
 			message:       "",
 			expectError:   false,
 			logger:        logger,
@@ -105,9 +115,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_SpecialCharacters_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-6",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetEnsureFailure,
+			reason:        watchers.ReasonSubnetEnsureFailure,
 			message:       "Message with special chars: \n\t\r\"\\",
 			expectError:   false,
 			logger:        logger,
@@ -115,9 +125,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_EmptyNodeNameWithNilLogger_When_SetNodeCondition_Then_Continue",
 			nodeName:      "",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       "test message",
 			expectError:   false,
 			logger:        nil,
@@ -125,9 +135,9 @@ func TestSetNodeCondition(t *testing.T) {
 		{
 			name:          "Given_NonEmptyNodeNameWithNilLogger_When_SetNodeCondition_Then_Continue",
 			nodeName:      "test-node-nil-logger",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       "test message",
 			expectError:   false,
 			logger:        nil,
@@ -146,7 +156,7 @@ func TestSetNodeCondition(t *testing.T) {
 
 			// Call SetNodeCondition - this will panic due to missing Kubernetes API
 			// but we catch it and continue
-			SetNodeCondition(tt.nodeName, tt.conditionType, tt.status, tt.reason, tt.message, tt.logger)
+			watchers.SetNodeCondition(tt.nodeName, tt.conditionType, tt.status, tt.reason, tt.message, tt.logger)
 
 			// If we reach here, the function executed without panic
 			assert.True(t, true, "SetNodeCondition executed without panic")
@@ -157,14 +167,14 @@ func TestSetNodeCondition(t *testing.T) {
 func TestConstants(t *testing.T) {
 	t.Run("Given_Constants_When_CheckValues_Then_ReturnExpectedValues", func(t *testing.T) {
 		// Test that constants are properly defined
-		assert.Equal(t, corev1.NodeConditionType("CCESubnetUnavailable"), CCESubnetUnavailable)
-		assert.Equal(t, "SubnetZoneMismatch", ReasonSubnetZoneMismatch)
-		assert.Equal(t, "SubnetInsufficientIPs", ReasonSubnetInsufficientIPs)
-		assert.Equal(t, "SubnetEnsureFailure", ReasonSubnetEnsureFailure)
-		assert.Equal(t, "NoAvailableSubnet", ReasonNoAvailableSubnet)
-		assert.Equal(t, "SubnetsAvailable", ReasonSubnetsAvailable)
-		assert.Equal(t, "SubnetEnsured", ReasonSubnetEnsured)
-		assert.Equal(t, "IPBorrowSucceeded", ReasonIPBorrowSucceeded)
+		assert.Equal(t, corev1.NodeConditionType("CCESubnetUnavailable"), watchers.CCESubnetUnavailable)
+		assert.Equal(t, "SubnetZoneMismatch", watchers.ReasonSubnetZoneMismatch)
+		assert.Equal(t, "SubnetInsufficientIPs", watchers.ReasonSubnetInsufficientIPs)
+		assert.Equal(t, "SubnetEnsureFailure", watchers.ReasonSubnetEnsureFailure)
+		assert.Equal(t, "NoAvailableSubnet", watchers.ReasonNoAvailableSubnet)
+		assert.Equal(t, "SubnetsAvailable", watchers.ReasonSubnetsAvailable)
+		assert.Equal(t, "SubnetEnsured", watchers.ReasonSubnetEnsured)
+		assert.Equal(t, "IPBorrowSucceeded", watchers.ReasonIPBorrowSucceeded)
 	})
 }
 
@@ -203,7 +213,7 @@ func TestSetNodeConditionWithDifferentLoggers(t *testing.T) {
 			}()
 
 			// Call SetNodeCondition with different logger configurations
-			SetNodeCondition(tt.nodeName, CCESubnetUnavailable, corev1.ConditionTrue, ReasonSubnetZoneMismatch, "test message", tt.logger)
+			watchers.SetNodeCondition(tt.nodeName, watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetZoneMismatch, "test message", tt.logger)
 
 			// If we reach here, the function executed without panic
 			assert.True(t, true, "SetNodeCondition executed without panic")
@@ -226,25 +236,25 @@ func TestSetNodeConditionEdgeCases(t *testing.T) {
 		{
 			name:          "Given_UnicodeMessage_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-unicode",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       "Unicode message: 你好世界 🌍 🚀",
 		},
 		{
 			name:          "Given_JSONLikeMessage_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-json",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       `{"key": "value", "nested": {"array": [1,2,3]}}`,
 		},
 		{
 			name:          "Given_HTMLMessage_When_SetNodeCondition_Then_Success",
 			nodeName:      "test-node-html",
-			conditionType: CCESubnetUnavailable,
+			conditionType: watchers.CCESubnetUnavailable,
 			status:        corev1.ConditionTrue,
-			reason:        ReasonSubnetZoneMismatch,
+			reason:        watchers.ReasonSubnetZoneMismatch,
 			message:       "<html><body><h1>Test</h1></body></html>",
 		},
 	}
@@ -260,7 +270,7 @@ func TestSetNodeConditionEdgeCases(t *testing.T) {
 			}()
 
 			// Call SetNodeCondition with edge case messages
-			SetNodeCondition(tt.nodeName, tt.conditionType, tt.status, tt.reason, tt.message, logger)
+			watchers.SetNodeCondition(tt.nodeName, tt.conditionType, tt.status, tt.reason, tt.message, logger)
 
 			// If we reach here, the function executed without panic
 			assert.True(t, true, "SetNodeCondition executed without panic")
@@ -268,11 +278,11 @@ func TestSetNodeConditionEdgeCases(t *testing.T) {
 	}
 }
 
-// TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_HandleAllStatuses 测试不同的状态值
+// TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_HandleAllStatuses tests different status values
 func TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_HandleAllStatuses(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建测试节点
+	// Create test node
 	testNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-node",
@@ -282,11 +292,11 @@ func TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_Han
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 测试不同的状态值
+	// Test different status values
 	statuses := []corev1.ConditionStatus{
 		corev1.ConditionTrue,
 		corev1.ConditionFalse,
@@ -295,21 +305,21 @@ func TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_Han
 
 	for _, status := range statuses {
 		t.Run(fmt.Sprintf("Test_%s", status), func(t *testing.T) {
-			// 执行测试
+			// Execute test
 			logger := logrus.NewEntry(logrus.New())
-			SetNodeCondition("test-node", CCESubnetUnavailable, status, "TestReason", "Test message", logger)
+			watchers.SetNodeCondition("test-node", watchers.CCESubnetUnavailable, status, "TestReason", "Test message", logger)
 
-			// 等待一下让 informer 同步
+			// Wait for informer to sync
 			time.Sleep(50 * time.Millisecond)
 
-			// 验证条件被设置
+			// Verify condition was set
 			node, err := watchers.NodeClient.Lister().Get("test-node")
 			assert.NoError(t, err, "should get node from lister")
 
-			// 检查是否有目标条件
+			// Check if target condition exists
 			found := false
 			for _, condition := range node.Status.Conditions {
-				if condition.Type == CCESubnetUnavailable {
+				if condition.Type == watchers.CCESubnetUnavailable {
 					found = true
 					assert.Equal(t, status, condition.Status, "condition status should match")
 					assert.Equal(t, "TestReason", condition.Reason, "condition reason should match")
@@ -322,13 +332,13 @@ func TestSetNodeCondition_Given_DifferentStatuses_When_SetNodeCondition_Then_Han
 	}
 }
 
-// TestSetNodeCondition_Given_ConditionAlreadyExists_When_SetNodeCondition_Then_ReturnEarly 测试条件已存在的情况
+// TestSetNodeCondition_Given_ConditionAlreadyExists_When_SetNodeCondition_Then_ReturnEarly tests condition already exists
 func TestSetNodeCondition_Given_ConditionAlreadyExists_When_SetNodeCondition_Then_ReturnEarly(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建已有条件的测试节点
+	// Create test node with existing condition
 	existingCondition := corev1.NodeCondition{
-		Type:               CCESubnetUnavailable,
+		Type:               watchers.CCESubnetUnavailable,
 		Status:             corev1.ConditionTrue,
 		Reason:             "TestReason",
 		Message:            "Test message",
@@ -345,31 +355,31 @@ func TestSetNodeCondition_Given_ConditionAlreadyExists_When_SetNodeCondition_The
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 执行测试 - 尝试设置相同的条件
+	// Execute test - try to set the same condition
 	logger := logrus.NewEntry(logrus.New())
-	SetNodeCondition("test-node-existing", CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
+	watchers.SetNodeCondition("test-node-existing", watchers.CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
 
-	// 等待一下让 informer 同步
+	// Wait for informer to sync
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证条件数量没有变化
+	// Verify condition count hasn't changed
 	node, err := watchers.NodeClient.Lister().Get("test-node-existing")
 	assert.NoError(t, err, "should get node from lister")
 	assert.Len(t, node.Status.Conditions, 1, "should have exactly one condition")
 }
 
-// TestSetNodeCondition_Given_DifferentConditionStatus_When_SetNodeCondition_Then_UpdateCondition 测试不同状态的条件更新
+// TestSetNodeCondition_Given_DifferentConditionStatus_When_SetNodeCondition_Then_UpdateCondition tests condition update with different status
 func TestSetNodeCondition_Given_DifferentConditionStatus_When_SetNodeCondition_Then_UpdateCondition(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建有不同状态条件的测试节点
+	// Create test node with different status condition
 	existingCondition := corev1.NodeCondition{
-		Type:               CCESubnetUnavailable,
-		Status:             corev1.ConditionFalse, // 不同的状态
+		Type:               watchers.CCESubnetUnavailable,
+		Status:             corev1.ConditionFalse, // Different status
 		Reason:             "TestReason",
 		Message:            "Test message",
 		LastTransitionTime: metav1.Now(),
@@ -385,25 +395,25 @@ func TestSetNodeCondition_Given_DifferentConditionStatus_When_SetNodeCondition_T
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 执行测试 - 尝试设置不同的状态
+	// Execute test - try to set different status
 	logger := logrus.NewEntry(logrus.New())
-	SetNodeCondition("test-node-different-status", CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
+	watchers.SetNodeCondition("test-node-different-status", watchers.CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
 
-	// 等待一下让 informer 同步
+	// Wait for informer to sync
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证条件被更新
+	// Verify condition was updated
 	node, err := watchers.NodeClient.Lister().Get("test-node-different-status")
 	assert.NoError(t, err, "should get node from lister")
 
-	// 检查条件状态是否被更新
+	// Check if condition status was updated
 	found := false
 	for _, condition := range node.Status.Conditions {
-		if condition.Type == CCESubnetUnavailable {
+		if condition.Type == watchers.CCESubnetUnavailable {
 			found = true
 			assert.Equal(t, corev1.ConditionTrue, condition.Status, "condition status should be updated")
 			break
@@ -412,15 +422,15 @@ func TestSetNodeCondition_Given_DifferentConditionStatus_When_SetNodeCondition_T
 	assert.True(t, found, "should find CCESubnetUnavailable condition")
 }
 
-// TestSetNodeCondition_Given_DifferentConditionReason_When_SetNodeCondition_Then_UpdateCondition 测试不同原因的条件更新
+// TestSetNodeCondition_Given_DifferentConditionReason_When_SetNodeCondition_Then_UpdateCondition tests condition update with different reason
 func TestSetNodeCondition_Given_DifferentConditionReason_When_SetNodeCondition_Then_UpdateCondition(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建有不同原因条件的测试节点
+	// Create test node with different reason condition
 	existingCondition := corev1.NodeCondition{
-		Type:               CCESubnetUnavailable,
+		Type:               watchers.CCESubnetUnavailable,
 		Status:             corev1.ConditionTrue,
-		Reason:             "OldReason", // 不同的原因
+		Reason:             "OldReason", // Different reason
 		Message:            "Test message",
 		LastTransitionTime: metav1.Now(),
 		LastHeartbeatTime:  metav1.Now(),
@@ -435,25 +445,25 @@ func TestSetNodeCondition_Given_DifferentConditionReason_When_SetNodeCondition_T
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 执行测试 - 尝试设置不同的原因
+	// Execute test - try to set different reason
 	logger := logrus.NewEntry(logrus.New())
-	SetNodeCondition("test-node-different-reason", CCESubnetUnavailable, corev1.ConditionTrue, "NewReason", "Test message", logger)
+	watchers.SetNodeCondition("test-node-different-reason", watchers.CCESubnetUnavailable, corev1.ConditionTrue, "NewReason", "Test message", logger)
 
-	// 等待一下让 informer 同步
+	// Wait for informer to sync
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证条件被更新
+	// Verify condition was updated
 	node, err := watchers.NodeClient.Lister().Get("test-node-different-reason")
 	assert.NoError(t, err, "should get node from lister")
 
-	// 检查条件原因是否被更新
+	// Check if condition reason was updated
 	found := false
 	for _, condition := range node.Status.Conditions {
-		if condition.Type == CCESubnetUnavailable {
+		if condition.Type == watchers.CCESubnetUnavailable {
 			found = true
 			assert.Equal(t, "NewReason", condition.Reason, "condition reason should be updated")
 			break
@@ -462,11 +472,11 @@ func TestSetNodeCondition_Given_DifferentConditionReason_When_SetNodeCondition_T
 	assert.True(t, found, "should find CCESubnetUnavailable condition")
 }
 
-// TestSetNodeCondition_Given_MultipleConditions_When_SetNodeCondition_Then_CheckAllConditions 测试多个条件的情况
+// TestSetNodeCondition_Given_MultipleConditions_When_SetNodeCondition_Then_CheckAllConditions tests multiple conditions
 func TestSetNodeCondition_Given_MultipleConditions_When_SetNodeCondition_Then_CheckAllConditions(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建有多个条件的测试节点
+	// Create test node with multiple conditions
 	existingCondition1 := corev1.NodeCondition{
 		Type:               corev1.NodeConditionType("OtherCondition"),
 		Status:             corev1.ConditionFalse,
@@ -477,7 +487,7 @@ func TestSetNodeCondition_Given_MultipleConditions_When_SetNodeCondition_Then_Ch
 	}
 
 	existingCondition2 := corev1.NodeCondition{
-		Type:               CCESubnetUnavailable,
+		Type:               watchers.CCESubnetUnavailable,
 		Status:             corev1.ConditionTrue,
 		Reason:             "TestReason",
 		Message:            "Test message",
@@ -494,28 +504,28 @@ func TestSetNodeCondition_Given_MultipleConditions_When_SetNodeCondition_Then_Ch
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 执行测试 - 尝试设置相同的条件
+	// Execute test - try to set the same condition
 	logger := logrus.NewEntry(logrus.New())
-	SetNodeCondition("test-node-multiple", CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
+	watchers.SetNodeCondition("test-node-multiple", watchers.CCESubnetUnavailable, corev1.ConditionTrue, "TestReason", "Test message", logger)
 
-	// 等待一下让 informer 同步
+	// Wait for informer to sync
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证条件数量没有变化
+	// Verify condition count hasn't changed
 	node, err := watchers.NodeClient.Lister().Get("test-node-multiple")
 	assert.NoError(t, err, "should get node from lister")
 	assert.Len(t, node.Status.Conditions, 2, "should have exactly two conditions")
 }
 
-// TestSetNodeCondition_Given_AllReasonConstants_When_SetNodeCondition_Then_HandleCorrectly 测试所有原因常量
+// TestSetNodeCondition_Given_AllReasonConstants_When_SetNodeCondition_Then_HandleCorrectly tests all reason constants
 func TestSetNodeCondition_Given_AllReasonConstants_When_SetNodeCondition_Then_HandleCorrectly(t *testing.T) {
 	ccemock.InitMockEnv()
 
-	// 创建测试节点
+	// Create test node
 	testNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-node-reasons",
@@ -525,38 +535,38 @@ func TestSetNodeCondition_Given_AllReasonConstants_When_SetNodeCondition_Then_Ha
 		},
 	}
 
-	// 添加到 informer
+	// Add to informer
 	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
 	assert.NoError(t, err, "should add node to informer successfully")
 
-	// 测试所有原因常量
+	// Test all reason constants
 	reasons := []string{
-		ReasonSubnetZoneMismatch,
-		ReasonSubnetInsufficientIPs,
-		ReasonSubnetEnsureFailure,
-		ReasonNoAvailableSubnet,
-		ReasonSubnetsAvailable,
-		ReasonSubnetEnsured,
-		ReasonIPBorrowSucceeded,
+		watchers.ReasonSubnetZoneMismatch,
+		watchers.ReasonSubnetInsufficientIPs,
+		watchers.ReasonSubnetEnsureFailure,
+		watchers.ReasonNoAvailableSubnet,
+		watchers.ReasonSubnetsAvailable,
+		watchers.ReasonSubnetEnsured,
+		watchers.ReasonIPBorrowSucceeded,
 	}
 
 	for _, reason := range reasons {
 		t.Run(fmt.Sprintf("Test_%s", reason), func(t *testing.T) {
-			// 执行测试
+			// Execute test
 			logger := logrus.NewEntry(logrus.New())
-			SetNodeCondition("test-node-reasons", CCESubnetUnavailable, corev1.ConditionTrue, reason, "Test message", logger)
+			watchers.SetNodeCondition("test-node-reasons", watchers.CCESubnetUnavailable, corev1.ConditionTrue, reason, "Test message", logger)
 
-			// 等待一下让 informer 同步
+			// Wait for informer to sync
 			time.Sleep(50 * time.Millisecond)
 
-			// 验证条件被设置
+			// Verify condition was set
 			node, err := watchers.NodeClient.Lister().Get("test-node-reasons")
 			assert.NoError(t, err, "should get node from lister")
 
-			// 检查是否有目标条件
+			// Check if target condition exists
 			found := false
 			for _, condition := range node.Status.Conditions {
-				if condition.Type == CCESubnetUnavailable && condition.Reason == reason {
+				if condition.Type == watchers.CCESubnetUnavailable && condition.Reason == reason {
 					found = true
 					assert.Equal(t, corev1.ConditionTrue, condition.Status, "condition status should match")
 					assert.Equal(t, reason, condition.Reason, "condition reason should match")
@@ -566,4 +576,184 @@ func TestSetNodeCondition_Given_AllReasonConstants_When_SetNodeCondition_Then_Ha
 			assert.True(t, found, "should find CCESubnetUnavailable condition with correct reason")
 		})
 	}
+}
+
+// TestSetNodeCondition_Given_NodeNotFound_When_SetNodeCondition_Then_ReturnEarly tests node not found scenario
+func TestSetNodeCondition_Given_NodeNotFound_When_SetNodeCondition_Then_ReturnEarly(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	// Execute test - try to set condition for non-existing node
+	logger := logrus.NewEntry(logrus.New())
+	// This should return early without error since node doesn't exist
+	watchers.SetNodeCondition("non-existing-node", watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetZoneMismatch, "Test message", logger)
+
+	// Wait for potential operations
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify node doesn't exist in lister
+	_, err := watchers.NodeClient.Lister().Get("non-existing-node")
+	assert.Error(t, err, "should get error when querying non-existing node")
+}
+
+// TestSetNodeCondition_Given_JSONMarshalError_When_SetNodeCondition_Then_LogError tests JSON marshal error scenario
+func TestSetNodeCondition_Given_JSONMarshalError_When_SetNodeCondition_Then_LogError(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	// Create test node
+	testNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node-json-error",
+		},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{},
+		},
+	}
+
+	// Add to informer
+	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
+	assert.NoError(t, err, "should add node to informer successfully")
+
+	// Mock json.Marshal to return error
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyFunc(json.Marshal, func(v interface{}) ([]byte, error) {
+		return nil, errors.New("mock json marshal error")
+	})
+
+	// Execute test
+	logger := logrus.NewEntry(logrus.New())
+	watchers.SetNodeCondition("test-node-json-error", watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetZoneMismatch, "Test message", logger)
+
+	// Wait for operations
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestSetNodeCondition_Given_ListerGetError_When_SetNodeCondition_Then_LogError tests Lister.Get error scenario (non-NotFound)
+func TestSetNodeCondition_Given_ListerGetError_When_SetNodeCondition_Then_LogError(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	// Use gomonkey to patch Lister method to return mock lister
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	var mockUpdater watchers.NodeUpdater
+	mockLister := &mockNodeListerWithError{}
+	patches.ApplyMethod(&mockUpdater, "Lister", func(*watchers.NodeUpdater) listv1.NodeLister {
+		return mockLister
+	})
+
+	// Execute test
+	logger := logrus.NewEntry(logrus.New())
+	watchers.SetNodeCondition("test-node", watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetZoneMismatch, "Test message", logger)
+
+	// Wait for operations
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestSetNodeCondition_Given_PatchStatusError_When_SetNodeCondition_Then_LogError tests PatchStatus error scenario
+func TestSetNodeCondition_Given_PatchStatusError_When_SetNodeCondition_Then_LogError(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	// Create test node with different condition to trigger update
+	testNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node-patch-error",
+		},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:   watchers.CCESubnetUnavailable,
+					Status: corev1.ConditionFalse,
+					Reason: watchers.ReasonSubnetsAvailable,
+				},
+			},
+		},
+	}
+
+	// Add to informer
+	err := ccemock.EnsureNodeToInformer(t, []*corev1.Node{testNode})
+	assert.NoError(t, err, "should add node to informer successfully")
+
+	// Use gomonkey to patch NodeInterface method to return mock interface
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	var mockUpdater watchers.NodeUpdater
+	mockInterface := &mockNodeInterfaceWithPatchError{}
+	patches.ApplyMethod(&mockUpdater, "NodeInterface", func(*watchers.NodeUpdater) typev1.NodeInterface {
+		return mockInterface
+	})
+
+	// Execute test
+	logger := logrus.NewEntry(logrus.New())
+	watchers.SetNodeCondition("test-node-patch-error", watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetZoneMismatch, "Test message", logger)
+
+	// Wait for operations
+	time.Sleep(50 * time.Millisecond)
+}
+
+// mockNodeListerWithError is a mock NodeLister that returns error on Get
+type mockNodeListerWithError struct {
+}
+
+func (m *mockNodeListerWithError) List(selector labels.Selector) ([]*corev1.Node, error) {
+	return nil, nil
+}
+
+func (m *mockNodeListerWithError) Get(name string) (*corev1.Node, error) {
+	// Return a non-NotFound error
+	return nil, errors.New("mock lister get error")
+}
+
+// mockNodeInterfaceWithPatchError is a mock NodeInterface that returns error on PatchStatus
+type mockNodeInterfaceWithPatchError struct {
+}
+
+func (m *mockNodeInterfaceWithPatchError) Create(ctx context.Context, node *corev1.Node, opts metav1.CreateOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Update(ctx context.Context, node *corev1.Node, opts metav1.UpdateOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) UpdateStatus(ctx context.Context, node *corev1.Node, opts metav1.UpdateOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) DeleteCollection(ctx context.Context, opts metav1.DeleteOptions, listOpts metav1.ListOptions) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) List(ctx context.Context, opts metav1.ListOptions) (*corev1.NodeList, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Watch(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts metav1.PatchOptions, subresources ...string) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) Apply(ctx context.Context, node *applyv1.NodeApplyConfiguration, opts metav1.ApplyOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) ApplyStatus(ctx context.Context, node *applyv1.NodeApplyConfiguration, opts metav1.ApplyOptions) (*corev1.Node, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockNodeInterfaceWithPatchError) PatchStatus(ctx context.Context, nodeName string, data []byte) (*corev1.Node, error) {
+	// Return error to simulate PatchStatus failure
+	return nil, errors.New("mock patch status error")
 }

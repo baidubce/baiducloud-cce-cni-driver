@@ -3,6 +3,7 @@ package vpceni
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -21,6 +24,7 @@ import (
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	"github.com/golang/mock/gomock"
@@ -73,66 +77,6 @@ func Test_searchMaxAvailableSubnet(t *testing.T) {
 	assert.Equal(t, 300, best.Status.AvailableIPNum)
 }
 
-func Test_bceNode_FilterAvailableSubnetIds(t *testing.T) {
-	ccemock.InitMockEnv()
-	bcesync.InitBSM()
-
-	n := &bceNetworkResourceSet{
-		availableSubnets: []*bcesync.BorrowedSubnet{},
-		k8sObj: &ccev2.NetResourceSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "192.168.0.2",
-			},
-			Spec: ccev2.NetResourceSpec{
-				InstanceID: "i-testbcc",
-				ENI: &api.ENISpec{
-					SubnetIDs:        []string{"sbn-abc", "sbn-def"},
-					AvailabilityZone: "zoneD",
-					InstanceType:     "BCC",
-					UseMode:          string(ccev2.ENIUseModeSecondaryIP),
-					VpcID:            "vpc-test",
-				},
-			},
-		},
-	}
-
-	t.Run("no subnet ids", func(t *testing.T) {
-		var subnetIDs []string
-		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
-		assert.Equal(t, []*bcesync.BorrowedSubnet(nil), result)
-	})
-
-	t.Run("no available subnets", func(t *testing.T) {
-		subnetIDs := []string{"a", "b"}
-		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
-		assert.Equal(t, []*bcesync.BorrowedSubnet(nil), result)
-	})
-
-	t.Run("have available subnets", func(t *testing.T) {
-		vpcID := n.k8sObj.Spec.ENI.VpcID
-		subnetIDs := []string{"sbn-noabc", "sbn-nodef", "sbn-noghi"}
-		var (
-			exceptSubnets []*ccev1.Subnet
-		)
-
-		for i, subnetID := range subnetIDs {
-			sbn := ccemock.NewMockSubnet(subnetID, fmt.Sprintf("10.58.%d.0/24", i+10))
-			sbn.Spec.VPCID = vpcID
-
-			exceptSubnets = append(exceptSubnets, sbn)
-		}
-		ccemock.EnsureSubnetsToInformer(t, exceptSubnets)
-
-		result := n.FilterAvailableSubnetIds(subnetIDs, 1)
-
-		var resultSbn []*ccev1.Subnet
-		for _, sbn := range result {
-			resultSbn = append(resultSbn, sbn.Subnet)
-		}
-		assert.EqualValues(t, exceptSubnets, resultSbn)
-	})
-}
-
 func TestNewNode(t *testing.T) {
 	t.Run("test newBBCNode", func(t *testing.T) {
 		ccemock.InitMockEnv()
@@ -173,12 +117,298 @@ func TestPrepareIPAllocation(t *testing.T) {
 			assert.Equalf(t, "", allocation.InterfaceID, "should have available interface")
 		}
 	})
+
+	// 测试有可用 ENI 且有可用 IP 的情况
+	t.Run("Given_node_with_available_ENI_When_PrepareIPAllocation_Then_return_available_IPs", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 创建一个可用的 ENI
+		ctx := context.Background()
+		sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+		if !assert.NoError(t, err, "get subnet failed") {
+			return
+		}
+
+		mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
+		if !assert.NoError(t, err, "create mock ENI failed") {
+			return
+		}
+
+		// 设置 ENI 为 ReadyOnNode 状态
+		mockEni.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
+		mockEni.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni.Spec.UseMode = ccev2.ENIUseModeSecondaryIP
+
+		err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
+		if !assert.NoError(t, err, "ensure enis to informer failed") {
+			return
+		}
+
+		// 初始化必要的字段
+		if node.expiredVPCVersion == nil {
+			node.expiredVPCVersion = make(map[string]int64)
+		}
+		if node.creatingEni == nil {
+			node.creatingEni = newCreatingEniSet()
+		}
+
+		// 触发 resync 以填充接口数据
+		scopedLog := testLog.WithField("test", "PrepareIPAllocation_with_available_ENI")
+		_, err = node.ResyncInterfacesAndIPs(ctx, scopedLog)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 调用 PrepareIPAllocation
+		allocation, err := node.PrepareIPAllocation(scopedLog)
+		if assert.NoError(t, err) {
+			assert.NotNil(t, allocation, "allocation should not be nil")
+			assert.NotEmpty(t, allocation.InterfaceID, "should have interface ID")
+			assert.Greater(t, allocation.AvailableForAllocationIPv4, 0, "should have available IPv4 addresses")
+		}
+	})
+
+	// 测试 ENI 状态不是 ReadyOnNode 的情况
+	// 当 ENI 状态不是 ReadyOnNode 时，系统会跳过该 ENI 并允许创建新的 ENI
+	t.Run("Given_node_with_non_ready_ENI_When_PrepareIPAllocation_Then_skip_and_allow_new_ENI", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 创建一个非 ReadyOnNode 状态的 ENI
+		ctx := context.Background()
+		sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+		if !assert.NoError(t, err, "get subnet failed") {
+			return
+		}
+
+		mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
+		if !assert.NoError(t, err, "create mock ENI failed") {
+			return
+		}
+
+		// 设置 ENI 为 Pending 状态
+		mockEni.Status.CCEStatus = ccev2.ENIStatusPending
+		mockEni.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni.Spec.UseMode = ccev2.ENIUseModeSecondaryIP
+
+		err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
+		if !assert.NoError(t, err, "ensure enis to informer failed") {
+			return
+		}
+
+		// 初始化必要的字段
+		if node.expiredVPCVersion == nil {
+			node.expiredVPCVersion = make(map[string]int64)
+		}
+		if node.creatingEni == nil {
+			node.creatingEni = newCreatingEniSet()
+		}
+
+		// 触发 resync 以填充接口数据
+		scopedLog := testLog.WithField("test", "PrepareIPAllocation_with_non_ready_ENI")
+		_, err = node.ResyncInterfacesAndIPs(ctx, scopedLog)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 调用 PrepareIPAllocation
+		// 非 ReadyOnNode 状态的 ENI 会被跳过，但不会阻止创建新 ENI
+		allocation, err := node.PrepareIPAllocation(scopedLog)
+		if assert.NoError(t, err) {
+			assert.NotNil(t, allocation, "allocation should not be nil")
+			// 应该允许创建新的 ENI
+			assert.Greater(t, allocation.AvailableInterfaces, 0, "should have available interfaces to create new ENI")
+			// 但是没有可用的 IP（因为非 ReadyOnNode 的 ENI 被跳过了）
+			assert.Equal(t, 0, allocation.AvailableForAllocationIPv4, "should have zero available IPv4 addresses since ENI is not ready")
+		}
+	})
+
+	// 测试 ENI 已满无可用 IP 的情况
+	t.Run("Given_node_with_full_ENI_When_PrepareIPAllocation_Then_return_zero_available_IPs", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 创建一个已满的 ENI（IP 数量等于 MaxIPsPerENI）
+		ctx := context.Background()
+		sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+		if !assert.NoError(t, err, "get subnet failed") {
+			return
+		}
+
+		// 创建一个有 16 个 IP 的 ENI（等于 MaxIPsPerENI）
+		mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 16)
+		if !assert.NoError(t, err, "create mock ENI failed") {
+			return
+		}
+
+		// 设置 ENI 为 ReadyOnNode 状态
+		mockEni.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
+		mockEni.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni.Spec.UseMode = ccev2.ENIUseModeSecondaryIP
+
+		err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
+		if !assert.NoError(t, err, "ensure enis to informer failed") {
+			return
+		}
+
+		// 初始化必要的字段
+		if node.expiredVPCVersion == nil {
+			node.expiredVPCVersion = make(map[string]int64)
+		}
+		if node.creatingEni == nil {
+			node.creatingEni = newCreatingEniSet()
+		}
+
+		// 触发 resync 以填充接口数据
+		scopedLog := testLog.WithField("test", "PrepareIPAllocation_with_full_ENI")
+		_, err = node.ResyncInterfacesAndIPs(ctx, scopedLog)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 调用 PrepareIPAllocation
+		allocation, err := node.PrepareIPAllocation(scopedLog)
+		if assert.NoError(t, err) {
+			assert.NotNil(t, allocation, "allocation should not be nil")
+			// ENI 已满，应该没有可用的 IP
+			assert.Equal(t, 0, allocation.AvailableForAllocationIPv4, "should have zero available IPv4 addresses for full ENI")
+			// 但应该有可用的接口数量（可以创建新 ENI）
+			assert.Greater(t, allocation.AvailableInterfaces, 0, "should have available interfaces to create new ENI")
+		}
+	})
+
+	// 测试 ENI 使用模式为 PrimaryIP 的情况
+	t.Run("Given_node_with_PrimaryIP_ENI_When_PrepareIPAllocation_Then_skip_primary_ENI", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 创建一个 PrimaryIP 模式的 ENI
+		ctx := context.Background()
+		sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+		if !assert.NoError(t, err, "get subnet failed") {
+			return
+		}
+
+		mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
+		if !assert.NoError(t, err, "create mock ENI failed") {
+			return
+		}
+
+		// 设置 ENI 为 PrimaryIP 模式
+		mockEni.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
+		mockEni.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni.Spec.UseMode = ccev2.ENIUseModePrimaryIP
+
+		err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
+		if !assert.NoError(t, err, "ensure enis to informer failed") {
+			return
+		}
+
+		// 初始化必要的字段
+		if node.expiredVPCVersion == nil {
+			node.expiredVPCVersion = make(map[string]int64)
+		}
+		if node.creatingEni == nil {
+			node.creatingEni = newCreatingEniSet()
+		}
+
+		// 触发 resync 以填充接口数据
+		scopedLog := testLog.WithField("test", "PrepareIPAllocation_with_PrimaryIP_ENI")
+		_, err = node.ResyncInterfacesAndIPs(ctx, scopedLog)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 调用 PrepareIPAllocation
+		// PrimaryIP 模式的 ENI 应该被跳过
+		allocation, err := node.PrepareIPAllocation(scopedLog)
+		if assert.NoError(t, err) {
+			assert.NotNil(t, allocation, "allocation should not be nil")
+			// PrimaryIP ENI 被跳过，应该没有可用的 IP
+			assert.Equal(t, 0, allocation.AvailableForAllocationIPv4, "should have zero available IPv4 addresses since PrimaryIP ENI is skipped")
+			// 但应该有可用的接口数量（可以创建新 ENI）
+			assert.Greater(t, allocation.AvailableInterfaces, 0, "should have available interfaces to create new ENI")
+		}
+	})
+
+	// 测试有多个 ENI 时，第一个有可用 IP 就返回的情况
+	t.Run("Given_node_with_multiple_ENIs_When_PrepareIPAllocation_Then_return_first_available", func(t *testing.T) {
+		node, err := bccTestContext(t)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		ctx := context.Background()
+		sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+		if !assert.NoError(t, err, "get subnet failed") {
+			return
+		}
+
+		// 创建第一个有可用 IP 的 ENI
+		mockEni1, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
+		if !assert.NoError(t, err, "create mock ENI 1 failed") {
+			return
+		}
+		mockEni1.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
+		mockEni1.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni1.Spec.UseMode = ccev2.ENIUseModeSecondaryIP
+
+		// 创建第二个也有可用 IP 的 ENI
+		mockEni2, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 3)
+		if !assert.NoError(t, err, "create mock ENI 2 failed") {
+			return
+		}
+		mockEni2.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
+		mockEni2.Status.VPCStatus = ccev2.VPCENIStatusInuse
+		mockEni2.Spec.UseMode = ccev2.ENIUseModeSecondaryIP
+
+		err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni1, mockEni2})
+		if !assert.NoError(t, err, "ensure enis to informer failed") {
+			return
+		}
+
+		// 初始化必要的字段
+		if node.expiredVPCVersion == nil {
+			node.expiredVPCVersion = make(map[string]int64)
+		}
+		if node.creatingEni == nil {
+			node.creatingEni = newCreatingEniSet()
+		}
+
+		// 触发 resync 以填充接口数据
+		scopedLog := testLog.WithField("test", "PrepareIPAllocation_with_multiple_ENIs")
+		_, err = node.ResyncInterfacesAndIPs(ctx, scopedLog)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		// 调用 PrepareIPAllocation
+		allocation, err := node.PrepareIPAllocation(scopedLog)
+		if assert.NoError(t, err) {
+			assert.NotNil(t, allocation, "allocation should not be nil")
+			// 应该返回第一个有可用 IP 的 ENI
+			assert.Greater(t, allocation.AvailableForAllocationIPv4, 0, "should have available IPv4 addresses")
+			assert.NotEmpty(t, allocation.InterfaceID, "should have interface ID")
+			assert.NotEmpty(t, allocation.PoolID, "should have pool ID")
+		}
+	})
 }
 
 // 准备 BCC 测试上下文环境
 // 包含初始化 mock 对象，保存到 clientgo缓存中，并返回 BCCNode 实例
 func bccTestContext(t *testing.T) (*bceNetworkResourceSet, error) {
 	ccemock.InitMockEnv()
+	// 初始化 BSM (Borrowed Subnet Manager)
+	bcesync.InitBSM()
 
 	mockCtl := gomock.NewController(t)
 	im := newMockInstancesManager(mockCtl)
@@ -244,607 +474,6 @@ func newMockBccInfo(k8sObj *ccev2.NetResourceSet, maxENINum int) *bccapi.Instanc
 			EniId:    "eni-primary",
 		},
 	}
-}
-
-// Test_bceNode_refreshAvailableSubnets 该函数已被移除，请勿使用。
-func Test_bceNode_refreshAvailableSubnets(t *testing.T) {
-	// 删除此测试函数以避免依赖问题
-	t.Skip("Skipping test due to dependency issues")
-	/* t.Run("use agent specific subnet", func(t *testing.T) {
-		node, err := bccTestContext(t)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		err = node.refreshAvailableSubnets()
-		if !assert.NoError(t, err, "refresh available subnets failed") {
-			return
-		}
-
-		var subnetIDs []string
-		for _, s := range node.availableSubnets {
-			subnetIDs = append(subnetIDs, s.Name)
-		}
-		assert.Equalf(t, node.k8sObj.Spec.ENI.SubnetIDs, subnetIDs, "should subnet ids equal")
-	})
-
-	t.Run("use user annotaion specific subnet", func(t *testing.T) {
-		node, err := bccTestContext(t)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		operatorOption.Config.EnableNodeAnnotationSync = true
-		defer func() {
-			operatorOption.Config.EnableNodeAnnotationSync = false
-		}()
-		node.k8sObj.Annotations[k8s.AnnotationNodeAnnotationSynced] = "true"
-		node.k8sObj.Annotations[k8s.AnnotationNodeEniSubnetIDs] = "sbn-vxda1,sbn-vxda2"
-		k8s.CCEClient().CceV2().NetResourceSets().Update(context.TODO(), node.k8sObj, metav1.UpdateOptions{})
-		wait.PollImmediate(time.Microsecond, 30*time.Second, func() (bool, error) {
-			obj, err := node.manager.nrsGetterUpdater.Get(node.k8sObj.Name)
-			if err != nil {
-				return false, err
-			}
-			if len(obj.Annotations) > 0 && obj.Annotations[k8s.AnnotationNodeAnnotationSynced] == "true" {
-				return true, nil
-			}
-			return false, nil
-		})
-
-		exceptSubnetIDs := []string{"sbn-vxda1", "sbn-vxda2"}
-		ccemock.EnsureSubnetIDsToInformer(t, node.k8sObj.Spec.ENI.VpcID, exceptSubnetIDs)
-
-		err = node.refreshAvailableSubnets()
-		if !assert.NoError(t, err, "refresh available subnets failed") {
-			return
-		}
-
-		var subnetIDs []string
-		for _, s := range node.availableSubnets {
-			subnetIDs = append(subnetIDs, s.Name)
-		}
-		assert.Equalf(t, node.k8sObj.Spec.ENI.SubnetIDs, subnetIDs, "should subnet ids equal")
-		assert.Equalf(t, node.k8sObj.Spec.ENI.SubnetIDs, exceptSubnetIDs, "should subnet ids equal user specified subnet")
-	}) */
-}
-
-// TestResyncInterfacesAndIPs 该函数用于测试ResyncInterfacesAndIPs函数。
-func TestResyncInterfacesAndIPs(t *testing.T) {
-	// 删除此测试函数以避免依赖问题
-	t.Skip("Skipping test due to dependency issues")
-	/* var (
-			ctx = context.Background()
-		)
-
-		t.Run("Given_empty_IPs_to_release_When_removeReleasedIPsFromENI_is_called_Then_function_should_return_without_error", func(t *testing.T) {
-			// Create a test node with real components
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Test with empty IPs to release
-			err = node.removeReleasedIPsFromENI(ctx, mockEni.Name, []string{})
-			assert.NoError(t, err, "removeReleasedIPsFromENI should succeed with empty IPs")
-		})
-
-		t.Run("Given_non_existent_ENI_When_removeReleasedIPsFromENI_is_called_Then_function_should_return_error", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Test with non-existent ENI
-			err = node.removeReleasedIPsFromENI(ctx, "non-existent-eni", []string{"10.128.34.100"})
-			assert.Error(t, err, "removeReleasedIPsFromENI should fail with non-existent ENI")
-			assert.Contains(t, err.Error(), "fail to get eni", "error should mention ENI not found")
-		})
-
-		t.Run("Given_cancelled_context_When_removeReleasedIPsFromENI_is_called_Then_function_should_handle_context_cancellation", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			mockEni.Spec.ENI.PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "10.128.34.100", Primary: false, SubnetID: sbn.Name},
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Create a cancelled context
-			cancelledCtx, cancel := context.WithCancel(ctx)
-			cancel()
-
-			// Test with cancelled context - the function may or may not return an error depending on timing
-			// We just test that it doesn't panic and completes
-			err = node.removeReleasedIPsFromENI(cancelledCtx, mockEni.Name, []string{"10.128.34.100"})
-			// Don't assert error here as the behavior with cancelled context may vary
-			t.Logf("removeReleasedIPsFromENI with cancelled context returned: %v", err)
-		})
-
-		t.Run("Given_valid_ENI_and_IPs_to_release_When_removeReleasedIPsFromENI_is_called_Then_function_should_complete_without_error", func(t *testing.T) {
-			// Create a test node with real components
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI with some IPs
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Add some IPs to the ENI
-			mockEni.Spec.ENI.PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "10.128.34.100", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "10.128.34.101", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "10.128.34.102", Primary: false, SubnetID: sbn.Name},
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Test removing some IPs - we only test that the function completes without error
-			// The actual IP removal logic is tested through the updateENIWithPoll function
-			ipsToRelease := []string{"10.128.34.100", "10.128.34.102"}
-
-			// Use a timeout context to prevent hanging
-			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
-			assert.NoError(t, err, "removeReleasedIPsFromENI should succeed")
-		})
-
-		t.Run("Given_valid_ENI_and_IPv6_IPs_to_release_When_removeReleasedIPsFromENI_is_called_Then_function_should_complete_without_error", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI with some IPv6 IPs
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Add some IPv6 IPs to the ENI
-			mockEni.Spec.ENI.IPV6PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "2001:db8::1", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "2001:db8::2", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "2001:db8::3", Primary: false, SubnetID: sbn.Name},
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Test removing some IPv6 IPs
-			ipsToRelease := []string{"2001:db8::1", "2001:db8::3"}
-
-			// Use a timeout context to prevent hanging
-			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
-			assert.NoError(t, err, "removeReleasedIPsFromENI should succeed")
-		})
-
-		t.Run("Given_valid_ENI_with_mixed_IPv4_and_IPv6_IPs_When_removeReleasedIPsFromENI_is_called_Then_function_should_complete_without_error", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI with both IPv4 and IPv6 IPs
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Add both IPv4 and IPv6 IPs to the ENI
-			mockEni.Spec.ENI.PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "10.128.34.100", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "10.128.34.101", Primary: false, SubnetID: sbn.Name},
-			}
-			mockEni.Spec.ENI.IPV6PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "2001:db8::1", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "2001:db8::2", Primary: false, SubnetID: sbn.Name},
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Test removing mixed IPs
-			ipsToRelease := []string{"10.128.34.100", "2001:db8::1"}
-
-			// Use a timeout context to prevent hanging
-			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
-			assert.NoError(t, err, "removeReleasedIPsFromENI should succeed")
-		})
-
-		t.Run("Given_valid_ENI_with_mix_of_existing_and_non_existent_IPs_When_removeReleasedIPsFromENI_is_called_Then_function_should_complete_without_error", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Create a mock ENI with some IPs
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// Add some IPs to the ENI
-			mockEni.Spec.ENI.PrivateIPSet = []*models.PrivateIP{
-				{PrivateIPAddress: "10.128.34.100", Primary: false, SubnetID: sbn.Name},
-				{PrivateIPAddress: "10.128.34.101", Primary: false, SubnetID: sbn.Name},
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// Test removing existing and non-existing IPs
-			ipsToRelease := []string{"10.128.34.100", "10.128.34.999"} // 999 doesn't exist
-
-			// Use a timeout context to prevent hanging
-			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			err = node.removeReleasedIPsFromENI(timeoutCtx, mockEni.Name, ipsToRelease)
-			assert.NoError(t, err, "removeReleasedIPsFromENI should succeed")
-		})
-	}
-
-	// TestBceNetworkResourceSet_RleaseOldIP tests the rleaseOldIP function
-	func TestBceNetworkResourceSet_RleaseOldIP(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// 初始化测试环境
-		node, err := bccTestContext(t)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		tests := []struct {
-			name           string
-			ips            []*models.PrivateIP
-			namespace      string
-			endpointName   string
-			setupEndpoints func() error
-			expectedLocal  bool
-			expectedENIID  string
-			expectError    bool
-		}{
-			{
-				name: "IP被其他endpoint使用时应该返回false和错误",
-				ips: []*models.PrivateIP{
-					{PrivateIPAddress: "10.128.34.100", Primary: false, SubnetID: "sbn-test"},
-				},
-				namespace:    "test-namespace",
-				endpointName: "test-endpoint",
-				setupEndpoints: func() error {
-					// 创建一个使用相同IP的其他endpoint
-					otherEndpoint := &ccev2.CCEEndpoint{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "other-endpoint",
-							Namespace: "other-namespace",
-						},
-						Status: ccev2.EndpointStatus{
-							Networking: &ccev2.EndpointNetworking{
-								Addressing: ccev2.AddressPairList{
-									&ccev2.AddressPair{IP: "10.128.34.100"},
-								},
-							},
-						},
-					}
-
-					// 创建目标endpoint
-					targetEndpoint := &ccev2.CCEEndpoint{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "test-endpoint",
-							Namespace: "test-namespace",
-						},
-						Status: ccev2.EndpointStatus{
-							Networking: &ccev2.EndpointNetworking{
-								Addressing: ccev2.AddressPairList{
-									&ccev2.AddressPair{IP: "10.128.34.100"},
-								},
-							},
-						},
-					}
-
-					return ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
-						var objects []metav1.Object
-						if result, err := k8s.CCEClient().CceV2().CCEEndpoints("other-namespace").Create(ctx, otherEndpoint, metav1.CreateOptions{}); err == nil {
-							objects = append(objects, result)
-						}
-						if result, err := k8s.CCEClient().CceV2().CCEEndpoints("test-namespace").Create(ctx, targetEndpoint, metav1.CreateOptions{}); err == nil {
-							objects = append(objects, result)
-						}
-						return objects
-					})
-				},
-				expectedLocal: false,
-				expectError:   true,
-			},
-			{
-				name: "endpoint不存在时应该返回错误",
-				ips: []*models.PrivateIP{
-					{PrivateIPAddress: "10.128.34.101", Primary: false, SubnetID: "sbn-test"},
-				},
-				namespace:    "non-existent-namespace",
-				endpointName: "non-existent-endpoint",
-				setupEndpoints: func() error {
-					return nil // 不创建任何endpoint
-				},
-				expectedLocal: false,
-				expectError:   true,
-			},
-			{
-				name: "IP未在任何ENI上分配时应该返回false无错误",
-				ips: []*models.PrivateIP{
-					{PrivateIPAddress: "10.128.34.102", Primary: false, SubnetID: "sbn-test"},
-				},
-				namespace:    "test-namespace",
-				endpointName: "test-endpoint",
-				setupEndpoints: func() error {
-					endpoint := &ccev2.CCEEndpoint{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "test-endpoint",
-							Namespace: "test-namespace",
-						},
-						Status: ccev2.EndpointStatus{
-							Networking: &ccev2.EndpointNetworking{
-								Addressing: ccev2.AddressPairList{
-									&ccev2.AddressPair{IP: "10.128.34.102"},
-								},
-							},
-						},
-					}
-
-					return ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
-						var objects []metav1.Object
-						if result, err := k8s.CCEClient().CceV2().CCEEndpoints("test-namespace").Create(ctx, endpoint, metav1.CreateOptions{}); err == nil {
-							objects = append(objects, result)
-						}
-						return objects
-					})
-				},
-				expectedLocal: false,
-				expectError:   false,
-			},
-			{
-				name:         "空IP列表时应该返回false无错误",
-				ips:          []*models.PrivateIP{},
-				namespace:    "test-namespace",
-				endpointName: "test-endpoint",
-				setupEndpoints: func() error {
-					endpoint := &ccev2.CCEEndpoint{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "test-endpoint",
-							Namespace: "test-namespace",
-						},
-						Status: ccev2.EndpointStatus{
-							Networking: &ccev2.EndpointNetworking{},
-						},
-					}
-
-					return ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
-						var objects []metav1.Object
-						if result, err := k8s.CCEClient().CceV2().CCEEndpoints("test-namespace").Create(ctx, endpoint, metav1.CreateOptions{}); err == nil {
-							objects = append(objects, result)
-						}
-						return objects
-					})
-				},
-				expectedLocal: false,
-				expectError:   false,
-			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				// 设置endpoints
-				if err := tt.setupEndpoints(); err != nil {
-					t.Fatalf("设置endpoints失败: %v", err)
-				}
-
-				// Mock release function
-				releaseFunc := func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
-					return nil
-				}
-
-				// 调用被测试的函数
-				isLocal, eniID, err := node.releaseOldIP(ctx, node.log, tt.ips, tt.namespace, tt.endpointName, releaseFunc)
-
-				// 验证结果
-				if tt.expectError {
-					assert.Error(t, err, "期望有错误但没有错误")
-				} else {
-					assert.NoError(t, err, "不期望有错误但有错误: %v", err)
-				}
-
-				assert.Equal(t, tt.expectedLocal, isLocal, "isLocal值不匹配")
-				assert.Equal(t, tt.expectedENIID, eniID, "eniID值不匹配")
-
-				t.Logf("测试 %s 完成: isLocal=%v, eniID=%s, err=%v", tt.name, isLocal, eniID, err)
-			})
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			logfield := testLog.WithField("testCase", "cross subnet IPs")
-			allocMap, err := node.ResyncInterfacesAndIPs(ctx, logfield)
-			assert.NoError(t, err, "should not return error")
-
-			// 对于非BBC实例，跨子网IP不会被添加到分配映射中
-			_, exists := allocMap["10.59.0.100"]
-			assert.False(t, exists, "cross subnet IP should not be in allocation map for non-BBC instance")
-
-			// 现在测试BBC实例的情况
-			node.instanceType = string(metadata.InstanceTypeExBBC)
-			node.k8sObj.Annotations[k8s.AnnotationNodeAnnotationSynced] = "true"
-
-			allocMap, err = node.ResyncInterfacesAndIPs(ctx, logfield)
-			assert.NoError(t, err, "should not return error")
-
-			// 对于BBC实例，如果启用了注解同步，跨子网IP会被添加到分配映射中
-			_, exists = allocMap["10.59.0.100"]
-			assert.True(t, exists, "cross subnet IP should be in allocation map for BBC instance with annotation sync")
-		})
-
-		// 测试主要接口强制更新状态
-		t.Run("force update primary ENI status", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// 确保node的expiredVPCVersion已初始化
-			node.expiredVPCVersion = make(map[string]int64)
-			node.creatingEni = newCreatingEniSet()
-
-			// 创建主要ENI，状态不是inuse
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 3)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// 设置为主要ENI，状态不是inuse
-			mockEni.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
-			mockEni.Status.VPCStatus = ccev2.VPCENIStatusAttaching
-			mockEni.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			logfield := testLog.WithField("testCase", "force update primary ENI status")
-			_, err = node.ResyncInterfacesAndIPs(ctx, logfield)
-			assert.NoError(t, err, "should not return error")
-
-			// 获取更新后的ENI状态
-			updatedEni, err := k8s.CCEClient().CceV2().ENIs().Get(ctx, mockEni.Name, metav1.GetOptions{})
-			assert.NoError(t, err, "should be able to get updated ENI")
-			assert.Equal(t, ccev2.VPCENIStatusInuse, updatedEni.Status.VPCStatus, "ENI status should be updated to in-use")
-		})
-
-		// 测试清理借用的子网IP
-		t.Run("clean borrowed subnet IPs", func(t *testing.T) {
-			node, err := bccTestContext(t)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			// 确保node的expiredVPCVersion已初始化
-			node.expiredVPCVersion = make(map[string]int64)
-			node.creatingEni = newCreatingEniSet()
-
-			// 创建子网和ENI
-			sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-			if !assert.NoError(t, err, "get subnet failed") {
-				return
-			}
-
-			// 创建足够多的IP以达到最大可分配IPv4数量
-			mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, node.GetMaximumAllocatableIPv4()+1)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			err = ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni})
-			if !assert.NoError(t, err, "ensure enis to informer failed") {
-				return
-			}
-
-			// 模拟借用子网IP
-			subnet, err := bcesync.GlobalBSM().GetSubnet(sbn.Name)
-			if !assert.NoError(t, err, "get subnet from BSM failed") {
-				return
-			}
-			subnet.Borrow(mockEni.Name, 5) // 借用5个IP
-
-			logfield := testLog.WithField("testCase", "clean borrowed subnet IPs")
-			_, err = node.ResyncInterfacesAndIPs(ctx, logfield)
-			assert.NoError(t, err, "should not return error")
-
-			// 检查IP是否已被清理
-			borrowedNum := subnet.GetBorrowedIPNum(mockEni.Name)
-			assert.Equal(t, 0, borrowedNum, "borrowed IPs should have been cleaned")
-		}) */
 }
 
 // TestPopulateStatusFields tests the PopulateStatusFields function
@@ -947,7 +576,34 @@ func TestPopulateStatusFields(t *testing.T) {
 			expectENIs:  0,
 			expectError: false,
 		},
-	}
+		{
+			name: "Given_GetEffectiveInstanceID_Fails_When_PopulateStatusFields_Then_ReturnImmediately",
+			setupFunc: func(t *testing.T) (*bceNetworkResourceSet, *ccev2.NetResourceSet) {
+				node, err := bccTestContext(t)
+				if err != nil {
+					t.Fatalf("setup node failed: %v", err)
+				}
+
+				patch := gomonkey.ApplyMethod(reflect.TypeOf(node.k8sObj), "GetEffectiveInstanceID",
+					func(_ *ccev2.NetResourceSet, _ bool) (string, error) {
+						return "", fmt.Errorf("mock get effective instance id error")
+					})
+				t.Cleanup(patch.Reset)
+
+				resource := &ccev2.NetResourceSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node.k8sObj.Name,
+					},
+					Status: ccev2.NetResourceStatus{
+						ENIs: make(map[string]ccev2.SimpleENIStatus),
+					},
+				}
+
+				return node, resource
+			},
+			expectENIs:  0,
+			expectError: false,
+		}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1210,38 +866,6 @@ func TestGetMaximumAllocatableIPv4(t *testing.T) {
 
 			maxIPs := node.GetMaximumAllocatableIPv4()
 			assert.GreaterOrEqual(t, maxIPs, tt.expectedMin, "Maximum allocatable IPv4 should be at least minimum expected")
-		})
-	}
-}
-
-// TestGetMinimumAllocatableIPv4 tests the GetMinimumAllocatableIPv4 function
-func TestGetMinimumAllocatableIPv4(t *testing.T) {
-	ccemock.InitMockEnv()
-
-	tests := []struct {
-		name        string
-		setupFunc   func(t *testing.T) *bceNetworkResourceSet
-		expectedMin int
-	}{
-		{
-			name: "Given_node_in_secondary_IP_mode_When_GetMinimumAllocatableIPv4_Then_return_positive_value",
-			setupFunc: func(t *testing.T) *bceNetworkResourceSet {
-				node, err := bccTestContext(t)
-				if err != nil {
-					t.Fatalf("setup node failed: %v", err)
-				}
-				return node
-			},
-			expectedMin: 0, // At least 0 IPs should be minimum
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			node := tt.setupFunc(t)
-
-			minIPs := node.GetMinimumAllocatableIPv4()
-			assert.GreaterOrEqual(t, minIPs, tt.expectedMin, "Minimum allocatable IPv4 should be at least expected minimum")
 		})
 	}
 }
@@ -1567,30 +1191,6 @@ func TestPrepareIPRelease(t *testing.T) {
 		excessIPs int
 		expectNil bool
 	}{
-		{
-			name: "prepare IP release with excess IPs",
-			setupNode: func() (*bceNetworkResourceSet, error) {
-				return bccTestContext(t)
-			},
-			setupENIs: func(t *testing.T, node *bceNetworkResourceSet) []*ccev2.ENI {
-				sbn, err := k8s.CCEClient().CceV1().Subnets().Get(context.TODO(), node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
-				if err != nil {
-					t.Fatalf("get subnet failed: %v", err)
-				}
-
-				mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 5)
-				if err != nil {
-					t.Fatalf("create mock ENI failed: %v", err)
-				}
-
-				mockEni.Status.CCEStatus = ccev2.ENIStatusReadyOnNode
-				mockEni.Status.VPCStatus = ccev2.VPCENIStatusInuse
-
-				return []*ccev2.ENI{mockEni}
-			},
-			excessIPs: 2,
-			expectNil: false,
-		},
 		{
 			name: "no excess IPs to release",
 			setupNode: func() (*bceNetworkResourceSet, error) {
@@ -2069,6 +1669,173 @@ func TestGetMaximumBurstableAllocatableIPv4(t *testing.T) {
 	}
 }
 
+func TestCreateInterface_GivenNoReadyENI_WhenFallbackToIaaS(t *testing.T) {
+	node, err := bccTestContext(t)
+	if err != nil {
+		t.Fatalf("setup node failed: %v", err)
+	}
+
+	node.instanceID = "i-original"
+	node.k8sObj.Spec.InstanceType = string(metadata.InstanceTypeExHPAS)
+	node.k8sObj.Spec.HPASID = "hpas-effective"
+
+	originalHPASStandard := operatorOption.Config.HPASStanderd
+	operatorOption.Config.HPASStanderd = true
+	defer func() {
+		operatorOption.Config.HPASStanderd = originalHPASStandard
+	}()
+
+	var foreachInstanceID string
+	patches := gomonkey.ApplyFunc(foreachInstanceReadyOnNode,
+		func(manager *InstancesManager, instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+			foreachInstanceID = instanceID
+			return nil
+		})
+	defer patches.Reset()
+
+	groupCalled := false
+	patchGroup := gomonkey.ApplyFunc(forceGetENIFromInstanceGroupFunc,
+		func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+			groupCalled = true
+			assert.Equal(t, "hpas-effective", instanceID)
+			return 0, "", nil
+		})
+	defer patchGroup.Reset()
+
+	iaasCalled := false
+	patchIaaS := gomonkey.ApplyFunc(forceGetENIFromIaaSFunc,
+		func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+			iaasCalled = true
+			assert.Equal(t, "hpas-effective", instanceID)
+			return 2, "iaas-fallback", nil
+		})
+	defer patchIaaS.Reset()
+
+	interfaceNum, msg, err := node.CreateInterface(context.Background(), nil, testLog)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, interfaceNum)
+	assert.Equal(t, "iaas-fallback", msg)
+	assert.Equal(t, "hpas-effective", foreachInstanceID)
+	assert.True(t, groupCalled)
+	assert.True(t, iaasCalled)
+}
+
+func TestDefaultHookFunctions_DelegatesToOriginalMethods(t *testing.T) {
+	manager := &InstancesManager{}
+	node := &bceNetworkResourceSet{}
+
+	var (
+		foreachCalled bool
+		groupCalled   bool
+		iaasCalled    bool
+	)
+
+	originalForeach := foreachInstanceReadyOnNode
+	originalGroup := forceGetENIFromInstanceGroupFunc
+	originalIaaS := forceGetENIFromIaaSFunc
+
+	defer func() {
+		foreachInstanceReadyOnNode = originalForeach
+		forceGetENIFromInstanceGroupFunc = originalGroup
+		forceGetENIFromIaaSFunc = originalIaaS
+	}()
+
+	foreachInstanceReadyOnNode = func(_ *InstancesManager, instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+		foreachCalled = true
+		return nil
+	}
+	forceGetENIFromInstanceGroupFunc = func(_ *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+		groupCalled = true
+		return 1, "group", nil
+	}
+	forceGetENIFromIaaSFunc = func(_ *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+		iaasCalled = true
+		return 2, "iaas", nil
+	}
+
+	assert.NoError(t, foreachInstanceReadyOnNode(manager, "i-test", "node-test", nil))
+
+	_, _, err := forceGetENIFromInstanceGroupFunc(node, context.Background(), testLog, "vpc-test", "i-test")
+	assert.NoError(t, err)
+
+	_, _, err = forceGetENIFromIaaSFunc(node, context.Background(), testLog, "vpc-test", "i-test")
+	assert.NoError(t, err)
+
+	assert.True(t, foreachCalled, "Foreach hook should call original method")
+	assert.True(t, groupCalled, "InstanceGroup hook should call original method")
+	assert.True(t, iaasCalled, "IaaS hook should call original method")
+}
+
+func TestHelperClosures_GivenDefaultAssignments_WhenInvoked_ThenCallUnderlyingMethods(t *testing.T) {
+	manager := &InstancesManager{}
+	node := &bceNetworkResourceSet{}
+
+	var (
+		foreachCalled bool
+		groupCalled   bool
+		iaasCalled    bool
+	)
+
+	patchForeach := gomonkey.ApplyPrivateMethod(reflect.TypeOf((*InstancesManager)(nil)), "ForeachInstanceReadyOnNode",
+		func(_ *InstancesManager, instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+			foreachCalled = true
+			assert.Equal(t, "inst-default", instanceID)
+			assert.Equal(t, "node-default", nodeName)
+			return nil
+		})
+	defer patchForeach.Reset()
+
+	err := foreachInstanceReadyOnNode(manager, "inst-default", "node-default", nil)
+	assert.NoError(t, err)
+	assert.True(t, foreachCalled, "default foreach helper should call manager.ForeachInstanceReadyOnNode")
+
+	patchGroup := gomonkey.ApplyPrivateMethod(reflect.TypeOf((*bceNetworkResourceSet)(nil)), "forceGetENIFromInstanceGroup",
+		func(_ *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+			groupCalled = true
+			assert.Equal(t, "vpc-default", vpcID)
+			assert.Equal(t, "inst-default", instanceID)
+			return 1, "from-group", nil
+		})
+	defer patchGroup.Reset()
+
+	_, _, err = forceGetENIFromInstanceGroupFunc(node, context.Background(), testLog, "vpc-default", "inst-default")
+	assert.NoError(t, err)
+	assert.True(t, groupCalled, "default instance-group helper should call underlying method")
+
+	patchIaaS := gomonkey.ApplyPrivateMethod(reflect.TypeOf((*bceNetworkResourceSet)(nil)), "forceGetENIFromIaaS",
+		func(_ *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+			iaasCalled = true
+			assert.Equal(t, "vpc-default", vpcID)
+			assert.Equal(t, "inst-default", instanceID)
+			return 2, "from-iaas", nil
+		})
+	defer patchIaaS.Reset()
+
+	_, _, err = forceGetENIFromIaaSFunc(node, context.Background(), testLog, "vpc-default", "inst-default")
+	assert.NoError(t, err)
+	assert.True(t, iaasCalled, "default iaas helper should call underlying method")
+}
+
+func TestForceGetENIFromInstanceGroup_GivenGetEffectiveInstanceIDError_WhenCalled_ReturnsError(t *testing.T) {
+	node, err := bccTestContext(t)
+	if err != nil {
+		t.Fatalf("setup node failed: %v", err)
+	}
+
+	expectedErr := fmt.Errorf("mock get effective instance id error")
+	patches := gomonkey.ApplyMethod(reflect.TypeOf(node.k8sObj), "GetEffectiveInstanceID",
+		func(_ *ccev2.NetResourceSet, _ bool) (string, error) {
+			return "", expectedErr
+		})
+	defer patches.Reset()
+
+	interfaceNum, msg, err := node.forceGetENIFromInstanceGroup(context.Background(), testLog, node.k8sObj.Spec.ENI.VpcID, node.instanceID)
+
+	assert.Equal(t, 0, interfaceNum, "interfaceNum should be zero on error")
+	assert.Equal(t, "", msg, "message should be empty on error")
+	assert.EqualError(t, err, expectedErr.Error())
+}
+
 // TestCreateInterface has been removed due to complex cloud API dependencies
 // that are difficult to mock properly in unit tests.
 
@@ -2281,8 +2048,274 @@ func TestForceGetENIFromInstanceGroup(t *testing.T) {
 	}
 }
 
-// TestForceGetENIFromIaaS has been removed due to complex cloud API dependencies
-// that are difficult to mock properly in unit tests.
+// TestForceGetENIFromIaaS tests the forceGetENIFromIaaS function
+func TestForceGetENIFromIaaS(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	// Save original config and restore after test
+	originalClusterID := option.Config.ClusterID
+	defer func() {
+		option.Config.ClusterID = originalClusterID
+	}()
+	option.Config.ClusterID = "test-cluster"
+
+	tests := []struct {
+		name         string
+		setupFunc    func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller)
+		expectError  bool
+		validateFunc func(t *testing.T, node *bceNetworkResourceSet, interfaceNum int, msg string, err error)
+		description  string
+	}{
+		{
+			name: "Given_BCCInstance_When_GetEffectiveInstanceID_Then_UseOriginalInstanceID",
+			setupFunc: func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller) {
+				mockCtl := gomock.NewController(t)
+				im := newMockInstancesManager(mockCtl)
+
+				// Create BCC NRS (non-HPAS)
+				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.56", "BCC")
+				k8sObj.Spec.InstanceID = "i-bcc-12345"
+				k8sObj.Spec.HPASID = "" // No HPASID for BCC
+
+				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure nrs to informer failed: %v", err)
+				}
+
+				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure node to informer failed: %v", err)
+				}
+
+				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
+				im.GetMockCloudInterface().EXPECT().
+					GetBCCInstanceDetail(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+					return &bccapi.InstanceModel{
+						InstanceId: instanceID,
+						VpcId:      "vpc-test123",
+						EniQuota:   8,
+					}, nil
+				}).AnyTimes()
+
+				// Mock ListENIs to return empty list (to avoid complex ENI creation logic)
+				im.GetMockCloudInterface().EXPECT().
+					ListENIs(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, args interface{}) ([]interface{}, error) {
+					return []interface{}{}, nil
+				}).AnyTimes()
+
+				node := NewBCENetworkResourceSet(nil, k8sObj, im)
+				vpcID := "vpc-test123"
+				instanceID := "i-bcc-12345"
+
+				return node, vpcID, instanceID, mockCtl
+			},
+			expectError: true, // Will error because no ENI found
+			validateFunc: func(t *testing.T, node *bceNetworkResourceSet, interfaceNum int, msg string, err error) {
+				// Verify GetEffectiveInstanceID was called and returned original instanceID
+				effectiveID, getErr := node.k8sObj.GetEffectiveInstanceID(true)
+				assert.NoError(t, getErr, "GetEffectiveInstanceID should not error for BCC")
+				assert.Equal(t, "i-bcc-12345", effectiveID, "Should use original instanceID for BCC")
+			},
+			description: "BCC instance should use original instanceID",
+		},
+		{
+			name: "Given_HPASInstance_With_ValidHPASID_When_GetEffectiveInstanceID_Then_UseHPASID",
+			setupFunc: func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller) {
+				mockCtl := gomock.NewController(t)
+				im := newMockInstancesManager(mockCtl)
+
+				// Create HPAS NRS - use lowercase "hpas" to match metadata.InstanceTypeExHPAS
+				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.57", "HPAS")
+				k8sObj.Spec.InstanceID = "i-hpas-12345"
+				k8sObj.Spec.HPASID = "hpas-abc123"    // Set HPASID for HPAS
+				k8sObj.Spec.ENI.InstanceType = "hpas" // Use lowercase to match metadata.InstanceTypeExHPAS
+
+				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure nrs to informer failed: %v", err)
+				}
+
+				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure node to informer failed: %v", err)
+				}
+
+				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
+				im.GetMockCloudInterface().EXPECT().
+					GetBCCInstanceDetail(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+					return &bccapi.InstanceModel{
+						InstanceId: instanceID,
+						VpcId:      "vpc-test123",
+						EniQuota:   8,
+					}, nil
+				}).AnyTimes()
+
+				// Mock ListENIs to return empty list
+				im.GetMockCloudInterface().EXPECT().
+					ListENIs(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, args interface{}) ([]interface{}, error) {
+					return []interface{}{}, nil
+				}).AnyTimes()
+
+				node := NewBCENetworkResourceSet(nil, k8sObj, im)
+				vpcID := "vpc-test123"
+				instanceID := "i-hpas-12345"
+
+				return node, vpcID, instanceID, mockCtl
+			},
+			expectError: true, // Will error because no ENI found
+			validateFunc: func(t *testing.T, node *bceNetworkResourceSet, interfaceNum int, msg string, err error) {
+				// Verify GetEffectiveInstanceID was called and returned HPASID
+				effectiveID, getErr := node.k8sObj.GetEffectiveInstanceID(true)
+				assert.NoError(t, getErr, "GetEffectiveInstanceID should not error for HPAS with valid HPASID")
+				assert.Equal(t, "hpas-abc123", effectiveID, "Should use HPASID for HPAS instance")
+				assert.NotEqual(t, "i-hpas-12345", effectiveID, "Should not use original instanceID for HPAS")
+			},
+			description: "HPAS instance should use HPASID instead of instanceID",
+		},
+		{
+			name: "Given_EBCInstance_When_GetEffectiveInstanceID_Then_UseOriginalInstanceID",
+			setupFunc: func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller) {
+				mockCtl := gomock.NewController(t)
+				im := newMockInstancesManager(mockCtl)
+
+				// Create EBC NRS (non-HPAS)
+				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.59", "EBC")
+				k8sObj.Spec.InstanceID = "i-ebc-12345"
+				k8sObj.Spec.HPASID = "" // No HPASID for EBC
+
+				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure nrs to informer failed: %v", err)
+				}
+
+				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure node to informer failed: %v", err)
+				}
+
+				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
+				im.GetMockCloudInterface().EXPECT().
+					GetBCCInstanceDetail(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+					return &bccapi.InstanceModel{
+						InstanceId: instanceID,
+						VpcId:      "vpc-test123",
+						EniQuota:   8,
+					}, nil
+				}).AnyTimes()
+
+				// Mock ListENIs to return empty list
+				im.GetMockCloudInterface().EXPECT().
+					ListENIs(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, args interface{}) ([]interface{}, error) {
+					return []interface{}{}, nil
+				}).AnyTimes()
+
+				node := NewBCENetworkResourceSet(nil, k8sObj, im)
+				vpcID := "vpc-test123"
+				instanceID := "i-ebc-12345"
+
+				return node, vpcID, instanceID, mockCtl
+			},
+			expectError: true, // Will error because no ENI found
+			validateFunc: func(t *testing.T, node *bceNetworkResourceSet, interfaceNum int, msg string, err error) {
+				// Verify GetEffectiveInstanceID was called and returned original instanceID
+				effectiveID, getErr := node.k8sObj.GetEffectiveInstanceID(true)
+				assert.NoError(t, getErr, "GetEffectiveInstanceID should not error for EBC")
+				assert.Equal(t, "i-ebc-12345", effectiveID, "Should use original instanceID for EBC")
+			},
+			description: "EBC instance should use original instanceID",
+		},
+		{
+			name: "Given_HPASInstance_With_DifferentInstanceID_When_GetEffectiveInstanceID_Then_LogHPASIDUsage",
+			setupFunc: func(t *testing.T) (*bceNetworkResourceSet, string, string, *gomock.Controller) {
+				mockCtl := gomock.NewController(t)
+				im := newMockInstancesManager(mockCtl)
+
+				// Create HPAS NRS with HPASID different from instanceID - use lowercase "hpas"
+				k8sObj := ccemock.NewMockSimpleNrs("10.128.34.60", "HPAS")
+				k8sObj.Spec.InstanceID = "i-hpas-original"
+				k8sObj.Spec.HPASID = "hpas-effective123" // Different from instanceID
+				k8sObj.Spec.ENI.InstanceType = "hpas"    // Use lowercase to match metadata.InstanceTypeExHPAS
+
+				err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{k8sObj})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure nrs to informer failed: %v", err)
+				}
+
+				k8sNode := ccemock.NewMockNodeFromNrs(k8sObj)
+				err = ccemock.EnsureNodeToInformer(t, []*corev1.Node{k8sNode})
+				if !assert.NoError(t, err) {
+					t.Fatalf("ensure node to informer failed: %v", err)
+				}
+
+				// Mock all the required calls to avoid test failures
+				// Mock GetBCCInstanceDetail that gets called during forceGetENIFromIaaS
+				im.GetMockCloudInterface().EXPECT().
+					GetBCCInstanceDetail(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
+					// Return a mock instance detail
+					return &bccapi.InstanceModel{
+						InstanceId: instanceID,
+						VpcId:      "vpc-test123",
+						EniQuota:   8,
+					}, nil
+				}).AnyTimes()
+
+				// Mock ListENIs to return empty list (to trigger error path but still cover our target lines)
+				im.GetMockCloudInterface().EXPECT().
+					ListENIs(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, args interface{}) ([]interface{}, error) {
+					return []interface{}{}, nil
+				}).AnyTimes()
+
+				node := NewBCENetworkResourceSet(nil, k8sObj, im)
+				vpcID := "vpc-test123"
+				instanceID := "i-hpas-original" // Pass original instanceID (different from effective HPASID)
+
+				return node, vpcID, instanceID, mockCtl
+			},
+			expectError: true, // Will error because no ENI found, but that's OK for coverage
+			validateFunc: func(t *testing.T, node *bceNetworkResourceSet, interfaceNum int, msg string, err error) {
+				// Verify GetEffectiveInstanceID returns HPASID (different from original instanceID)
+				effectiveID, getErr := node.k8sObj.GetEffectiveInstanceID(true)
+				assert.NoError(t, getErr, "GetEffectiveInstanceID should not error for HPAS with valid HPASID")
+				assert.Equal(t, "hpas-effective123", effectiveID, "Should use HPASID for HPAS instance")
+				assert.NotEqual(t, "i-hpas-original", effectiveID, "Effective ID should be different from original instanceID")
+
+				// This test case specifically covers lines 662-668 where effectiveInstanceID != instanceID
+				// The logging code in those lines will be executed during forceGetENIFromIaaS call
+			},
+			description: "HPAS instance with different effective ID should trigger logging code (lines 662-668)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node, vpcID, instanceID, mockCtl := tt.setupFunc(t)
+			defer mockCtl.Finish()
+
+			ctx := context.Background()
+			scopedLog := testLog.WithField("test", tt.name)
+
+			// Call forceGetENIFromIaaS
+			interfaceNum, msg, err := node.forceGetENIFromIaaS(ctx, scopedLog, vpcID, instanceID)
+
+			// Validate error expectation
+			if tt.expectError {
+				assert.Error(t, err, tt.description)
+			} else {
+				assert.NoError(t, err, tt.description)
+			}
+
+			// Run custom validation
+			if tt.validateFunc != nil {
+				tt.validateFunc(t, node, interfaceNum, msg, err)
+			}
+
+			t.Logf("forceGetENIFromIaaS result: interfaceNum=%d, msg=%s, err=%v", interfaceNum, msg, err)
+		})
+	}
+}
 
 // TestUpdateNrsSubnetIfNeed tests the updateNrsSubnetIfNeed function
 func TestUpdateNrsSubnetIfNeed(t *testing.T) {

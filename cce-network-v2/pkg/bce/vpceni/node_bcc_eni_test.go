@@ -2,27 +2,37 @@ package vpceni
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
-	hpcapi "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
-	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
-	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	bbcapi "github.com/baidubce/bce-sdk-go/services/bbc"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	eipapi "github.com/baidubce/bce-sdk-go/services/eip"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	esgapi "github.com/baidubce/bce-sdk-go/services/esg"
 	vpcapi "github.com/baidubce/bce-sdk-go/services/vpc"
+	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
+	hpcapi "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
+	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
+	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
+	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 )
 
 // Define a custom error type for testing
@@ -170,8 +180,8 @@ func (m *mockBCEClient) DescribeSubnet(ctx context.Context, subnetID string) (*v
 	return nil, nil
 }
 
-func (m *mockBCEClient) ListSubnets(ctx context.Context, args *vpcapi.ListSubnetArgs) ([]vpcapi.Subnet, error) {
-	return nil, nil
+func (m *mockBCEClient) ListSubnets(ctx context.Context, args *vpcapi.ListSubnetArgs) (*vpcapi.ListSubnetResult, error) {
+	return &vpcapi.ListSubnetResult{}, nil
 }
 
 func (m *mockBCEClient) ListSecurityGroup(ctx context.Context, vpcID, instanceID string) ([]bccapi.SecurityGroupModel, error) {
@@ -190,6 +200,10 @@ func (m *mockBCEClient) GetHPCEniID(ctx context.Context, instanceID string) (*hp
 	return nil, nil
 }
 
+func (m *mockBCEClient) HPASWrapper(ctx context.Context) error {
+	return nil
+}
+
 func (m *mockBCEClient) BatchDeleteHpcEniPrivateIP(ctx context.Context, args *hpcapi.EniBatchDeleteIPArgs) error {
 	return nil
 }
@@ -198,8 +212,21 @@ func (m *mockBCEClient) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpcap
 	return nil, nil
 }
 
-func (m *mockBCEClient) HPASWrapper(ctx context.Context) error {
-	return nil
+type fakeENILister struct {
+	lastRequestedName string
+	getFunc           func(name string) (*ccev2.ENI, error)
+}
+
+func (f *fakeENILister) List(selector labels.Selector) ([]*ccev2.ENI, error) {
+	return []*ccev2.ENI{}, nil
+}
+
+func (f *fakeENILister) Get(name string) (*ccev2.ENI, error) {
+	f.lastRequestedName = name
+	if f.getFunc != nil {
+		return f.getFunc(name)
+	}
+	return &ccev2.ENI{}, nil
 }
 
 // ############################################################
@@ -660,6 +687,150 @@ func TestBceNetworkResourceSet_createENI_GivenNilEnterpriseSecurityGroupIds_When
 	assert.Equal(t, "eni-nil-esg", result, "ENI ID should match expected value")
 
 	// Verify all expected calls were made
+	mockClient.AssertExpectations(t)
+}
+
+func TestBccNetworkResourceSet_createENIOnCluster_GivenHPASWithoutHPASID_WhenGetEffectiveInstanceIDFails(t *testing.T) {
+	resource := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node-hpas",
+		},
+		Spec: ccev2.NetResourceSpec{
+			InstanceID: "i-hpas",
+			ENI: &api.ENISpec{
+				InstanceType: string(metadata.InstanceTypeExHPAS),
+			},
+		},
+	}
+
+	subnet := &bcesync.BorrowedSubnet{
+		Subnet: &ccev1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "subnet-test",
+			},
+		},
+	}
+	mockClient := &mockBCEClient{}
+	n := &bccNetworkResourceSet{
+		bceNetworkResourceSet: &bceNetworkResourceSet{
+			bceclient:     mockClient,
+			eventRecorder: record.NewFakeRecorder(10),
+		},
+	}
+	// Setup mock expectations
+	mockClient.On("CreateENI", mock.Anything, mock.MatchedBy(func(args *enisdk.CreateEniArgs) bool {
+		// Validate that nil EnterpriseSecurityGroupIds is set to empty slice
+		assert.NotNil(t, args.EnterpriseSecurityGroupIds)
+		assert.Equal(t, []string{}, args.EnterpriseSecurityGroupIds)
+		return true
+	})).Return("", fmt.Errorf("failed to get effective instance ID"))
+
+	err := n.createENIOnCluster(context.Background(), logrus.NewEntry(logrus.New()), resource, subnet)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get effective instance ID")
+	// Verify all expected calls were made
+	mockClient.AssertExpectations(t)
+}
+
+func TestBccNetworkResourceSet_createENIOnCluster_GivenValidInstance_WhenUsesEffectiveInstanceIDInName(t *testing.T) {
+	assert.NoError(t, k8s.InitNewFakeK8sClient())
+
+	clusterID := "cluster-123"
+	originalClusterID := option.Config.ClusterID
+	option.Config.ClusterID = clusterID
+	defer func() {
+		option.Config.ClusterID = originalClusterID
+	}()
+
+	const (
+		expectedENIID     = "eni-created-123"
+		effectiveInstance = "i-regular"
+		nodeName          = "node-regular"
+		subnetName        = "subnet-valid"
+		availabilityZone  = "zone-a"
+		vpcID             = "vpc-123"
+		securityGroupID   = "sg-123"
+		enterpriseGroupID = "esg-1"
+	)
+
+	mockClient := &mockBCEClient{}
+	var capturedCreateName string
+	mockClient.On("CreateENI", mock.Anything, mock.MatchedBy(func(args *enisdk.CreateEniArgs) bool {
+		capturedCreateName = args.Name
+		assert.Equal(t, effectiveInstance, args.InstanceId)
+		return true
+	})).Return(expectedENIID, nil)
+
+	fakeLister := &fakeENILister{
+		getFunc: func(name string) (*ccev2.ENI, error) {
+			return &ccev2.ENI{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name,
+				},
+				Status: ccev2.ENIStatus{
+					CCEStatus: ccev2.ENIStatusReadyOnNode,
+				},
+			}, nil
+		},
+	}
+
+	manager := &InstancesManager{
+		enilister: fakeLister,
+	}
+
+	resource := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			UID:  types.UID("uid-node"),
+		},
+		Spec: ccev2.NetResourceSpec{
+			InstanceID: effectiveInstance,
+			ENI: &api.ENISpec{
+				InstanceType:                string(metadata.InstanceTypeExBCC),
+				UseMode:                     string(ccev2.ENIUseModeSecondaryIP),
+				SecurityGroups:              []string{securityGroupID},
+				EnterpriseSecurityGroupList: []string{enterpriseGroupID},
+				RouteTableOffset:            1,
+				InstallSourceBasedRouting:   true,
+				SubnetIDs:                   []string{subnetName},
+				VpcID:                       vpcID,
+				AvailabilityZone:            availabilityZone,
+			},
+		},
+	}
+
+	subnet := &bcesync.BorrowedSubnet{
+		Subnet: &ccev1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: subnetName,
+			},
+			Spec: ccev1.SubnetSpec{
+				ID:               subnetName,
+				VPCID:            vpcID,
+				AvailabilityZone: availabilityZone,
+			},
+		},
+	}
+
+	node := &bccNetworkResourceSet{
+		bceNetworkResourceSet: &bceNetworkResourceSet{
+			manager:       manager,
+			bceclient:     mockClient,
+			instanceID:    effectiveInstance,
+			k8sObj:        resource,
+			creatingEni:   newCreatingEniSet(),
+			eventRecorder: record.NewFakeRecorder(10),
+			log:           logrus.NewEntry(logrus.New()),
+		},
+	}
+
+	err := node.createENIOnCluster(context.Background(), logrus.NewEntry(logrus.New()), resource, subnet)
+	assert.NoError(t, err)
+
+	prefix := fmt.Sprintf("%s/%s/%s", clusterID, effectiveInstance, nodeName)
+	assert.True(t, strings.HasPrefix(capturedCreateName, prefix), "ENI name should include clusterID, effective instance ID and node name")
+	assert.Equal(t, expectedENIID, fakeLister.lastRequestedName, "poll should request newly created ENI id")
+
 	mockClient.AssertExpectations(t)
 }
 

@@ -195,7 +195,11 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 		case string(metadata.InstanceTypeExEBC), string(metadata.InstanceTypeExEHC):
 			bceNrs.real = newEBCNetworkResourceSet(newBCCNetworkResourceSet(bceNrs))
 		case string(metadata.InstanceTypeExHPAS):
-			bceNrs.bceclient = manager.hpasclientd
+			if operatorOption.Config.HPASStanderd { // HPAS 标准版使用 bceclient
+				bceNrs.bceclient = manager.bceclientd
+			} else { // HPAS 非标准版使用 hpasclient
+				bceNrs.bceclient = manager.hpasclientd
+			}
 			bceNrs.real = newHPASNetworkResourceSet(newBCCNetworkResourceSet(bceNrs))
 		default:
 			bceNrs.real = newBCCNetworkResourceSet(bceNrs)
@@ -205,6 +209,18 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 
 	return bceNrs
 }
+
+var (
+	foreachInstanceReadyOnNode = func(manager *InstancesManager, instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+		return manager.ForeachInstanceReadyOnNode(instanceID, nodeName, fn)
+	}
+	forceGetENIFromInstanceGroupFunc = func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+		return n.forceGetENIFromInstanceGroup(ctx, scopedLog, vpcID, instanceID)
+	}
+	forceGetENIFromIaaSFunc = func(n *bceNetworkResourceSet, ctx context.Context, scopedLog *logrus.Entry, vpcID, instanceID string) (int, string, error) {
+		return n.forceGetENIFromIaaS(ctx, scopedLog, vpcID, instanceID)
+	}
+)
 
 // GetBCEClient returns the BCE cloud client for IaaS operations
 func (n *bceNetworkResourceSet) GetBCEClient() cloud.Interface {
@@ -230,6 +246,12 @@ func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
 		"instanceType": instanceType,
 	}).WithContext(ctx)
 
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		scopedLog.WithError(err).Errorf("failed to get effective instanceID")
+		return nil
+	}
+
 	// fast path to claculate eni quota when operaor has been restarted
 	// isSetLimiter returns true if the node has set limiter
 	// if the node has set limiter, it will return a limiter from the ENI spec
@@ -240,7 +262,7 @@ func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
 		if err != nil || t.Add(DayDuration).Before(time.Now()) {
 			goto slowPath
 		}
-		eniQuota := newCustomerIPQuota(n.log, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, nil)
+		eniQuota := newCustomerIPQuota(n.log, k8s.WatcherClient(), n.k8sObj.Name, effectiveInstanceID, nil)
 		eniQuota.SetMaxENI(n.k8sObj.Spec.ENI.MaxAllocateENI)
 		eniQuota.SetMaxIP(n.k8sObj.Spec.ENI.MaxIPsPerENI)
 		// use customer max ip nums if defiend
@@ -406,6 +428,7 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 	usedENIsNumber := 0
 	haveCreatingENI := false
 
+	// effectiveInstanceID will changed in ForeachInstanceWithAllEni
 	n.manager.ForeachInstanceWithAllEni(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
@@ -525,7 +548,7 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 	// clean borrowed subnet ip
 	maxAllocatableIPv4 := n.GetMaximumAllocatableIPv4()
 	if availableIPsNumber >= maxAllocatableIPv4 {
-		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
+		foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				e, ok := iface.Resource.(*eniResource)
 				if !ok {
@@ -581,8 +604,14 @@ func (n *bceNetworkResourceSet) forceGetENIFromInstanceGroup(ctx context.Context
 	startTime := time.Now()
 	scopedLog = scopedLog.WithField("NetworkResourceSet", n.k8sObj.Name)
 	scopedLog.WithField("StartTime", startTime).Infof("Start force get ENI from instance-group")
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		scopedLog.WithError(err).Errorf("failed to get effective instanceID")
+		return 0, "", err
+	}
+
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID:           n.instanceID,
+		k8s.LabelInstanceID:           effectiveInstanceID,
 		"cce.baidubce.com/created-by": "instance-controller",
 	}))
 	if err != nil {
@@ -618,7 +647,7 @@ func (n *bceNetworkResourceSet) forceGetENIFromInstanceGroup(ctx context.Context
 	createExternalENINum := 0
 	for _, eni := range eniList {
 		newENI := eni.DeepCopy()
-		newENI.ObjectMeta.Labels[k8s.LabelInstanceID] = n.instanceID
+		newENI.ObjectMeta.Labels[k8s.LabelInstanceID] = effectiveInstanceID
 		newENI.ObjectMeta.Labels[k8s.LabelNodeName] = n.k8sObj.Name
 		newENI.OwnerReferences = []metav1.OwnerReference{{
 			APIVersion: ccev2.SchemeGroupVersion.String(),
@@ -652,9 +681,24 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 	scopedLog = scopedLog.WithField("NetworkResourceSet", n.k8sObj.Name)
 	scopedLog.WithField("StartTime", startTime).Infof("Start force get ENI from IaaS")
 
+	// Get effective instance ID based on instance type
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		scopedLog.WithError(err).Error("Failed to get effective instance ID")
+		return 0, "", fmt.Errorf("failed to get effective instance ID: %w", err)
+	}
+
+	if effectiveInstanceID != instanceID {
+		scopedLog.WithFields(logrus.Fields{
+			"instanceType":        n.k8sObj.Spec.ENI.InstanceType,
+			"originalInstanceID":  instanceID,
+			"effectiveInstanceID": effectiveInstanceID,
+		}).Info("Using HPASID for HPAS instance type ENI query")
+	}
+
 	args := enisdk.ListEniArgs{
 		VpcId:      vpcID,
-		InstanceId: instanceID,
+		InstanceId: effectiveInstanceID,
 		Name:       fmt.Sprintf("%s/", option.Config.ClusterID),
 	}
 
@@ -663,7 +707,9 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 		listErr error
 	)
 	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
+		// 这里不需要判断是否使用hpas-client，因为bceclient的定义的时候就确认了是 hpas client 还是 bce client
 		eniList, listErr = n.bceclient.ListENIs(ctx, args)
+
 		if listErr != nil {
 			scopedLog.Warningf("failed to get eni: %v, retry after %s", listErr, eniSyncPeriod)
 			return false, nil
@@ -683,7 +729,7 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 		newENI := &ccev2.ENI{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{
-					k8s.LabelInstanceID: n.instanceID,
+					k8s.LabelInstanceID: effectiveInstanceID,
 					k8s.LabelNodeName:   n.k8sObj.Name,
 				},
 				Annotations: map[string]string{},
@@ -740,7 +786,13 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 	if eniQuota == nil {
 		return 0, "", fmt.Errorf("eni quota is nil, please retry later")
 	}
-	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
+
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to get effective instanceID: %w", err)
+	}
+
+	foreachInstanceReadyOnNode(n.manager, effectiveInstanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			eni, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -753,7 +805,7 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
 
 	if availableENICount == 0 {
-		interfaceNum, msg, err = n.forceGetENIFromInstanceGroup(ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, n.instanceID)
+		interfaceNum, msg, err = forceGetENIFromInstanceGroupFunc(n, ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, effectiveInstanceID)
 		if err != nil {
 			scopedLog.WithError(err).Warnf("force get ENI from instance-group failed")
 		}
@@ -761,7 +813,7 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 			return interfaceNum, msg, err
 		}
 
-		interfaceNum, msg, err = n.forceGetENIFromIaaS(ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, n.instanceID)
+		interfaceNum, msg, err = forceGetENIFromIaaSFunc(n, ctx, scopedLog, n.k8sObj.Spec.ENI.VpcID, effectiveInstanceID)
 		if err != nil {
 			scopedLog.WithError(err).Warnf("force get ENI from IaaS failed")
 		}
@@ -816,9 +868,13 @@ func (n *bceNetworkResourceSet) CreateInterface(ctx context.Context, allocation 
 func (n *bceNetworkResourceSet) PopulateStatusFields(resource *ccev2.NetResourceSet) {
 	eniStatusMap := make(map[string]ccev2.SimpleENIStatus)
 	crossSubnetUsed := make(ipamTypes.AllocationMap, 0)
+	effectiveInstanceID, err := n.k8sObj.GetEffectiveInstanceID(operatorOption.Config.HPASStanderd)
+	if err != nil {
+		return
+	}
 	// Select only the ENI of the local node
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
-		k8s.LabelInstanceID: n.instanceID,
+		k8s.LabelInstanceID: effectiveInstanceID,
 		k8s.LabelNodeName:   n.k8sObj.Name,
 	}))
 	if err != nil {
@@ -971,14 +1027,14 @@ func (n *bceNetworkResourceSet) refreshAvailableSubnets() error {
 		errorCode, reason, errStr := nodeutils.CategorizeSubnetError(filterErr, n.k8sObj.Spec.ENI.SubnetIDs, n.k8sObj.Name)
 		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, errorCode, errStr)
 		metrics.IPAMErrorCounter.WithLabelValues(errorCode, "NetResourceSet", n.k8sObj.Name).Inc()
-		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
+		watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
 		return goerrors.New(errStr)
 	}
 
 	// Set node condition to False when subnets are available
 	subnetIDs := nodeutils.ExtractSubnetIDs(subnets)
 	successMsg := fmt.Sprintf("subnets [%v] are available for node %s, total %d subnets ready", subnetIDs, n.k8sObj.Name, len(subnets))
-	nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetsAvailable, successMsg, n.log)
+	watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionFalse, watchers.ReasonSubnetsAvailable, successMsg, n.log)
 
 	n.availableSubnets = subnets
 	return nil
@@ -1160,7 +1216,8 @@ func (n *bceNetworkResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logru
 
 	// Needed for selecting the same ENI to release IPs from
 	// when more than one ENI qualifies for release
-	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
+	// effectiveInstanceID will changed in ForeachInstanceReadyOnNode
+	foreachInstanceReadyOnNode(n.manager, n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// if r.IPsToRelease is not empty, don't excute the following code
 			if len(r.IPsToRelease) > 0 {
@@ -1667,13 +1724,13 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 			errMsg := fmt.Sprintf("Failed to get borrow subnet %s: %v", newENI.Spec.SubnetID, err)
 			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowSubnet", errMsg)
 			// Set node condition for subnet ensure failure
-			nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, nodeutils.ReasonSubnetEnsureFailure, errMsg, n.log)
+			watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetEnsureFailure, errMsg, n.log)
 			return err
 		}
 
 		// Set node condition to False when subnet is successfully ensured
 		ensureSuccessMsg := fmt.Sprintf("Successfully ensured subnet %s for ENI %s", newENI.Spec.SubnetID, newENI.Spec.ENI.ID)
-		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetEnsured, ensureSuccessMsg, n.log)
+		watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionFalse, watchers.ReasonSubnetEnsured, ensureSuccessMsg, n.log)
 
 		var (
 			maxAllocateIPs = n.GetMaximumAllocatableIPv4() - n.getAvailableIPv4()
@@ -1696,14 +1753,14 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowEniIPs", errMsg)
 			metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "Subnet", newENI.Spec.SubnetID).Inc()
 			// Set node condition for ENI IP borrow failure
-			nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, nodeutils.ReasonSubnetInsufficientIPs, errMsg, n.log)
+			watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionTrue, watchers.ReasonSubnetInsufficientIPs, errMsg, n.log)
 			return goerrors.New(errMsg)
 		}
 		newENI.Spec.BorrowIPCount = borrowedIPs
 
 		// Set node condition to False when IP borrowing succeeds
 		successMsg := fmt.Sprintf("Successfully borrowed %d IPs for ENI %s from subnet %s", borrowedIPs, newENI.Spec.ENI.ID, newENI.Spec.SubnetID)
-		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonIPBorrowSucceeded, successMsg, n.log)
+		watchers.SetNodeCondition(n.k8sObj.Name, watchers.CCESubnetUnavailable, corev1.ConditionFalse, watchers.ReasonIPBorrowSucceeded, successMsg, n.log)
 	}
 	return nil
 }

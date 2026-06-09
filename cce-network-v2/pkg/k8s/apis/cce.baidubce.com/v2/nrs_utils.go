@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,6 +26,38 @@ func (n *NetResourceSet) InstanceID() (instanceID string) {
 		instanceID = n.Spec.InstanceID
 	}
 	return
+}
+
+// GetEffectiveInstanceID returns the effective instance ID based on the instance type.
+// For HPAS instance type and HPASStanderd is true, it returns HPASID if available, otherwise returns an error.
+// For other instance types, it returns the regular InstanceID.
+func (n *NetResourceSet) GetEffectiveInstanceID(HPASStanderd bool) (string, error) {
+	if n == nil {
+		return "", fmt.Errorf("NetResourceSet is nil")
+	}
+
+	// 非标方案的，直接返回 instance-id
+	if !HPASStanderd {
+		return n.Spec.InstanceID, nil
+	}
+
+	// rdma_roce 类型的全部使用instance-id
+	if n.Spec.ENI != nil && strings.EqualFold(n.Spec.ENI.InstanceType, string(ENIForHPC)) {
+		return n.Spec.InstanceID, nil
+	}
+
+	// Check if this is a HPAS instance type
+	if strings.EqualFold(n.Spec.InstanceType, string(metadata.InstanceTypeExHPAS)) {
+		// For HPAS type, HPASID must exist
+		// But if eni is rdma_roce, we should use the instanceID
+		if n.Spec.HPASID == "" {
+			return "", fmt.Errorf("HPAS instance type requires HPASID, but HPASID is empty")
+		}
+		return n.Spec.HPASID, nil
+	}
+
+	// For non-HPAS types, return regular instance ID
+	return n.Spec.InstanceID, nil
 }
 
 // SpeculationNoMoreIPReson speculation on the reason for IP application failure in ENI mode

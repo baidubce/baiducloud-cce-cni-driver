@@ -13,6 +13,7 @@ const (
 	IndexIPToEndpoint    = "ipToEndpoint"
 	IndexIPToENI         = "ipToENI"
 	IndexInstanceIDToNRS = "instanceIDToNRS"
+	IndexHPASIDToNRS     = "hpasIDToNRS"
 )
 
 func StartWatchers(stopCh <-chan struct{}) {
@@ -92,6 +93,18 @@ func addIndexer() {
 				return nil, fmt.Errorf("object is not NRS object")
 			}
 			return []string{nrs.Spec.InstanceID}, nil
+		},
+		IndexHPASIDToNRS: func(obj interface{}) ([]string, error) {
+			nrs, ok := obj.(*ccev2.NetResourceSet)
+			if !ok {
+				log.Errorf("object is not NRS object")
+				return nil, fmt.Errorf("object is not NRS object")
+			}
+			if nrs.Spec.HPASID == "" {
+				log.Debugf("nrs %s has empty HPASID, skip indexing", nrs.Name)
+				return []string{}, nil
+			}
+			return []string{nrs.Spec.HPASID}, nil
 		},
 	})
 }

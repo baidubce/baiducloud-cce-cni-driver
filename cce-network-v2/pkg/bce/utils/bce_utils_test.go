@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -590,25 +594,6 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 			description:                  "When ListMacs fails, should return error",
 		},
 		{
-			name:     "TestGetRdmaIFsInfo_GivenGetVifFeaturesError_WhenGettingRdmaIFsInfo_ThenSkipErrorInterface",
-			nodeName: "test-node",
-			mockClient: &enhancedMockMetaClient{
-				instanceID: "i-12345678",
-				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
-				vifFeatures: map[string]string{
-					"fa:27:00:07:83:02": "rdma_roce",
-				},
-				vifFeaturesError: map[string]error{
-					"fa:27:00:07:83:01": fmt.Errorf("failed to get vif features"),
-				},
-			},
-			enableERIManagement:          false,
-			expectedRdmaIfInfoCount:      1,
-			expectedError:                false,
-			expectedMacAddressesInResult: []string{"fa:27:00:07:83:02"},
-			description:                  "When GetVifFeatures fails for some interfaces, should skip error interface",
-		},
-		{
 			name:     "TestGetRdmaIFsInfo_GivenGetInstanceIDError_WhenGettingRdmaIFsInfo_ThenReturnError",
 			nodeName: "test-node",
 			mockClient: &enhancedMockMetaClient{
@@ -623,6 +608,22 @@ func TestGetRdmaIFsInfo(t *testing.T) {
 			expectedError:                true,
 			expectedMacAddressesInResult: []string{},
 			description:                  "When GetInstanceID fails, should return error",
+		},
+		{
+			name:     "TestGetRdmaIFsInfo_GivenGetVifFeaturesError_WhenGettingRdmaIFsInfo_ThenReturnError",
+			nodeName: "test-node",
+			mockClient: &enhancedMockMetaClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
+				vifFeaturesError: map[string]error{
+					"fa:27:00:07:83:01": fmt.Errorf("failed to get vif features"),
+				},
+			},
+			enableERIManagement:          false,
+			expectedRdmaIfInfoCount:      0,
+			expectedError:                true,
+			expectedMacAddressesInResult: []string{},
+			description:                  "When GetVifFeatures fails, should return error (covers line 232)",
 		},
 	}
 
@@ -778,25 +779,6 @@ func TestGetRdmaIFsInfoAll(t *testing.T) {
 			description:                  "When ListMacs fails, should return error",
 		},
 		{
-			name:     "TestGetRdmaIFsInfoAll_GivenGetVifFeaturesError_WhenGettingRdmaIFsInfoAll_ThenSkipErrorInterface",
-			nodeName: "test-node",
-			mockClient: &enhancedMockMetaClient{
-				instanceID: "i-12345678",
-				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
-				vifFeatures: map[string]string{
-					"fa:27:00:07:83:02": "rdma_roce",
-				},
-				vifFeaturesError: map[string]error{
-					"fa:27:00:07:83:01": fmt.Errorf("failed to get vif features"),
-				},
-			},
-			enableERIManagement:          false,
-			expectedRdmaIfInfoCount:      1,
-			expectedError:                false,
-			expectedMacAddressesInResult: []string{"fa:27:00:07:83:02"},
-			description:                  "When GetVifFeatures fails for some interfaces, should skip error interface",
-		},
-		{
 			name:     "TestGetRdmaIFsInfoAll_GivenGetInstanceIDError_WhenGettingRdmaIFsInfoAll_ThenReturnError",
 			nodeName: "test-node",
 			mockClient: &enhancedMockMetaClient{
@@ -811,6 +793,22 @@ func TestGetRdmaIFsInfoAll(t *testing.T) {
 			expectedError:                true,
 			expectedMacAddressesInResult: []string{},
 			description:                  "When GetInstanceID fails, should return error",
+		},
+		{
+			name:     "TestGetRdmaIFsInfoAll_GivenGetVifFeaturesError_WhenGettingRdmaIFsInfoAll_ThenReturnError",
+			nodeName: "test-node",
+			mockClient: &enhancedMockMetaClient{
+				instanceID: "i-12345678",
+				macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
+				vifFeaturesError: map[string]error{
+					"fa:27:00:07:83:01": fmt.Errorf("failed to get vif features"),
+				},
+			},
+			enableERIManagement:          false,
+			expectedRdmaIfInfoCount:      0,
+			expectedError:                true,
+			expectedMacAddressesInResult: []string{},
+			description:                  "When GetVifFeatures fails, should return error (covers line 290)",
 		},
 	}
 
@@ -844,6 +842,269 @@ func TestGetRdmaIFsInfoAll(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetDefaultMetaClient tests the GetDefaultMetaClient function
+func TestGetDefaultMetaClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupFunc   func() metadata.Interface
+		description string
+	}{
+		{
+			name: "TestGetDefaultMetaClient_GivenDefaultClient_WhenGettingDefaultMetaClient_ThenReturnDefaultClient",
+			setupFunc: func() metadata.Interface {
+				// Return the original default client
+				return metadata.NewClient()
+			},
+			description: "When no custom client is set, should return the default metadata client",
+		},
+		{
+			name: "TestGetDefaultMetaClient_GivenCustomClient_WhenGettingDefaultMetaClient_ThenReturnCustomClient",
+			setupFunc: func() metadata.Interface {
+				// Create and set a custom mock client
+				mockClient := &mockMetaClient{
+					instanceID: "i-custom-12345",
+					err:        nil,
+				}
+				return mockClient
+			},
+			description: "When a custom client is set, should return the custom client",
+		},
+		{
+			name: "TestGetDefaultMetaClient_GivenNilClient_WhenGettingDefaultMetaClient_ThenReturnNilClient",
+			setupFunc: func() metadata.Interface {
+				// Set nil client
+				return nil
+			},
+			description: "When nil client is set, should return nil",
+		},
+	}
+
+	// Save original client
+	originalClient := GetDefaultMetaClient()
+	defer func() {
+		// Restore original client after all tests
+		SetDefaultMetaClient(originalClient)
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup: Set the client
+			expectedClient := tt.setupFunc()
+			SetDefaultMetaClient(expectedClient)
+
+			// Execute: Get the default client
+			result := GetDefaultMetaClient()
+
+			// Verify: Check if the returned client matches the expected client
+			assert.Equal(t, expectedClient, result, tt.description)
+		})
+	}
+}
+
+// TestSetDefaultMetaClient tests the SetDefaultMetaClient function
+func TestSetDefaultMetaClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		clientFunc  func() metadata.Interface
+		verifyFunc  func(t *testing.T, client metadata.Interface)
+		description string
+	}{
+		{
+			name: "TestSetDefaultMetaClient_GivenMockClient_WhenSettingDefaultMetaClient_ThenClientIsSet",
+			clientFunc: func() metadata.Interface {
+				return &mockMetaClient{
+					instanceID: "i-test-12345",
+					err:        nil,
+				}
+			},
+			verifyFunc: func(t *testing.T, client metadata.Interface) {
+				// Verify the client is set correctly by calling GetDefaultMetaClient
+				result := GetDefaultMetaClient()
+				assert.Equal(t, client, result, "Client should be set correctly")
+
+				// Verify the client works by calling GetInstanceID
+				mockClient, ok := result.(*mockMetaClient)
+				assert.True(t, ok, "Client should be of type mockMetaClient")
+				if ok {
+					instanceID, err := mockClient.GetInstanceID()
+					assert.NoError(t, err, "GetInstanceID should not return error")
+					assert.Equal(t, "i-test-12345", instanceID, "Instance ID should match")
+				}
+			},
+			description: "When setting a mock client, should be able to retrieve and use it",
+		},
+		{
+			name: "TestSetDefaultMetaClient_GivenNilClient_WhenSettingDefaultMetaClient_ThenNilClientIsSet",
+			clientFunc: func() metadata.Interface {
+				return nil
+			},
+			verifyFunc: func(t *testing.T, client metadata.Interface) {
+				// Verify nil client is set
+				result := GetDefaultMetaClient()
+				assert.Nil(t, result, "Client should be nil")
+			},
+			description: "When setting nil client, should be able to retrieve nil",
+		},
+		{
+			name: "TestSetDefaultMetaClient_GivenMultipleClients_WhenSettingDefaultMetaClient_ThenLatestClientIsSet",
+			clientFunc: func() metadata.Interface {
+				// This test will set multiple clients in sequence
+				return &mockMetaClient{
+					instanceID: "i-latest-12345",
+					err:        nil,
+				}
+			},
+			verifyFunc: func(t *testing.T, client metadata.Interface) {
+				// First set a different client
+				firstClient := &mockMetaClient{
+					instanceID: "i-first-12345",
+					err:        nil,
+				}
+				SetDefaultMetaClient(firstClient)
+
+				// Verify first client is set
+				result := GetDefaultMetaClient()
+				assert.Equal(t, firstClient, result, "First client should be set")
+
+				// Now set the second client (from clientFunc)
+				SetDefaultMetaClient(client)
+
+				// Verify second client is set (latest one)
+				result = GetDefaultMetaClient()
+				assert.Equal(t, client, result, "Latest client should be set")
+				assert.NotEqual(t, firstClient, result, "Should not return first client")
+			},
+			description: "When setting multiple clients, should always return the latest one",
+		},
+		{
+			name: "TestSetDefaultMetaClient_GivenEnhancedMockClient_WhenSettingDefaultMetaClient_ThenClientIsSet",
+			clientFunc: func() metadata.Interface {
+				return &enhancedMockMetaClient{
+					instanceID: "i-enhanced-12345",
+					macList:    []string{"fa:27:00:07:83:01"},
+					vifFeatures: map[string]string{
+						"fa:27:00:07:83:01": "rdma_roce",
+					},
+				}
+			},
+			verifyFunc: func(t *testing.T, client metadata.Interface) {
+				// Verify the client is set correctly
+				result := GetDefaultMetaClient()
+				assert.Equal(t, client, result, "Enhanced client should be set correctly")
+
+				// Verify the client works by calling methods
+				enhancedClient, ok := result.(*enhancedMockMetaClient)
+				assert.True(t, ok, "Client should be of type enhancedMockMetaClient")
+				if ok {
+					instanceID, err := enhancedClient.GetInstanceID()
+					assert.NoError(t, err, "GetInstanceID should not return error")
+					assert.Equal(t, "i-enhanced-12345", instanceID, "Instance ID should match")
+
+					macList, err := enhancedClient.ListMacs()
+					assert.NoError(t, err, "ListMacs should not return error")
+					assert.Equal(t, []string{"fa:27:00:07:83:01"}, macList, "MAC list should match")
+
+					vifFeatures, err := enhancedClient.GetVifFeatures("fa:27:00:07:83:01")
+					assert.NoError(t, err, "GetVifFeatures should not return error")
+					assert.Equal(t, "rdma_roce", vifFeatures, "VIF features should match")
+				}
+			},
+			description: "When setting an enhanced mock client, should be able to retrieve and use all its methods",
+		},
+	}
+
+	// Save original client
+	originalClient := GetDefaultMetaClient()
+	defer func() {
+		// Restore original client after all tests
+		SetDefaultMetaClient(originalClient)
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup: Create the client
+			client := tt.clientFunc()
+
+			// Execute: Set the default client
+			SetDefaultMetaClient(client)
+
+			// Verify: Run custom verification
+			tt.verifyFunc(t, client)
+		})
+	}
+}
+
+// TestGetDefaultMetaClient_Concurrency tests concurrent access to GetDefaultMetaClient
+func TestGetDefaultMetaClient_GivenConcurrentAccess_WhenGettingDefaultMetaClient_ThenReturnConsistentClient(t *testing.T) {
+	// Save original client
+	originalClient := GetDefaultMetaClient()
+	defer func() {
+		SetDefaultMetaClient(originalClient)
+	}()
+
+	// Set a test client
+	testClient := &mockMetaClient{
+		instanceID: "i-concurrent-test",
+		err:        nil,
+	}
+	SetDefaultMetaClient(testClient)
+
+	// Test concurrent reads
+	const numGoroutines = 100
+	results := make(chan metadata.Interface, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			client := GetDefaultMetaClient()
+			results <- client
+		}()
+	}
+
+	// Collect results
+	for i := 0; i < numGoroutines; i++ {
+		result := <-results
+		assert.Equal(t, testClient, result, "All concurrent reads should return the same client")
+	}
+}
+
+// TestSetDefaultMetaClient_Integration tests integration with GetRdmaIFsInfo
+func TestSetDefaultMetaClient_GivenMockClientWithRdmaInterface_WhenCallingGetRdmaIFsInfo_ThenReturnRdmaInfo(t *testing.T) {
+	// Save original client and config
+	originalClient := GetDefaultMetaClient()
+	originalEnableERIManagement := option.Config.EnableERIManagement
+	defer func() {
+		SetDefaultMetaClient(originalClient)
+		option.Config.EnableERIManagement = originalEnableERIManagement
+	}()
+
+	// Setup: Create a mock client with RDMA interface
+	mockClient := &enhancedMockMetaClient{
+		instanceID: "i-integration-test",
+		macList:    []string{"fa:27:00:07:83:01", "fa:27:00:07:83:02"},
+		vifFeatures: map[string]string{
+			"fa:27:00:07:83:01": "rdma_roce",
+			"fa:27:00:07:83:02": "normal",
+		},
+	}
+	option.Config.EnableERIManagement = false
+
+	// Execute: Set the mock client
+	SetDefaultMetaClient(mockClient)
+
+	// Verify: Call GetRdmaIFsInfo and check results
+	result, err := GetRdmaIFsInfo("test-node", nil)
+	assert.NoError(t, err, "GetRdmaIFsInfo should not return error")
+	assert.Equal(t, 1, len(result), "Should return 1 RDMA interface")
+
+	// Verify the RDMA interface details
+	rdmaInfo, exists := result["fa:27:00:07:83:01"]
+	assert.True(t, exists, "RDMA interface should exist in result")
+	assert.Equal(t, "fa:27:00:07:83:01", rdmaInfo.MacAddress, "MAC address should match")
+	assert.Equal(t, "rdma_roce", rdmaInfo.VifFeatures, "VIF features should match")
+	assert.NotEmpty(t, rdmaInfo.NetResourceSetName, "NetResourceSetName should not be empty")
+	assert.NotEmpty(t, rdmaInfo.LabelSelectorValue, "LabelSelectorValue should not be empty")
 }
 
 // TestGenerateEriNrsLabelSelectorValue tests the generateEriNrsLabelSelectorValue function
@@ -1004,4 +1265,82 @@ func TestGetNodeNameFromNetResourceSetName(t *testing.T) {
 			assert.Equal(t, tt.expectedResult, result, tt.description)
 		})
 	}
+}
+
+func TestGetNrsTypeByInstanceID_GivenHPASID_WhenNrsExists_ThenReturnType(t *testing.T) {
+	ccemock.NewMockClient()
+
+	nrs := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-nrs-hpas",
+		},
+		Spec: ccev2.NetResourceSpec{
+			InstanceID: "i-test-hpas",
+			HPASID:     "hpas-test-hpas",
+			ENI: &api.ENISpec{
+				InstanceType: "custom-hpas-type",
+			},
+		},
+	}
+
+	err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{nrs})
+	assert.NoError(t, err)
+
+	nrsType, err := GetNrsTypeByInstanceID("hpas-test-hpas")
+	assert.NoError(t, err)
+	assert.Equal(t, "custom-hpas-type", nrsType)
+}
+
+func TestGetNrsTypeByInstanceID_GivenInstanceID_WhenNrsExists_ThenReturnType(t *testing.T) {
+	ccemock.NewMockClient()
+
+	nrs := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-nrs-instance",
+		},
+		Spec: ccev2.NetResourceSpec{
+			InstanceID: "i-test-instance",
+			ENI: &api.ENISpec{
+				InstanceType: "custom-instance-type",
+			},
+		},
+	}
+
+	err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{nrs})
+	assert.NoError(t, err)
+
+	nrsType, err := GetNrsTypeByInstanceID("i-test-instance")
+	assert.NoError(t, err)
+	assert.Equal(t, "custom-instance-type", nrsType)
+}
+
+func TestGetNrsTypeByInstanceID_GivenOnlyRdmaTypes_WhenQuery_ThenReturnEmpty(t *testing.T) {
+	ccemock.NewMockClient()
+
+	nrs := &ccev2.NetResourceSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-nrs-rdma",
+		},
+		Spec: ccev2.NetResourceSpec{
+			InstanceID: "i-rdma-only",
+			ENI: &api.ENISpec{
+				InstanceType: string(ccev2.ENIForHPC),
+			},
+		},
+	}
+
+	err := ccemock.EnsureNrsToInformer(t, []*ccev2.NetResourceSet{nrs})
+	assert.NoError(t, err)
+
+	nrsType, err := GetNrsTypeByInstanceID("i-rdma-only")
+	assert.NoError(t, err)
+	assert.Equal(t, "", nrsType)
+}
+
+func TestGetNrsTypeByInstanceID_GivenUnknownInstanceID_WhenQuery_ThenReturnEmpty(t *testing.T) {
+	ccemock.NewMockClient()
+
+	nrsType, err := GetNrsTypeByInstanceID("i-not-exist")
+	assert.NoError(t, err)
+	assert.Equal(t, "", nrsType)
 }

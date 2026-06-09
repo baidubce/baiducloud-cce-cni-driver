@@ -66,6 +66,11 @@ func EnsureObjectToInformer(t *testing.T, informer cache.SharedIndexInformer, fu
 				resourceVersionMap.Receive(actual.GetName(), actual.GetResourceVersion())
 			}
 		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if actual, ok := newObj.(metav1.Object); ok {
+				resourceVersionMap.Receive(actual.GetName(), actual.GetResourceVersion())
+			}
+		},
 	})
 
 	for _, obj := range fun(ctx) {
@@ -81,6 +86,8 @@ outter:
 			if resourceVersionMap.IsAllObjectReceived() {
 				break outter
 			}
+			// Add a small sleep to avoid busy waiting
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	return nil

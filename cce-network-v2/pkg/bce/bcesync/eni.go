@@ -3,6 +3,7 @@ package bcesync
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/baidubce/bce-sdk-go/services/bbc"
@@ -22,6 +23,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/cm"
@@ -341,7 +343,18 @@ func removeENI(es *eniSyncher, eni *ccev2.ENI) error {
 			EniId:      eni.Name,
 			InstanceId: eni.Spec.InstanceID,
 		}
-		err = es.bceclient.DetachENI(ctx, args)
+		nrsType, err := bceutils.GetNrsTypeByInstanceID(eni.Spec.InstanceID)
+		if err != nil {
+			eniLog.WithError(err).Errorf("get nrs type failed")
+			return err
+		}
+
+		if !operatorOption.Config.HPASStanderd && nrsType == string(metadata.InstanceTypeExHPAS) {
+			err = es.hpasclient.DetachENI(ctx, args)
+		} else {
+			err = es.bceclient.DetachENI(ctx, args)
+		}
+
 		if err != nil {
 			eniLog.WithError(err).Errorf("detach eni %s failed", eni.Name)
 			return err
@@ -507,6 +520,7 @@ func (es *eniSyncher) releaseSecondaryIPsFromPrimaryENI(eni *ccev2.ENI) error {
 		return nil
 	}
 	var err error
+
 	if eni.Spec.Type == ccev2.ENIForBBC {
 		err = es.bceclient.BBCBatchDelIP(logfields.NewContext(), &bbc.BatchDelIpArgs{
 			InstanceId: eni.Spec.InstanceID,
@@ -674,6 +688,7 @@ func (esm *eniStateMachine) handleRdmaENI() error {
 }
 
 func updateENISpecFromVPCENI(esm *eniStateMachine) {
+
 	esm.resource.Spec.ENI.ID = esm.vpceni.EniId
 	esm.resource.Spec.ENI.Name = esm.vpceni.Name
 	esm.resource.Spec.ENI.MacAddress = esm.vpceni.MacAddress
@@ -807,7 +822,7 @@ func (esm *eniStateMachine) getClientForENI() cloud.Interface {
 
 	// 查找匹配的NetResourceSet（非RDMA类型）
 	for _, nrs := range nrsList {
-		if nrs.Spec.ENI != nil && nrs.Spec.ENI.InstanceType == string(metadata.InstanceTypeExHPAS) {
+		if nrs.Spec.ENI != nil && strings.EqualFold(nrs.Spec.InstanceType, string(metadata.InstanceTypeExHPAS)) {
 			// 如果是HPAS实例，使用hpasclient
 			esm.scopeLog.Infof("using HPAS client for instanceID %s (instance-type: %s)", esm.resource.Spec.ENI.InstanceID, nrs.Spec.ENI.InstanceType)
 			return esm.es.hpasclient

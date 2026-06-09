@@ -1106,7 +1106,7 @@ func (fc *flowControlClient) ListSecurityGroup(ctx context.Context, vpcID string
 }
 
 // ListSubnets implements Interface
-func (fc *flowControlClient) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
+func (fc *flowControlClient) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error) {
 	var (
 		req rate.LimitedRequest
 		err error

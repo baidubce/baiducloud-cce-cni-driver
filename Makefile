@@ -61,6 +61,7 @@ build: prepare
 	mv cce-network-v2/deploy/dockerfile $(OUTDIR)/deploy/
 	mv cce-network-v2/VERSION $(OUTDIR)/
 	mv cce-network-v2/deploy/cce-network-v2 $(OUTDIR)/
+	cp -r database-reconciliation-tool $(OUTDIR)/
 
 # make test, test your code
 test: prepare test-case

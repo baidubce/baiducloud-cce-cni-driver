@@ -17,6 +17,7 @@ package watchers
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -140,6 +141,35 @@ func (c *NetResourceSetUpdateImplementation) GetByInstanceID(instanceID string) 
 			}
 		}
 	}
+	return data, err
+}
+
+func (c *NetResourceSetUpdateImplementation) GetByHPASID(hpasID string) ([]*ccev2.NetResourceSet, error) {
+	var data []*ccev2.NetResourceSet
+
+	if hpasID == "" {
+		log.Errorf("hpasID is empty")
+		return data, fmt.Errorf("hpasID is empty")
+	}
+
+	indexer := k8s.CCEClient().Informers.Cce().V2().
+		NetResourceSets().Informer().GetIndexer()
+
+	objs, err := indexer.ByIndex(IndexHPASIDToNRS, hpasID)
+	if err != nil {
+		return data, err
+	}
+
+	for _, obj := range objs {
+		if nrs, ok := obj.(*ccev2.NetResourceSet); ok {
+			log.Debugf("Found NRS %s for hpasID %s", nrs.Name, hpasID)
+			data = append(data, nrs)
+		} else {
+			log.Errorf("obj %v is not NetResourceSet, type: %T", obj, obj)
+		}
+	}
+	log.Debugf("Found %d NRS for hpasID %s", len(data), hpasID)
+
 	return data, err
 }
 

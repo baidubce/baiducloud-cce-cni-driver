@@ -365,6 +365,15 @@ var (
 
 	// SubnetIPsUsed is the gauge of used IP count by containers in subnet
 	SubnetIPsUsed = NoOpGaugeVec
+
+	// PodIPAllocationDuration is the duration of pod IP allocation from first attempt to final success
+	PodIPAllocationDuration = NoOpObserverVec
+
+	// PodIPReleaseDuration is the duration of pod IP release from first attempt to complete
+	PodIPReleaseDuration = NoOpObserverVec
+
+	// ENIStatus is the status of ENI configuration (0=正常, 1=异常)
+	ENIStatus = NoOpGaugeVec
 )
 
 type Configuration struct {
@@ -409,6 +418,9 @@ type Configuration struct {
 	WorkQueueLens                         bool
 	WorkQueueEventCount                   bool
 	ControllerHandlerDurationMilliseconds bool
+
+	PodIPAllocationDurationEnabled bool
+	PodIPReleaseDurationEnabled    bool
 }
 
 func DefaultMetrics() map[string]struct{} {
@@ -443,6 +455,8 @@ func DefaultMetrics() map[string]struct{} {
 		Namespace + "_subnet_ips_count":                                                 {},
 		Namespace + "_subnet_ips_available":                                             {},
 		Namespace + "_subnet_ips_used":                                                  {},
+		Namespace + "_" + SubsystemAgent + "_pod_ip_allocation_duration_seconds":        {},
+		Namespace + "_" + SubsystemAgent + "_pod_ip_release_duration_seconds":           {},
 	}
 }
 
@@ -815,6 +829,37 @@ func CreateConfiguration(metricsEnabled []string) (Configuration, []prometheus.C
 					LabelBuildQueueName,
 				},
 			)
+
+		case Namespace + "_" + SubsystemAgent + "_pod_ip_allocation_duration_seconds":
+			PodIPAllocationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+				Namespace: Namespace,
+				Subsystem: SubsystemAgent,
+				Name:      "pod_ip_allocation_duration_seconds",
+				Help:      "Duration of pod IP allocation from first attempt to final success",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0},
+			}, []string{LabelOutcome, "ipam_mode", "node"})
+			collectors = append(collectors, PodIPAllocationDuration)
+			c.PodIPAllocationDurationEnabled = true
+
+		case Namespace + "_" + SubsystemAgent + "_pod_ip_release_duration_seconds":
+			PodIPReleaseDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+				Namespace: Namespace,
+				Subsystem: SubsystemAgent,
+				Name:      "pod_ip_release_duration_seconds",
+				Help:      "Duration of pod IP release from first attempt to complete",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0},
+			}, []string{LabelOutcome, "node"})
+			collectors = append(collectors, PodIPReleaseDuration)
+			c.PodIPReleaseDurationEnabled = true
+
+		case Namespace + "_" + SubsystemAgent + "_eni_status":
+			ENIStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: Namespace,
+				Subsystem: SubsystemAgent,
+				Name:      "eni_status",
+				Help:      "ENI configuration status (0=正常, 1=异常)",
+			}, []string{"cluster_id", "eni_id", "node_name", "pod_name", "reason"})
+			collectors = append(collectors, ENIStatus)
 		}
 
 	}
@@ -917,6 +962,15 @@ func RegisterList(list []prometheus.Collector) error {
 // Unregister unregisters a collector
 func Unregister(c prometheus.Collector) bool {
 	return registry.Unregister(c)
+}
+
+// AttachHandler mounts the Prometheus metrics handler onto the provided mux at the given path.
+// This allows callers to reuse an existing HTTP server instead of starting a new one.
+func AttachHandler(mux *http.ServeMux, path string) {
+	if path == "" {
+		path = "/metrics"
+	}
+	mux.Handle(path, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 }
 
 // Enable begins serving prometheus metrics on the address passed in. Addresses

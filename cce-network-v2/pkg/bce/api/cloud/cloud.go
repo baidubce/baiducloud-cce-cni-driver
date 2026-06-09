@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/baidubce/bce-sdk-go/bce"
@@ -35,6 +36,7 @@ import (
 
 	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/hpas"
 )
 
@@ -65,6 +67,13 @@ func newBCEClientConfig(ctx context.Context,
 		Retry:                     bce.NewNoRetryPolicy(),
 		ConnectionTimeoutInMillis: int(timeout.Milliseconds()),
 	}
+}
+
+func getDeviceType(instanceId string) string {
+	if strings.HasPrefix(instanceId, string(metadata.InstanceTypeExHPAS)) {
+		return string(metadata.InstanceTypeExHPAS)
+	}
+	return ""
 }
 
 func New(
@@ -147,6 +156,8 @@ func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni,
 	isTruncated := true
 	nextMarker := ""
 
+	args.DeviceType = getDeviceType(args.InstanceId)
+
 	for isTruncated {
 		// 每一页使用指数退避重试，最多重试10次，最大延迟10s
 		var res *eni.ListEniResult
@@ -225,6 +236,7 @@ func (c *Client) ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni,
 				VpcId:      args.VpcId,
 				Name:       args.Name,
 				InstanceId: args.InstanceId,
+				DeviceType: getDeviceType(args.InstanceId),
 				Marker:     nextMarker,
 			}
 
@@ -409,6 +421,7 @@ func (c *Client) BatchDeletePrivateIP(ctx context.Context, privateIPs []string, 
 
 func (c *Client) CreateENI(ctx context.Context, args *eni.CreateEniArgs) (string, error) {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	resp, err := c.eniClient.CreateEni(args)
 	exportMetric("CreateENI", t, err)
 	if err != nil {
@@ -428,6 +441,7 @@ func (c *Client) DeleteENI(ctx context.Context, eniID string) error {
 
 func (c *Client) AttachENI(ctx context.Context, args *eni.EniInstance) error {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	err := c.eniClient.AttachEniInstance(args)
 	exportMetric("AttachENI", t, err)
 	return err
@@ -435,6 +449,7 @@ func (c *Client) AttachENI(ctx context.Context, args *eni.EniInstance) error {
 
 func (c *Client) DetachENI(ctx context.Context, args *eni.EniInstance) error {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	err := c.eniClient.DetachEniInstance(args)
 	exportMetric("DetachENI", t, err)
 	return err
@@ -452,6 +467,7 @@ func (c *Client) GetENIQuota(ctx context.Context, instanceID string) (*eni.EniQu
 	t := time.Now()
 	resp, err := c.eniClient.GetEniQuota(&eni.EniQuoteArgs{
 		InstanceId: instanceID,
+		DeviceType: getDeviceType(instanceID),
 	})
 	exportMetric("GET /v1/eni/quota", t, err)
 	return resp, err
@@ -494,14 +510,17 @@ func (c *Client) DescribeSubnet(ctx context.Context, subnetID string) (*vpc.Subn
 	return &resp.Subnet, nil
 }
 
-func (c *Client) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) ([]vpc.Subnet, error) {
+// ListSubnets returns full pagination info including IsTruncated and NextMarker
+// to support proper pagination when listing subnets
+func (c *Client) ListSubnets(ctx context.Context, args *vpc.ListSubnetArgs) (*vpc.ListSubnetResult, error) {
 	t := time.Now()
 	resp, err := c.vpcClient.ListSubnets(args)
 	exportMetric("ListSubnets", t, err)
 	if err != nil {
 		return nil, err
 	}
-	return resp.Subnets, nil
+	// Return the full result with pagination info instead of just the Subnets slice
+	return resp, nil
 }
 
 func (c *Client) GetBCCInstanceDetail(ctx context.Context, instanceID string) (*bccapi.InstanceModel, error) {
@@ -602,6 +621,7 @@ func (c *Client) GetBBCInstanceENI(ctx context.Context, instanceID string) (*bbc
 
 func (c *Client) BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*bbc.BatchAddIpResponse, error) {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	resp, err := c.bbcClient.BatchAddIP(args)
 	exportMetricAndLog(ctx, "BBCBatchAddIP", t, err)
 	return resp, err
@@ -609,6 +629,7 @@ func (c *Client) BBCBatchAddIP(ctx context.Context, args *bbc.BatchAddIpArgs) (*
 
 func (c *Client) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) error {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	err := c.bbcClient.BatchDelIP(args)
 	exportMetricAndLog(ctx, "BBCBatchDelIP", t, err)
 	return err
@@ -616,6 +637,7 @@ func (c *Client) BBCBatchDelIP(ctx context.Context, args *bbc.BatchDelIpArgs) er
 
 func (c *Client) BBCBatchAddIPCrossSubnet(ctx context.Context, args *bbc.BatchAddIpCrossSubnetArgs) (*bbc.BatchAddIpResponse, error) {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	resp, err := c.bbcClient.BatchAddIPCrossSubnet(args)
 	exportMetricAndLog(ctx, "BBCBatchAddIPCrossSubnet", t, err)
 	return resp, err
@@ -645,6 +667,7 @@ func (c *Client) BatchAddHpcEniPrivateIP(ctx context.Context, args *hpc.EniBatch
 // BCCBatchAddIP implements Interface.
 func (c *Client) BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs) (*bccapi.BatchAddIpResponse, error) {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	resp, err := c.bccClient.BatchAddIP(args)
 	exportMetricAndLog(ctx, BCCBatchAddIP, t, err)
 	return resp, err
@@ -653,6 +676,7 @@ func (c *Client) BCCBatchAddIP(ctx context.Context, args *bccapi.BatchAddIpArgs)
 // BCCBatchDelIP implements Interface.
 func (c *Client) BCCBatchDelIP(ctx context.Context, args *bccapi.BatchDelIpArgs) error {
 	t := time.Now()
+	args.DeviceType = getDeviceType(args.InstanceId)
 	err := c.bccClient.BatchDelIP(args)
 	exportMetricAndLog(ctx, BCCBatchDelIP, t, err)
 	return err
@@ -682,7 +706,7 @@ func (c *Client) DescribeVPC(ctx context.Context, vpcID string) (*vpc.ShowVPCMod
 
 func (c *Client) HPASWrapper(ctx context.Context) error {
 	//c.eniClient.WithHeader
-	c.bccClient.Signer = hpas.NewHPASSignWrapper(c.bbcClient.Signer)
+	c.bccClient.Signer = hpas.NewHPASSignWrapper(c.bccClient.Signer)
 	c.eniClient.Signer = hpas.NewHPASSignWrapper(c.eniClient.Signer)
 	return nil
 }

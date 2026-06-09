@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/version"
 )
 
 const (
@@ -110,7 +111,19 @@ func (c *Client) sendRequest(path string) ([]byte, error) {
 		Host:   c.host,
 		Path:   path,
 	}
-	resp, err := http.Get(reqURL.String())
+
+	// Create request with custom User-Agent header
+	req, err := http.NewRequest("GET", reqURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set User-Agent header with version
+	userAgent := fmt.Sprintf("cce-network-v2/%s", version.GetCCEVersion().Version)
+	req.Header.Set("User-Agent", userAgent)
+
+	// Send request
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +157,15 @@ func (c *Client) GetInstanceID() (string, error) {
 	}
 	instanceID := strings.TrimSpace(string(body))
 	return instanceID, nil
+}
+
+func (c *Client) GetResourceID() (string, error) {
+	body, err := c.sendRequest(metadataBasePath + "source-resource-id")
+	if err != nil {
+		return "", err
+	}
+	resourceID := strings.TrimSpace(string(body))
+	return resourceID, nil
 }
 
 func (c *Client) GetInstanceName() (string, error) {

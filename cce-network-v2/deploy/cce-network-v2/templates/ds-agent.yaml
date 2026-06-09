@@ -18,6 +18,10 @@ spec:
         app.cce.baidubce.com: cce-network-agent
         cce.baidubce.com/cniwebhook: disabled
         {{- include "helm.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ trimPrefix ":" (index .Values.ccedConfig "prometheus-serve-addr") | quote }}
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - command:
@@ -72,7 +76,6 @@ spec:
             - mountPath: /var/run/cce-network-v2
               name: socket-dir
             - mountPath: /var/run/netns
-              mountPropagation: Bidirectional
               name: netns-dir
             - mountPath: /opt/cni/bin
               name: cni-bin-dir

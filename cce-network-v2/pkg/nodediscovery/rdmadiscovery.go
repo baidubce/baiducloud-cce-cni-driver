@@ -476,6 +476,19 @@ func (rd *RdmaDiscovery) mutateNodeResource(rdmaNetResourceSet *ccev2.NetResourc
 	}
 	rdmaNetResourceSet.Spec.InstanceID = instanceID
 
+	// Align HPASID handling with standard node discovery logic
+	sourceType, err := agent.GetSourceType()
+	if err != nil {
+		rd.eventRecorder.Eventf(k8sNode, k8sTypes.EventTypeWarning, "MetaAPIError", "failed to get instance type: %v", err)
+		log.WithError(err).Fatal("get instance type fail")
+	}
+	rd.setHPASIDIfNeeded(k8sNode, rdmaNetResourceSet, sourceType)
+	if rdmaNetResourceSet.Spec.HPASID != "" {
+		rdmaNetResourceSet.ObjectMeta.Labels[k8s.LabelInstanceID] = rdmaNetResourceSet.Spec.HPASID
+	} else {
+		rdmaNetResourceSet.ObjectMeta.Labels[k8s.LabelInstanceID] = rdmaNetResourceSet.Spec.InstanceID
+	}
+
 	if rdmaNetResourceSet.Spec.ENI == nil {
 		eni, err := generateRdmaENISpec(vifFeatures)
 		if err != nil {

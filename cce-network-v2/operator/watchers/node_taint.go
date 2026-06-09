@@ -49,6 +49,18 @@ const (
 	messageNotRuningAndReady = "cce-network-agent is not running or ready on this node"
 
 	CCENetworkUnavailable corev1.NodeConditionType = "CCENetworkUnavailable"
+	CCESubnetUnavailable  corev1.NodeConditionType = "CCESubnetUnavailable"
+)
+
+// Subnet condition reasons
+const (
+	ReasonSubnetZoneMismatch    = "SubnetZoneMismatch"
+	ReasonSubnetInsufficientIPs = "SubnetInsufficientIPs"
+	ReasonSubnetEnsureFailure   = "SubnetEnsureFailure"
+	ReasonNoAvailableSubnet     = "NoAvailableSubnet"
+	ReasonSubnetsAvailable      = "SubnetsAvailable"
+	ReasonSubnetEnsured         = "SubnetEnsured"
+	ReasonIPBorrowSucceeded     = "IPBorrowSucceeded"
 )
 
 var (
@@ -229,6 +241,78 @@ func hasAgentNotReadyTaint(k8sNode *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// SetNodeCondition is a generic function to set node conditions
+// This function is used to update various node conditions including subnet availability
+func SetNodeCondition(nodeName string, conditionType corev1.NodeConditionType, status corev1.ConditionStatus, reason, message string, logger *logrus.Entry) {
+	// Early return for empty node name
+	if nodeName == "" {
+		if logger != nil {
+			logger.Warn("SetNodeCondition called with empty node name")
+		}
+		return
+	}
+
+	// Early return for nil logger
+	if logger == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	node, err := NodeClient.Lister().Get(nodeName)
+	if err != nil {
+		// If node is not found, silently return without logging an error
+		if k8sErrors.IsNotFound(err) {
+			return
+		}
+		logger.WithError(err).WithField("nodeName", nodeName).Error("Failed to get node from lister")
+		return
+	}
+
+	// Check if condition already has the desired status
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == conditionType && condition.Status == status && condition.Reason == reason {
+			// Condition already has the desired status, no need to update
+			return
+		}
+	}
+
+	// Set condition
+	now := metav1.Now()
+	nodeCondition := corev1.NodeCondition{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: now,
+		LastHeartbeatTime:  now,
+	}
+
+	raw, err := json.Marshal(&[]corev1.NodeCondition{nodeCondition})
+	if err != nil {
+		logger.WithError(err).Error("Failed to marshal node conditions")
+		return
+	}
+
+	patch := []byte(fmt.Sprintf(`{"status":{"conditions":%s}}`, raw))
+
+	_, err = NodeClient.NodeInterface().PatchStatus(ctx, nodeName, patch)
+	if err != nil {
+		logger.WithError(err).WithFields(logrus.Fields{
+			"nodeName":  nodeName,
+			"condition": conditionType,
+			"status":    status,
+		}).Error("Failed to update node condition")
+	} else {
+		logger.WithFields(logrus.Fields{
+			"nodeName":  nodeName,
+			"condition": conditionType,
+			"status":    status,
+			"reason":    reason,
+		}).Info("Successfully updated node condition")
+	}
 }
 
 // setNodeNetworkUnavailable sets Kubernetes NodeNetworkUnavailable to

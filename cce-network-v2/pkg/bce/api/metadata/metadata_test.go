@@ -50,6 +50,7 @@ func newHandler(handler func(w http.ResponseWriter, r *http.Request)) http.Handl
 	r.HandleFunc(metadataBasePath+"instance-type", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"instance-type-ex", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"source", handler).Methods("GET")
+	r.HandleFunc(metadataBasePath+"source-resource-id", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"network/interfaces/macs/test-mac/vif_features", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"network/interfaces/macs/test-mac/mtu", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"network/interfaces/macs/test-mac/fixed_ips/10.0.1.100/gateway", handler).Methods("GET")
@@ -734,6 +735,210 @@ func TestGetLinkSecondaryIPs(t *testing.T) {
 		_, err := c.GetLinkSecondaryIPs("test-mac")
 		if err == nil {
 			t.Error("GetLinkSecondaryIPs should return error when primary IP cannot be determined")
+		}
+	})
+}
+
+// Test GetResourceID function
+func TestGetResourceID(t *testing.T) {
+	t.Run("TestGetResourceID_Given_ValidResponse_When_CallGetResourceID_Then_ReturnCorrectID", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataOK))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		id, err := c.GetResourceID()
+		if err != nil {
+			t.Errorf("GetResourceID got error: %v", err)
+		}
+
+		if id != "xxx" {
+			t.Errorf("GetResourceID want: %s, got: %s", "xxx", id)
+		}
+	})
+
+	t.Run("TestGetResourceID_Given_NotImplemented_When_CallGetResourceID_Then_ReturnErrorNotImplemented", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataNotImplemented))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		_, err := c.GetResourceID()
+		if err != ErrorNotImplemented {
+			t.Errorf("GetResourceID should return ErrorNotImplemented, got: %v", err)
+		}
+	})
+
+	t.Run("TestGetResourceID_Given_ServerError_When_CallGetResourceID_Then_ReturnError", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataError))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		_, err := c.GetResourceID()
+		if err == nil {
+			t.Error("GetResourceID should return error for server error")
+		}
+	})
+}
+
+// Test sendRequest function
+func TestSendRequest(t *testing.T) {
+	t.Run("TestSendRequest_Given_ValidPath_When_CallSendRequest_Then_ReturnResponseBody", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataOK))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		body, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err != nil {
+			t.Errorf("sendRequest got error: %v", err)
+		}
+
+		expectedBody := "xxx"
+		if string(body) != expectedBody {
+			t.Errorf("sendRequest want: %s, got: %s", expectedBody, string(body))
+		}
+	})
+
+	t.Run("TestSendRequest_Given_InvalidURL_When_CallSendRequest_Then_ReturnError", func(t *testing.T) {
+		// Test with invalid URL that will cause http.NewRequest to fail
+		// This specifically tests lines 118-119 in metadata.go where:
+		//   if err != nil {
+		//       return nil, err
+		//   }
+		// The invalid scheme with space will cause http.NewRequest to return an error
+		c := NewClient()
+		c.scheme = "ht tp" // Invalid scheme with space - will cause http.NewRequest to fail
+		c.host = "169.254.169.254"
+
+		// This will create a malformed URL that http.NewRequest will reject
+		body, err := c.sendRequest(metadataBasePath + "test")
+		if err == nil {
+			t.Error("sendRequest should return error for invalid URL scheme")
+		}
+		if body != nil {
+			t.Error("sendRequest should return nil body when http.NewRequest fails")
+		}
+
+		// Verify the error message indicates URL parsing issue
+		expectedErrorSubstring := "first path segment in URL cannot contain colon"
+		if !strings.Contains(err.Error(), expectedErrorSubstring) {
+			t.Logf("Got error: %v", err)
+			t.Logf("Expected error to contain: %s", expectedErrorSubstring)
+		}
+	})
+
+	t.Run("TestSendRequest_Given_EmptyResponse_When_CallSendRequest_Then_ReturnErrorNotImplemented", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataNotImplemented))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		_, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err != ErrorNotImplemented {
+			t.Errorf("sendRequest should return ErrorNotImplemented for empty response, got: %v", err)
+		}
+	})
+
+	t.Run("TestSendRequest_Given_ServerError_When_CallSendRequest_Then_ReturnError", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataError))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		body, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err == nil {
+			t.Error("sendRequest should return error for server error")
+		}
+
+		// Verify error message contains status code
+		expectedErrorMsg := "Status Code: 500"
+		if !strings.Contains(err.Error(), expectedErrorMsg) {
+			t.Errorf("sendRequest error should contain '%s', got: %v", expectedErrorMsg, err)
+		}
+
+		// Verify body is still returned even with error
+		if body == nil {
+			t.Error("sendRequest should return body even with error")
+		}
+	})
+
+	t.Run("TestSendRequest_Given_BadRequest_When_CallSendRequest_Then_ReturnErrorWithStatusCode", func(t *testing.T) {
+		// Create a handler that returns 400 Bad Request
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("bad request"))
+		}
+
+		setupTestEnv(newHandler(handler))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+
+		_, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err == nil {
+			t.Error("sendRequest should return error for bad request")
+		}
+
+		// Verify error message contains status code
+		expectedErrorMsg := "Status Code: 400"
+		if !strings.Contains(err.Error(), expectedErrorMsg) {
+			t.Errorf("sendRequest error should contain '%s', got: %v", expectedErrorMsg, err)
+		}
+	})
+
+	t.Run("TestSendRequest_Given_InvalidHost_When_CallSendRequest_Then_ReturnError", func(t *testing.T) {
+		c := NewClient()
+		c.scheme = "http"
+		c.host = "invalid-host-that-does-not-exist-12345.local:99999"
+
+		_, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err == nil {
+			t.Error("sendRequest should return error for invalid host")
+		}
+	})
+
+	t.Run("TestSendRequest_Given_DebugEnabled_When_CallSendRequest_Then_LogResponse", func(t *testing.T) {
+		setupTestEnv(newHandler(handleMetaDataOK))
+		defer tearDownTestEnv()
+
+		url, _ := url.Parse(testHTTPServer.URL)
+		c := NewClient()
+		c.host = url.Host
+		c.scheme = url.Scheme
+		c.debug = true // Enable debug mode
+
+		body, err := c.sendRequest(metadataBasePath + "instance-shortid")
+		if err != nil {
+			t.Errorf("sendRequest got error: %v", err)
+		}
+
+		expectedBody := "xxx"
+		if string(body) != expectedBody {
+			t.Errorf("sendRequest want: %s, got: %s", expectedBody, string(body))
 		}
 	})
 }

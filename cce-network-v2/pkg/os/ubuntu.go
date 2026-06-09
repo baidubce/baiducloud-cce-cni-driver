@@ -39,6 +39,9 @@ func (o *ubuntuOS) DisableAndMonitorMacPersistant() error {
 		log.Info("not ubuntu 22.04 or higher version, skip disable mac persistent")
 		return nil
 	}
+	// Synchronously ensure 98-default.link exists and is correctly configured before
+	// returning, eliminating the race window between file creation and Pod veth creation.
+	o.checkAndDealMACAddressPolicy(defaultLinkPath, defaultLinkTemplate)
 	go o.startWatchingDefaultLinkFile()
 
 	return nil

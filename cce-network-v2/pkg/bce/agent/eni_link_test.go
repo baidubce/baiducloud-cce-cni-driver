@@ -55,6 +55,74 @@ func (m *mockLink) Type() string {
 	return "mock"
 }
 
+type renameTestHooks struct {
+	originalNetlinkOps      eniNetlinkOps
+	originalSetIfNeededFunc func(string, string) error
+}
+
+func installRenameTestHooks(t *testing.T, ec *eniLink) *renameTestHooks {
+	t.Helper()
+
+	hooks := &renameTestHooks{
+		originalNetlinkOps:      ec.getNetlinkOps(),
+		originalSetIfNeededFunc: sysctl.SetIfNeededFunc,
+	}
+
+	t.Cleanup(func() {
+		ec.netlinkOps = hooks.originalNetlinkOps
+		sysctl.SetIfNeededFunc = hooks.originalSetIfNeededFunc
+	})
+
+	return hooks
+}
+
+func markENIForRenameRetry(eni *ccev2.ENI) {
+	if eni == nil {
+		return
+	}
+	eni.Status.AppendCCEENIStatus(ccev2.ENIMSGReNameFailed)
+}
+
+func TestIsENIInitRetryableFailureReason(t *testing.T) {
+	testCases := []struct {
+		name   string
+		reason string
+		want   bool
+	}{
+		{
+			name:   "rename failed is retryable",
+			reason: initializationRetryableFailureReason,
+			want:   true,
+		},
+		{
+			name:   "install rule failure is not retryable",
+			reason: string(ccev2.ENIMSGInstallRuleFailed),
+			want:   false,
+		},
+		{
+			name:   "install neighbor failure is not retryable",
+			reason: string(ccev2.ENIMSGInstallNeighborFailed),
+			want:   false,
+		},
+		{
+			name:   "missing inumber is not retryable",
+			reason: string(ccev2.ENIMSGMissingInumber),
+			want:   false,
+		},
+		{
+			name:   "empty reason is not retryable",
+			reason: "",
+			want:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isENIInitRetryableFailureReason(tc.reason))
+		})
+	}
+}
+
 func TestEnsureIPv6LinkLocalAddr(t *testing.T) {
 	// Create a test logger
 	logger := logrus.NewEntry(logrus.New())
@@ -667,12 +735,13 @@ func createTestENILink(eniType ccev2.ENIType) *eniLink {
 	}
 
 	ec := &eniLink{
-		eni:       eni,
-		link:      mockLink,
-		linkIndex: 10,
-		linkName:  "eth1",
-		log:       logrus.NewEntry(logrus.New()),
-		release:   &os.OSRelease{},
+		eni:        eni,
+		link:       mockLink,
+		linkIndex:  10,
+		linkName:   "eth1",
+		log:        logrus.NewEntry(logrus.New()),
+		release:    &os.OSRelease{},
+		netlinkOps: defaultENINetlinkOps,
 	}
 
 	return ec
@@ -710,6 +779,405 @@ func TestRename_GivenERIAlreadyRenamed_WhenRename_ThenSkipRenaming(t *testing.T)
 	assert.NoError(t, err)
 	assert.Equal(t, "cce-eri-5", ec.linkName)
 	assert.Equal(t, 5, ec.eniIndex)
+}
+
+func TestRename_GivenAlreadyRenamedLinkAndCachedMTU_WhenRename_ThenSkipMTUUpdate(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:01"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "cce-eni-10"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+	ec.linkName = "cce-eni-10"
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	originalLinkSetMTU := ec.getNetlinkOps().linkSetMTU
+	defer func() {
+		ec.netlinkOps.linkSetMTU = originalLinkSetMTU
+	}()
+
+	mtuSet := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		mtuSet = mtu
+		return nil
+	}
+
+	err := ec.rename(false)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, mtuSet)
+	assert.Equal(t, 1500, ec.link.Attrs().MTU)
+}
+
+func TestRename_GivenLinkRenamedThisRoundAndCachedMTU_WhenRename_ThenSetMTUDuringInit(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:02"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "eth1"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+	ec.linkName = "eth1"
+
+	mockHostOS := &MockHostOS{}
+	ec.release = NewMockOSRelease(mockHostOS).OSRelease
+	ec.hostOS = mockHostOS
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	installRenameTestHooks(t, ec)
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		assert.Equal(t, "eni-test", eniID)
+		assert.Equal(t, "fa:16:3e:00:00:02", macAddress)
+		return &eniConfigState{
+			CorrectConfig: &eniCorrectConfig{MTU: 9000},
+		}, nil
+	})
+
+	ec.netlinkOps.linkSetDown = func(link netlink.Link) error {
+		return nil
+	}
+	ec.netlinkOps.linkSetName = func(link netlink.Link, newName string) error {
+		link.Attrs().Name = newName
+		return nil
+	}
+	ec.netlinkOps.linkByName = func(name string) (netlink.Link, error) {
+		return ec.link, nil
+	}
+	sysctl.SetIfNeededFunc = func(key, value string) error {
+		return nil
+	}
+
+	mtuSet := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		mtuSet = mtu
+		return nil
+	}
+
+	err := ec.rename(true)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 9000, mtuSet)
+	assert.Equal(t, 9000, ec.link.Attrs().MTU)
+	assert.Equal(t, "cce-eni-10", ec.link.Attrs().Name)
+}
+
+func TestRename_GivenLinkRenamedThisRoundAndMTUSetFails_WhenRename_ThenReturnError(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:03"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "eth1"
+	ec.linkName = "eth1"
+
+	mockHostOS := &MockHostOS{}
+	ec.release = NewMockOSRelease(mockHostOS).OSRelease
+	ec.hostOS = mockHostOS
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	installRenameTestHooks(t, ec)
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		return &eniConfigState{
+			CorrectConfig: &eniCorrectConfig{MTU: 9000},
+		}, nil
+	})
+	ec.netlinkOps.linkSetDown = func(link netlink.Link) error {
+		return nil
+	}
+	ec.netlinkOps.linkSetName = func(link netlink.Link, newName string) error {
+		link.Attrs().Name = newName
+		return nil
+	}
+	ec.netlinkOps.linkByName = func(name string) (netlink.Link, error) {
+		return ec.link, nil
+	}
+	sysctl.SetIfNeededFunc = func(key, value string) error {
+		return nil
+	}
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		return errors.New("mtu set error")
+	}
+
+	err := ec.rename(true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to set MTU for interface cce-eni-10 to 9000")
+}
+
+func TestRename_GivenRetryAfterRenameSucceededAndSysctlFailed_WhenRename_ThenSetMTUDuringRetry(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:04"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "eth1"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+	ec.linkName = "eth1"
+
+	originalEnableIPv6 := option.Config.EnableIPv6
+	option.Config.EnableIPv6 = false
+	defer func() {
+		option.Config.EnableIPv6 = originalEnableIPv6
+	}()
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	installRenameTestHooks(t, ec)
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		assert.Equal(t, "eni-test", eniID)
+		assert.Equal(t, "fa:16:3e:00:00:04", macAddress)
+		return &eniConfigState{
+			CorrectConfig: &eniCorrectConfig{MTU: 9000},
+		}, nil
+	})
+
+	ec.netlinkOps.linkSetDown = func(link netlink.Link) error {
+		return nil
+	}
+	ec.netlinkOps.linkSetName = func(link netlink.Link, newName string) error {
+		link.Attrs().Name = newName
+		return nil
+	}
+	ec.netlinkOps.linkByName = func(name string) (netlink.Link, error) {
+		return ec.link, nil
+	}
+	sysctlFails := true
+	sysctl.SetIfNeededFunc = func(key, value string) error {
+		if sysctlFails {
+			return errors.New("sysctl error")
+		}
+		return nil
+	}
+
+	mtuSet := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		mtuSet = mtu
+		return nil
+	}
+
+	err := ec.rename(true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to disable IPv6")
+	assert.Equal(t, "cce-eni-10", ec.link.Attrs().Name)
+	assert.Equal(t, 0, mtuSet)
+
+	markENIForRenameRetry(ec.eni)
+	sysctlFails = false
+
+	err = ec.rename(true)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 9000, mtuSet)
+	assert.Equal(t, 9000, ec.link.Attrs().MTU)
+	assert.Equal(t, "cce-eni-10", ec.link.Attrs().Name)
+}
+
+func TestRename_GivenRetryAfterRenameSucceededAndEnsureNetworkManagerUnmanagedFailed_WhenRename_ThenSetMTUDuringRetry(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:05"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "eth1"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+	ec.linkName = "eth1"
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	installRenameTestHooks(t, ec)
+
+	mockHostOS := &MockHostOS{}
+	ensureNetworkManagerCallCount := 0
+	mockHostOS.EnsureNetworkManagerUnmanagedFunc = func(interfaceName string) error {
+		ensureNetworkManagerCallCount++
+		if ensureNetworkManagerCallCount == 1 {
+			return errors.New("network manager error")
+		}
+		return nil
+	}
+	ec.release = NewMockOSRelease(mockHostOS).OSRelease
+	ec.hostOS = mockHostOS
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		assert.Equal(t, "eni-test", eniID)
+		assert.Equal(t, "fa:16:3e:00:00:05", macAddress)
+		return &eniConfigState{
+			CorrectConfig: &eniCorrectConfig{MTU: 9000},
+		}, nil
+	})
+
+	ec.netlinkOps.linkSetDown = func(link netlink.Link) error {
+		return nil
+	}
+	ec.netlinkOps.linkSetName = func(link netlink.Link, newName string) error {
+		link.Attrs().Name = newName
+		return nil
+	}
+	ec.netlinkOps.linkByName = func(name string) (netlink.Link, error) {
+		return ec.link, nil
+	}
+	sysctl.SetIfNeededFunc = func(key, value string) error {
+		return nil
+	}
+
+	mtuSet := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		mtuSet = mtu
+		return nil
+	}
+
+	err := ec.rename(true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ensure NetworkManager stops managing cce-eni-10")
+	assert.Equal(t, "cce-eni-10", ec.link.Attrs().Name)
+	assert.Equal(t, 0, mtuSet)
+
+	markENIForRenameRetry(ec.eni)
+
+	err = ec.rename(true)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2, ensureNetworkManagerCallCount)
+	assert.Equal(t, 9000, mtuSet)
+	assert.Equal(t, 9000, ec.link.Attrs().MTU)
+	assert.Equal(t, "cce-eni-10", ec.link.Attrs().Name)
+}
+
+func TestRename_GivenRuntimeErrorOnRenamedLink_WhenRename_ThenSkipMTUUpdate(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:06"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.Name = "cce-eni-10"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+	ec.linkName = "cce-eni-10"
+	ec.eni.Status.AppendCCEENIStatus(ccev2.ENIMSGInstallRuleFailed)
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	originalLinkSetMTU := ec.getNetlinkOps().linkSetMTU
+	defer func() {
+		ec.netlinkOps.linkSetMTU = originalLinkSetMTU
+	}()
+
+	mtuSet := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		mtuSet = mtu
+		return nil
+	}
+
+	err := ec.rename(false)
+
+	assert.NoError(t, err)
+	assert.Equal(t, ccev2.ENIStatusErrorOnNode, ec.eni.Status.CCEStatus)
+	assert.Equal(t, string(ccev2.ENIMSGInstallRuleFailed), ec.eni.Status.CCEStatusChangeLog[len(ec.eni.Status.CCEStatusChangeLog)-1].StatusChange.Message)
+	assert.Equal(t, 0, mtuSet)
+	assert.Equal(t, 1500, ec.link.Attrs().MTU)
+}
+
+func TestEnsureMTUDuringInit_GivenMetadataError_WhenCall_ThenReturnError(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:11"
+	ec.eni.Spec.ENI.ID = "eni-test"
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		return nil, errors.New("metadata error")
+	})
+
+	err := ec.ensureMTUDuringInit(ec.link, true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get ENI MTU config from metadata")
+}
+
+func TestEnsureMTUDuringInit_GivenNoUsableMTU_WhenCall_ThenSkipUpdate(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:12"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	originalLinkSetMTU := ec.getNetlinkOps().linkSetMTU
+	defer func() {
+		ec.netlinkOps.linkSetMTU = originalLinkSetMTU
+	}()
+
+	callCount := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		callCount++
+		return nil
+	}
+
+	testCases := []struct {
+		name  string
+		state *eniConfigState
+	}{
+		{
+			name:  "nil state",
+			state: nil,
+		},
+		{
+			name: "nil correct config",
+			state: &eniConfigState{
+				CorrectConfig: nil,
+			},
+		},
+		{
+			name: "non-positive mtu",
+			state: &eniConfigState{
+				CorrectConfig: &eniCorrectConfig{MTU: 0},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			patches.Reset()
+			patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+				return tc.state, nil
+			})
+
+			err := ec.ensureMTUDuringInit(ec.link, true)
+
+			assert.NoError(t, err)
+			assert.Equal(t, 0, callCount)
+			assert.Equal(t, 1500, ec.link.Attrs().MTU)
+		})
+	}
+}
+
+func TestEnsureMTUDuringInit_GivenMTUAlreadyExpected_WhenCall_ThenSkipSetMTU(t *testing.T) {
+	ec := createTestENILink(ccev2.ENIForBCC)
+	ec.macAddr = "fa:16:3e:00:00:13"
+	ec.eni.Spec.ENI.ID = "eni-test"
+	ec.link.(*netlink.Device).LinkAttrs.MTU = 1500
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	originalLinkSetMTU := ec.getNetlinkOps().linkSetMTU
+	defer func() {
+		ec.netlinkOps.linkSetMTU = originalLinkSetMTU
+	}()
+
+	patches.ApplyFunc(getOrCreateENIConfigState, func(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+		return &eniConfigState{
+			CorrectConfig: &eniCorrectConfig{MTU: 1500},
+		}, nil
+	})
+
+	callCount := 0
+	ec.netlinkOps.linkSetMTU = func(link netlink.Link, mtu int) error {
+		callCount++
+		return nil
+	}
+
+	err := ec.ensureMTUDuringInit(ec.link, true)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, callCount)
+	assert.Equal(t, 1500, ec.link.Attrs().MTU)
 }
 
 func TestRename_GivenENINotRenamed_WhenRenamePrimary_ThenUseLinkIndex(t *testing.T) {

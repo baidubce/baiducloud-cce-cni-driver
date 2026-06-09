@@ -55,6 +55,16 @@ type eniInitFactory struct {
 	release *osutil.OSRelease
 }
 
+// recordENIInitRetryableFailure marks failures that happen after rename starts
+// but before interface initialization is complete. eni_link.isInitializationRetry
+// relies on this reason remaining scoped to rename/init-stage failures only.
+func recordENIInitRetryableFailure(status *ccev2.ENIStatus) {
+	if status == nil {
+		return
+	}
+	status.AppendCCEENIStatus(ccev2.CCEENIStatus(initializationRetryableFailureReason))
+}
+
 // RegisterENIInitFatory create a eniInitFactory and register it to ENI event handler
 func RegisterENIInitFatory(watcher *watchers.K8sWatcher) {
 	eniHandler := &eniInitFactory{
@@ -350,7 +360,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 	case ccev2.ENIUseModePrimaryIP:
 		if err = eniLink.rename(true); err != nil {
 			scopedLog.WithError(err).Error("rename eniLink falied")
-			(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGReNameFailed)
+			recordENIInitRetryableFailure(&resource.Status)
 			isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
 			return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 		}
@@ -365,7 +375,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 			// eni with secondary IP mode need to rename eniLink
 			if err = eniLink.rename(false); err != nil {
 				scopedLog.WithError(err).Error("rename eniLink falied")
-				(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGReNameFailed)
+				recordENIInitRetryableFailure(&resource.Status)
 				isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
 				return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 			}
@@ -373,7 +383,7 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 			err = eniLink.ensureLinkConfig()
 			if err != nil {
 				scopedLog.WithError(err).Error("set eniLink falied")
-				(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGReNameFailed)
+				recordENIInitRetryableFailure(&resource.Status)
 				isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
 				return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 			}

@@ -71,6 +71,22 @@ var (
 	eniConfigStates sync.Map
 )
 
+type eniNetlinkOps struct {
+	linkByName  func(string) (netlink.Link, error)
+	linkSetDown func(netlink.Link) error
+	linkSetMTU  func(netlink.Link, int) error
+	linkSetName func(netlink.Link, string) error
+}
+
+var defaultENINetlinkOps = eniNetlinkOps{
+	linkByName:  netlink.LinkByName,
+	linkSetDown: netlink.LinkSetDown,
+	linkSetMTU:  netlink.LinkSetMTU,
+	linkSetName: netlink.LinkSetName,
+}
+
+const initializationRetryableFailureReason = string(ccev2.ENIMSGReNameFailed)
+
 // getOrCreateENIConfigState gets or creates ENI configuration state in memory
 // Uses MAC address as the primary identifier since it's unique and persistent across renames/reboots
 // Returns a complete and valid ENI config, refreshing from MetaAPI if needed
@@ -462,6 +478,10 @@ type eniLink struct {
 	ipv6Gateway string
 
 	release *os.OSRelease
+	// hostOS defaults to release.HostOS() in production and is only overridden
+	// by tests that need a deterministic HostOS substitute.
+	hostOS     os.HostOS
+	netlinkOps eniNetlinkOps
 }
 
 // newENILink create a new link config from ccev2 ENI mac
@@ -487,13 +507,49 @@ func newENILink(eni *ccev2.ENI, release *os.OSRelease) (*eniLink, error) {
 		"linkName":  ec.linkName,
 	})
 	ec.release = release
+	if release != nil {
+		ec.hostOS = release.HostOS()
+	}
+	ec.netlinkOps = defaultENINetlinkOps
 	return ec, nil
+}
+
+// getHostOS returns the effective HostOS dependency. Production code follows
+// release.HostOS(); tests may inject hostOS directly to avoid monkey patching.
+func (ec *eniLink) getHostOS() os.HostOS {
+	if ec.hostOS != nil {
+		return ec.hostOS
+	}
+	if ec.release == nil {
+		return nil
+	}
+	return ec.release.HostOS()
+}
+
+func (ec *eniLink) getNetlinkOps() eniNetlinkOps {
+	ops := ec.netlinkOps
+	if ops.linkByName == nil {
+		ops.linkByName = defaultENINetlinkOps.linkByName
+	}
+	if ops.linkSetDown == nil {
+		ops.linkSetDown = defaultENINetlinkOps.linkSetDown
+	}
+	if ops.linkSetMTU == nil {
+		ops.linkSetMTU = defaultENINetlinkOps.linkSetMTU
+	}
+	if ops.linkSetName == nil {
+		ops.linkSetName = defaultENINetlinkOps.linkSetName
+	}
+	return ops
 }
 
 func (ec *eniLink) rename(isPrimary bool) error {
 	elink := ec.link
 	eniIndex := elink.Attrs().Index
 	var err error
+	renamed := false
+	hostOS := ec.getHostOS()
+	netlinkOps := ec.getNetlinkOps()
 
 	udevName := elink.Attrs().Name
 
@@ -520,26 +576,27 @@ func (ec *eniLink) rename(isPrimary bool) error {
 		}
 		cceName = fmt.Sprintf("%s-%d", namePrefix, eniIndex)
 
-		err = ec.release.HostOS().DisableDHCPv6(udevName, cceName)
+		err = hostOS.DisableDHCPv6(udevName, cceName)
 		if err != nil {
 			return err
 		}
 		ec.log.WithField("ifname", cceName).Info("generate ifcfg file")
 
 		// Devices can be renamed only when down
-		if err = netlink.LinkSetDown(elink); err != nil {
+		if err = netlinkOps.linkSetDown(elink); err != nil {
 			return fmt.Errorf("failed to set %q down: %v", elink.Attrs().Name, err)
 		}
 
 		// Rename container device to respect args.IfName
-		if err := netlink.LinkSetName(elink, cceName); err != nil {
+		if err := netlinkOps.linkSetName(elink, cceName); err != nil {
 			return fmt.Errorf("failed to rename device %q to %q: %v", elink.Attrs().Name, cceName, err)
 		}
-		elink, err = netlink.LinkByName(cceName)
+		elink, err = netlinkOps.linkByName(cceName)
 		if err != nil {
 			return fmt.Errorf("failed to find device %q: %v", cceName, err)
 		}
-		err = ec.release.HostOS().EnsureNetworkManagerUnmanaged(cceName)
+		renamed = true
+		err = hostOS.EnsureNetworkManagerUnmanaged(cceName)
 		if err != nil {
 			return fmt.Errorf("failed to ensure NetworkManager stops managing %s: %v", cceName, err)
 		}
@@ -551,7 +608,7 @@ func (ec *eniLink) rename(isPrimary bool) error {
 	// Ensure NetworkManager stops managing the renamed interface
 	// Only execute when status is ErrorOnNode
 	if ec.eni != nil && ec.eni.Status.CCEStatus == ccev2.ENIStatusErrorOnNode {
-		err = ec.release.HostOS().EnsureNetworkManagerUnmanaged(cceName)
+		err = hostOS.EnsureNetworkManagerUnmanaged(cceName)
 		if err != nil {
 			return fmt.Errorf("failed to ensure NetworkManager stops managing %s: %v", cceName, err)
 		}
@@ -565,6 +622,11 @@ func (ec *eniLink) rename(isPrimary bool) error {
 		}
 	}
 
+	shouldEnsureMTU := renamed || ec.isInitializationRetry(elink, namePrefix)
+	if err = ec.ensureMTUDuringInit(elink, shouldEnsureMTU); err != nil {
+		return err
+	}
+
 	if strings.HasPrefix(elink.Attrs().Name, namePrefix) {
 		nameAndIndex := strings.Split(elink.Attrs().Name, namePrefix+"-")
 		if len(nameAndIndex) == 2 {
@@ -575,6 +637,75 @@ func (ec *eniLink) rename(isPrimary bool) error {
 	ec.linkName = elink.Attrs().Name
 	ec.eniIndex = eniIndex
 	ec.link = elink
+	return nil
+}
+
+// isInitializationRetry identifies the retry path after initialization failed
+// once the interface has already been renamed. This intentionally relies on
+// ErrorOnNode to represent prior initialization failures after
+// AppendCCEENIStatus() normalization in the caller state machine, but it only
+// accepts retries whose latest raw failure reason was ReNameFailed. Runtime
+// errors such as rule/neighbor installation failures must not trigger live MTU
+// rewrites.
+func (ec *eniLink) isInitializationRetry(elink netlink.Link, namePrefix string) bool {
+	return elink != nil &&
+		ec.eni != nil &&
+		ec.eni.Status.CCEStatus == ccev2.ENIStatusErrorOnNode &&
+		strings.HasPrefix(elink.Attrs().Name, namePrefix+"-") &&
+		isENIInitRetryableFailureReason(ec.lastCCEFailureReason())
+}
+
+func (ec *eniLink) lastCCEFailureReason() string {
+	if ec.eni == nil {
+		return ""
+	}
+
+	changeLog := ec.eni.Status.CCEStatusChangeLog
+	if len(changeLog) == 0 {
+		return ""
+	}
+
+	return changeLog[len(changeLog)-1].StatusChange.Message
+}
+
+func isENIInitRetryableFailureReason(reason string) bool {
+	return reason == initializationRetryableFailureReason
+}
+
+func (ec *eniLink) ensureMTUDuringInit(elink netlink.Link, shouldEnsure bool) error {
+	if elink == nil || ec.macAddr == "" || !shouldEnsure {
+		return nil
+	}
+
+	eniID := ""
+	if ec.eni != nil {
+		eniID = ec.eni.Spec.ENI.ID
+	}
+
+	state, err := getOrCreateENIConfigState(eniID, ec.macAddr, ec.eni)
+	if err != nil {
+		return fmt.Errorf("failed to get ENI MTU config from metadata: %w", err)
+	}
+	if state == nil || state.CorrectConfig == nil || state.CorrectConfig.MTU <= 0 {
+		return nil
+	}
+
+	currentMTU := elink.Attrs().MTU
+	expectedMTU := state.CorrectConfig.MTU
+	if currentMTU == expectedMTU {
+		return nil
+	}
+
+	if err := ec.getNetlinkOps().linkSetMTU(elink, expectedMTU); err != nil {
+		return fmt.Errorf("failed to set MTU for interface %s to %d: %w", elink.Attrs().Name, expectedMTU, err)
+	}
+	elink.Attrs().MTU = expectedMTU
+	ec.log.WithFields(logrus.Fields{
+		"interface":   elink.Attrs().Name,
+		"previousMTU": currentMTU,
+		"mtu":         expectedMTU,
+	}).Info("Set ENI MTU during interface initialization")
+
 	return nil
 }
 

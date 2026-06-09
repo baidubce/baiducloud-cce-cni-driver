@@ -8,7 +8,12 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.9 [未发布]
+#### 2.13.10 [未发布]
+1. [Bug] 修复已关闭 ipv6 的节点无法就绪问题
+2. [Bug] 修复已释放的 IP 被重新分配的问题
+3. [Bug] 修复固定 IP Pod 重建失败
+
+#### 2.13.9 [20260320]
 1. [Feature] psts 支持任意子网复用与使用体验优化
 2. [Feature] 支持 agent 在等待节点上有了可配置的标签再启动
 3. [Optimize] 支持 agent list nrs 的超时时间可配置

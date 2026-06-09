@@ -175,6 +175,12 @@ type bceNetworkResourceSet struct {
 	// this key is eni id, value is the resource version
 	expiredVPCVersion map[string]int64
 
+	// pendingIPMutations stores the latest successful local ENI IP mutations
+	// until informer state catches up. ResyncInterfacesAndIPs applies this
+	// overlay so pool updates can reflect recent allocate/release operations
+	// without waiting for informer convergence.
+	pendingIPMutations map[string]pendingIPMutation
+
 	eventRecorder record.EventRecorder
 
 	log *logrus.Entry
@@ -190,6 +196,11 @@ type bceNetworkResourceSet struct {
 	enterpriseSecurityGroupIDs []string
 }
 
+type pendingIPMutation struct {
+	present bool
+	ipInfo  ipamTypes.AllocationIP
+}
+
 // NewBCENetworkResourceSet returns a new *bceNetworkResourceSet
 func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceSet, manager *InstancesManager) *bceNetworkResourceSet {
 	// 1. Create a new CCE Node object
@@ -200,6 +211,7 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 		bceclient:               manager.bceclientd,
 		instanceID:              k8sObj.Spec.InstanceID,
 		expiredVPCVersion:       make(map[string]int64),
+		pendingIPMutations:      make(map[string]pendingIPMutation),
 		log:                     logging.NewSubysLogger(vpcENISubsys).WithField("instanceID", k8sObj.Spec.InstanceID).WithField("nodeName", k8sObj.Name),
 		eventRecorder:           k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: vpcENISubsys}),
 		eniAllocatedIPsErrorMap: make(map[string]*ccev2.StatusChange),
@@ -540,6 +552,7 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 		availableIPsNumber = 0
 	} else {
 		availableENIsNumber = 0
+		n.applyPendingIPMutations(a)
 	}
 
 	eniQuota := n.getENIQuota()
@@ -577,6 +590,76 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 	}
 
 	return a, nil
+}
+
+func (n *bceNetworkResourceSet) rememberPendingReleasedIPs(releasedIPs []string) {
+	if len(releasedIPs) == 0 {
+		return
+	}
+
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	if n.pendingIPMutations == nil {
+		n.pendingIPMutations = make(map[string]pendingIPMutation)
+	}
+
+	for _, ip := range releasedIPs {
+		if ip == "" {
+			continue
+		}
+		n.pendingIPMutations[ip] = pendingIPMutation{present: false}
+	}
+}
+
+func (n *bceNetworkResourceSet) rememberPendingAllocatedIPs(resource string, allocatedIPs []*models.PrivateIP) {
+	if len(allocatedIPs) == 0 {
+		return
+	}
+
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	if n.pendingIPMutations == nil {
+		n.pendingIPMutations = make(map[string]pendingIPMutation)
+	}
+
+	for _, addr := range allocatedIPs {
+		if addr == nil || addr.PrivateIPAddress == "" {
+			continue
+		}
+		n.pendingIPMutations[addr.PrivateIPAddress] = pendingIPMutation{
+			present: true,
+			ipInfo: ipamTypes.AllocationIP{
+				Resource: resource,
+				SubnetID: addr.SubnetID,
+			},
+		}
+	}
+}
+
+func (n *bceNetworkResourceSet) applyPendingIPMutations(pool ipamTypes.AllocationMap) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	for ip, mutation := range n.pendingIPMutations {
+		current, exists := pool[ip]
+		if mutation.present {
+			if exists && current.Resource == mutation.ipInfo.Resource && current.SubnetID == mutation.ipInfo.SubnetID {
+				delete(n.pendingIPMutations, ip)
+				continue
+			}
+			pool[ip] = mutation.ipInfo
+			continue
+		}
+
+		if !exists {
+			delete(n.pendingIPMutations, ip)
+			continue
+		}
+		delete(pool, ip)
+	}
+
 }
 
 func (n *bceNetworkResourceSet) getAvailableIPv4() int {
@@ -1258,7 +1341,7 @@ func (n *bceNetworkResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 			"ipv6AllocatedSet": ipv6AllocatedSet,
 		}).Infof("allocated ips from eni success")
 
-		return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
+		updateErr := n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 			eni.Spec.ENI.PrivateIPSet = appenUniqueElement(eni.Spec.PrivateIPSet, ipv4AllocatedSet)
 			eni.Spec.ENI.IPV6PrivateIPSet = appenUniqueElement(eni.Spec.IPV6PrivateIPSet, ipv6AllocatedSet)
 
@@ -1266,6 +1349,11 @@ func (n *bceNetworkResourceSet) AllocateIPs(ctx context.Context, allocation *ipa
 			bcesync.ElectENIIPv6PrimaryIP(eni)
 			return eni
 		})
+		if updateErr == nil {
+			n.rememberPendingAllocatedIPs(eni.Name, ipv4AllocatedSet)
+			n.rememberPendingAllocatedIPs(eni.Name, ipv6AllocatedSet)
+		}
+		return updateErr
 	}
 	return nil
 }
@@ -1496,6 +1584,7 @@ func (n *bceNetworkResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 			// 后续的删除操作在IAAS侧返回已经不存在视为成功，于是再次进入 update ENI 操作
 			return nil, updateErr // eni update 失败也不认为释放成功
 		}
+		n.rememberPendingReleasedIPs(successfullyReleasedIPs)
 	}
 
 	return successfullyReleasedIPs, err
@@ -1747,6 +1836,9 @@ func (n *bceNetworkResourceSet) AllocateIP(ctx context.Context, action *endpoint
 		}
 		return eni
 	})
+	if updateErr == nil {
+		n.rememberPendingAllocatedIPs(interfaceID, ipset)
+	}
 	return updateErr
 }
 

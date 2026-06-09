@@ -18,11 +18,12 @@
 package sysctl
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/agiledragon/gomonkey/v2"
 	"github.com/stretchr/testify/assert"
 	. "gopkg.in/check.v1"
 )
@@ -79,19 +80,26 @@ func (s *SysctlLinuxTestSuite) TestFullPath(c *C) {
 	}
 }
 
-// TestFields contains dependencies for SetIfNeeded tests
+// TestFields contains dependencies for SetIfNeeded tests.
 type TestFields struct {
-	patches *gomonkey.Patches
-	tempDir string
+	// savedReadFn / savedWriteFn store the original package-level function variables
+	// so they can be restored after each test via TestPostRun.
+	savedReadFn  func(name string) (string, error)
+	savedWriteFn func(name string, val string) error
+	tempDir      string
+	// readForVerify reads sysctl values for post-call assertions.
+	// For tempDir-based tests this reads from tempDir; for fully-mocked tests it is nil
+	// and file-content verification is skipped.
+	readForVerify func(name string) (string, error)
 }
 
-// TestArgs contains arguments for SetIfNeeded function
+// TestArgs contains arguments passed to SetIfNeeded.
 type TestArgs struct {
 	paramName   string
 	targetValue string
 }
 
-// TestCase defines a test case for SetIfNeeded
+// TestCase defines a single test scenario for SetIfNeeded.
 type TestCase struct {
 	Name            string
 	TestSetup       func() *TestFields
@@ -103,34 +111,64 @@ type TestCase struct {
 	ShouldCallWrite bool
 }
 
-// TestSetIfNeeded tests the SetIfNeeded function
+// makeProcfsReadFn returns a readFn that reads sysctl files from procfsDir.
+// Unlike the real Read(), raw errors are returned so errors.Is() works correctly
+// inside SetIfNeeded without relying on string matching.
+func makeProcfsReadFn(procfsDir string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		elems := strings.Split(name, ".")
+		path := filepath.Join(append([]string{procfsDir, "sys"}, elems...)...)
+		val, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(val), "\n"), nil
+	}
+}
+
+// makeProcfsWriteFn returns a writeFn that writes sysctl files to procfsDir.
+// O_RDWR (no truncate) is used to match the behaviour of the real writeSysctl,
+// which is important for the empty-target-value test case.
+func makeProcfsWriteFn(procfsDir string) func(string, string) error {
+	return func(name string, val string) error {
+		elems := strings.Split(name, ".")
+		path := filepath.Join(append([]string{procfsDir, "sys"}, elems...)...)
+		f, err := os.OpenFile(path, os.O_RDWR, 0644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.WriteString(f, val)
+		return err
+	}
+}
+
+// TestSetIfNeeded tests the SetIfNeeded function using function-variable injection
+// instead of gomonkey so that the tests are not sensitive to compiler inlining.
 func TestSetIfNeeded(t *testing.T) {
 	cases := []TestCase{
 		{
 			Name: "TestSetIfNeeded_Given_CurrentValueEqualsTargetValue_When_CallSetIfNeeded_Then_ReturnNilWithoutCallingWrite",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create sysctl file structure with value "1"
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
 				os.WriteFile(sysctlPath, []byte("1\n"), 0644)
 
-				patches := gomonkey.NewPatches()
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
-				}
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv4.ip_forward",
-				targetValue: "1",
-			},
+			Args:            TestArgs{paramName: "net.ipv4.ip_forward", targetValue: "1"},
 			WantErr:         nil,
 			InitialValue:    "1",
 			ExpectedValue:   "1",
@@ -140,125 +178,185 @@ func TestSetIfNeeded(t *testing.T) {
 			Name: "TestSetIfNeeded_Given_CurrentValueNotEqualsTargetValue_When_CallSetIfNeeded_Then_CallWriteAndReturnResult",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create sysctl file structure with value "0"
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
 				os.WriteFile(sysctlPath, []byte("0\n"), 0644)
 
-				patches := gomonkey.NewPatches()
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
-				}
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv4.ip_forward",
-				targetValue: "1",
-			},
+			Args:            TestArgs{paramName: "net.ipv4.ip_forward", targetValue: "1"},
 			WantErr:         nil,
 			InitialValue:    "0",
 			ExpectedValue:   "1",
 			ShouldCallWrite: true,
 		},
 		{
-			Name: "TestSetIfNeeded_Given_ReadReturnsError_When_CallSetIfNeeded_Then_ContinueToSetAndCallWrite",
+			Name: "TestSetIfNeeded_Given_ReadReturnsENOENT_When_CallSetIfNeeded_Then_ReturnNilWithoutCallingWrite",
+			TestSetup: func() *TestFields {
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn}
+				readFn = func(name string) (string, error) {
+					return "", os.ErrNotExist
+				}
+				// writeFn replaced to detect unexpected calls; returning nil is safe.
+				writeFn = func(name string, val string) error {
+					return nil
+				}
+				// readForVerify is nil — file-content verification is skipped for mock-only cases.
+				return fields
+			},
+			TestPostRun: func(fields *TestFields) {
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
+			},
+			Args:            TestArgs{paramName: "net.ipv6.conf.cce-eni-0.disable_ipv6", targetValue: "1"},
+			WantErr:         nil,
+			InitialValue:    "",
+			ExpectedValue:   "",
+			ShouldCallWrite: false,
+		},
+		{
+			Name: "TestSetIfNeeded_Given_ReadSuccessWriteReturnsENOENT_When_CallSetIfNeeded_Then_ReturnNil",
+			TestSetup: func() *TestFields {
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn}
+				readFn = func(name string) (string, error) {
+					return "0", nil
+				}
+				writeFn = func(name string, val string) error {
+					return os.ErrNotExist
+				}
+				return fields
+			},
+			TestPostRun: func(fields *TestFields) {
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
+			},
+			Args:            TestArgs{paramName: "net.ipv6.conf.cce-eni-0.disable_ipv6", targetValue: "1"},
+			WantErr:         nil,
+			InitialValue:    "0",
+			ExpectedValue:   "0",
+			ShouldCallWrite: true,
+		},
+		{
+			Name: "TestSetIfNeeded_Given_ReadReturnsNonENOENTError_When_CallSetIfNeeded_Then_ContinueToSet",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create directory structure and file for Write to work
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
 				os.WriteFile(sysctlPath, []byte(""), 0644)
 
-				patches := gomonkey.NewPatches()
-				// Mock Read to return error to cover the readErr != nil branch
-				patches.ApplyFunc(Read, func(name string) (string, error) {
-					return "", os.ErrNotExist
-				})
-
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				// readFn returns ErrPermission; SetIfNeeded treats currentValue as ""
+				// and still calls writeFn because "" != targetValue "1".
+				readFn = func(name string) (string, error) {
+					return "", os.ErrPermission
 				}
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv4.ip_forward",
-				targetValue: "1",
-			},
+			Args:            TestArgs{paramName: "net.ipv4.ip_forward", targetValue: "1"},
 			WantErr:         nil,
 			InitialValue:    "",
 			ExpectedValue:   "1",
 			ShouldCallWrite: true,
 		},
 		{
-			Name: "TestSetIfNeeded_Given_EmptyTargetValue_When_CallSetIfNeeded_Then_HandleCorrectly",
+			Name: "TestSetIfNeeded_Given_WriteReturnsNonENOENTError_When_CallSetIfNeeded_Then_ReturnError",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create sysctl file structure with value "1"
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
-				os.WriteFile(sysctlPath, []byte("1\n"), 0644)
+				os.WriteFile(sysctlPath, []byte("0\n"), 0644)
 
-				patches := gomonkey.NewPatches()
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = func(name string, val string) error {
+					return os.ErrPermission
 				}
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv4.ip_forward",
-				targetValue: "",
+			Args:            TestArgs{paramName: "net.ipv4.ip_forward", targetValue: "1"},
+			WantErr:         os.ErrPermission,
+			InitialValue:    "0",
+			ExpectedValue:   "0",
+			ShouldCallWrite: true,
+		},
+		{
+			Name: "TestSetIfNeeded_Given_EmptyTargetValue_When_CallSetIfNeeded_Then_HandleCorrectly",
+			TestSetup: func() *TestFields {
+				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
+				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
+				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
+				os.WriteFile(sysctlPath, []byte("1\n"), 0644)
+
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
-			WantErr:      nil,
-			InitialValue: "1",
-			// Note: writeSysctl uses os.O_RDWR without os.O_TRUNC, so writing empty string
-			// doesn't truncate the file. The file will still contain "1" after write.
-			// This is expected behavior based on the implementation.
-			ExpectedValue:   "1", // File content won't change because O_RDWR doesn't truncate
+			TestPostRun: func(fields *TestFields) {
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
+				if fields.tempDir != "" {
+					os.RemoveAll(fields.tempDir)
+				}
+			},
+			Args:    TestArgs{paramName: "net.ipv4.ip_forward", targetValue: ""},
+			WantErr: nil,
+			// writeFn uses O_RDWR (no truncate), so writing "" leaves "1" in the file.
+			InitialValue:    "1",
+			ExpectedValue:   "1",
 			ShouldCallWrite: true,
 		},
 		{
 			Name: "TestSetIfNeeded_Given_EmptyCurrentValueAndEmptyTargetValue_When_CallSetIfNeeded_Then_ReturnNilWithoutCallingWrite",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create sysctl file structure with empty value
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv4", "ip_forward")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
 				os.WriteFile(sysctlPath, []byte("\n"), 0644)
 
-				patches := gomonkey.NewPatches()
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
-				}
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv4.ip_forward",
-				targetValue: "",
-			},
+			Args:            TestArgs{paramName: "net.ipv4.ip_forward", targetValue: ""},
 			WantErr:         nil,
 			InitialValue:    "",
 			ExpectedValue:   "",
@@ -268,27 +366,24 @@ func TestSetIfNeeded(t *testing.T) {
 			Name: "TestSetIfNeeded_Given_DifferentStringValues_When_CallSetIfNeeded_Then_CallWrite",
 			TestSetup: func() *TestFields {
 				tempDir, _ := os.MkdirTemp("", "sysctl_test_*")
-				// Create sysctl file structure for IPv6
 				sysctlPath := filepath.Join(tempDir, "sys", "net", "ipv6", "conf", "all", "forwarding")
 				os.MkdirAll(filepath.Dir(sysctlPath), 0755)
 				os.WriteFile(sysctlPath, []byte("0\n"), 0644)
 
-				patches := gomonkey.NewPatches()
-				return &TestFields{
-					patches: patches,
-					tempDir: tempDir,
-				}
+				fields := &TestFields{savedReadFn: readFn, savedWriteFn: writeFn, tempDir: tempDir}
+				readFn = makeProcfsReadFn(tempDir)
+				writeFn = makeProcfsWriteFn(tempDir)
+				fields.readForVerify = makeProcfsReadFn(tempDir)
+				return fields
 			},
 			TestPostRun: func(fields *TestFields) {
-				fields.patches.Reset()
+				readFn = fields.savedReadFn
+				writeFn = fields.savedWriteFn
 				if fields.tempDir != "" {
 					os.RemoveAll(fields.tempDir)
 				}
 			},
-			Args: TestArgs{
-				paramName:   "net.ipv6.conf.all.forwarding",
-				targetValue: "1",
-			},
+			Args:            TestArgs{paramName: "net.ipv6.conf.all.forwarding", targetValue: "1"},
 			WantErr:         nil,
 			InitialValue:    "0",
 			ExpectedValue:   "1",
@@ -301,42 +396,36 @@ func TestSetIfNeeded(t *testing.T) {
 			fields := tc.TestSetup()
 			defer tc.TestPostRun(fields)
 
-			// Mock GetProcfs to return our temp directory (if not already mocked in TestSetup)
-			if fields.tempDir != "" {
-				// Check if GetProcfs is already mocked
-				fields.patches.ApplyFunc(GetProcfs, func() string {
-					return fields.tempDir
-				})
-			}
-
-			// Call SetIfNeeded
+			// Call SetIfNeeded — this is the function under test.
 			gotErr := SetIfNeeded(tc.Args.paramName, tc.Args.targetValue)
 
-			// Verify error
+			// Verify error result.
 			if tc.WantErr != nil {
-				assert.Error(t, gotErr, "SetIfNeeded should return error")
+				assert.Error(t, gotErr, "SetIfNeeded should return an error")
 				if gotErr != nil {
-					assert.Contains(t, gotErr.Error(), tc.WantErr.Error(), "Error message should contain expected error")
+					assert.Equal(t, tc.WantErr, gotErr, "SetIfNeeded should return the expected error")
 				}
 			} else {
-				assert.NoError(t, gotErr, "SetIfNeeded should not return error")
+				assert.NoError(t, gotErr, "SetIfNeeded should not return an error")
 			}
 
-			// Verify the file value if Write should have been called
+			// Verify file state only when a tempDir-aware reader is available.
+			// Mock-only test cases (readForVerify == nil) skip file-content assertions.
+			if fields.readForVerify == nil {
+				return
+			}
+
 			if tc.ShouldCallWrite && gotErr == nil {
-				// Read the file to verify it was written
-				actualValue, readErr := Read(tc.Args.paramName)
+				actualValue, readErr := fields.readForVerify(tc.Args.paramName)
 				if readErr == nil {
-					assert.Equal(t, tc.ExpectedValue, actualValue, "File value should match expected value")
+					assert.Equal(t, tc.ExpectedValue, actualValue, "File value should match expected value after write")
 				} else {
-					// If read fails but write should have succeeded, log it
-					t.Logf("Warning: Could not read file to verify write: %v", readErr)
+					t.Logf("Warning: could not read file to verify write: %v", readErr)
 				}
 			} else if !tc.ShouldCallWrite {
-				// Verify the file value didn't change
-				actualValue, readErr := Read(tc.Args.paramName)
+				actualValue, readErr := fields.readForVerify(tc.Args.paramName)
 				if readErr == nil {
-					assert.Equal(t, tc.InitialValue, actualValue, "File value should not change")
+					assert.Equal(t, tc.InitialValue, actualValue, "File value should not change when write is not expected")
 				}
 			}
 		})

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -259,11 +260,11 @@ func TestAllocateFromNoRangeSubnets(t *testing.T) {
 		},
 	}
 
-	err := provider.allocateFromNoRangeSubnets(context.Background(), "psts", nil, op, action, status, log)
+	err := provider.allocateFromNoRangeSubnets(context.Background(), "psts", nil, op, action, status, "pod-uid", log)
 	require.Error(t, err)
 
 	subnets := []*ccev1.Subnet{{ObjectMeta: metav1.ObjectMeta{Name: "sbn-1"}}}
-	err = provider.allocateFromNoRangeSubnets(context.Background(), "psts", subnets, op, action, status, log)
+	err = provider.allocateFromNoRangeSubnets(context.Background(), "psts", subnets, op, action, status, "pod-uid", log)
 	require.NoError(t, err)
 	require.Len(t, status.Networking.Addressing, 1)
 	require.Equal(t, "10.0.0.1", status.Networking.Addressing[0].IP)
@@ -289,7 +290,7 @@ func TestTryAllocateFromRangeSubnetsSuccess(t *testing.T) {
 	action := &DirectIPAction{}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.NoError(t, err)
 	require.True(t, allocated)
 	require.NotEmpty(t, release)
@@ -316,7 +317,7 @@ func TestTryAllocateFromRangeSubnetsConflict(t *testing.T) {
 	action := &DirectIPAction{}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.False(t, allocated)
 	require.NoError(t, err)
 }
@@ -340,7 +341,7 @@ func TestTryAllocateFromRangeSubnetsNonConflictError(t *testing.T) {
 	action := &DirectIPAction{}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.False(t, allocated)
 	require.Error(t, err)
 }
@@ -364,7 +365,7 @@ func TestTryAllocateFromRangeSubnetsBadRequestAsConflict(t *testing.T) {
 	action := &DirectIPAction{}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.False(t, allocated)
 	require.NoError(t, err)
 }
@@ -396,7 +397,7 @@ func TestTryAllocateFromRangeSubnetsBadRequestConflictCooldown(t *testing.T) {
 	action := &DirectIPAction{}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid-1", log)
 	require.NoError(t, err)
 	require.True(t, allocated)
 	require.Len(t, firstRound, 2)
@@ -416,7 +417,7 @@ func TestTryAllocateFromRangeSubnetsBadRequestConflictCooldown(t *testing.T) {
 		},
 	}
 	action2 := &DirectIPAction{}
-	allocated, _, err = provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op2, action2, log)
+	allocated, _, err = provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op2, action2, "pod-uid-1", log)
 	require.NoError(t, err)
 	require.True(t, allocated)
 	require.Equal(t, []string{"10.0.0.2"}, secondRound)
@@ -458,7 +459,7 @@ func TestTryAllocateFromRangeSubnetsNonConflictErrorDoesNotMutateOriginalAction(
 	}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, _, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.False(t, allocated)
 	require.Error(t, err)
 	require.Equal(t, "orig-subnet", action.SubnetID)
@@ -494,7 +495,7 @@ func TestTryAllocateFromRangeSubnetsExhaustedDoesNotMutateAction(t *testing.T) {
 	}
 	log := logrus.NewEntry(logrus.New())
 
-	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, log)
+	allocated, release, err := provider.tryAllocateFromRangeSubnets(context.Background(), psts, []*ccev1.Subnet{subnet}, op, action, "pod-uid", log)
 	require.NoError(t, err)
 	require.False(t, allocated)
 	require.Nil(t, release)
@@ -545,13 +546,13 @@ func TestAllocateNewIP(t *testing.T) {
 		},
 	}
 
-	err := provider.allocateNewIP(context.Background(), psts, op, action, status, log)
+	err := provider.allocateNewIP(context.Background(), psts, op, action, status, "pod-uid", log)
 	require.NoError(t, err)
 	require.Len(t, status.Networking.Addressing, 1)
 
 	// range exhausted and no fallback
 	status2 := &ccev2.EndpointStatus{Networking: &ccev2.EndpointNetworking{}}
-	err = provider.allocateNewIP(context.Background(), psts, op, action, status2, log)
+	err = provider.allocateNewIP(context.Background(), psts, op, action, status2, "pod-uid", log)
 	require.Error(t, err)
 }
 
@@ -581,7 +582,7 @@ func TestAllocateNewIPNoRangeFallback(t *testing.T) {
 		},
 	}
 
-	err := provider.allocateNewIP(context.Background(), psts, op, action, status, log)
+	err := provider.allocateNewIP(context.Background(), psts, op, action, status, "pod-uid", log)
 	require.NoError(t, err)
 	require.Len(t, status.Networking.Addressing, 1)
 }
@@ -640,7 +641,7 @@ func TestAllocateNewIPFallbackWhenRangeSubnetHasNoMoreIP(t *testing.T) {
 		},
 	}
 
-	err := provider.allocateNewIP(context.Background(), psts, op, action, status, log)
+	err := provider.allocateNewIP(context.Background(), psts, op, action, status, "pod-uid", log)
 	require.NoError(t, err)
 	require.Len(t, status.Networking.Addressing, 1)
 	require.Equal(t, "sbn-norange", status.Networking.Addressing[0].Subnet)
@@ -683,6 +684,7 @@ func TestTryAllocateFromRangeSubnetsSkipSubnetHasNoMoreIP(t *testing.T) {
 		[]*ccev1.Subnet{subnetA, subnetB},
 		op,
 		action,
+		"pod-uid",
 		log,
 	)
 	require.NoError(t, err)
@@ -721,6 +723,7 @@ func TestTryAllocateFromRangeSubnetsNoMoreIPReturnsFallbackImmediately(t *testin
 		[]*ccev1.Subnet{subnet},
 		op,
 		action,
+		"pod-uid",
 		log,
 	)
 	require.NoError(t, err)
@@ -744,9 +747,86 @@ func TestReuseExistingIP(t *testing.T) {
 	log := logrus.NewEntry(logrus.New())
 
 	provider := &pstsAllocatorProvider{}
-	err := provider.reuseExistingIP(context.Background(), op, action, status, "psts", log)
+	err := provider.reuseExistingIP(context.Background(), op, action, status, "psts", "pod-uid", log)
 	require.NoError(t, err)
 	require.NotEmpty(t, action.ClientToken)
+}
+
+func TestGeneratePSTSAllocateClientTokenIncludesLifecycle(t *testing.T) {
+	addressing := ccev2.AddressPairList{
+		&ccev2.AddressPair{IP: "10.0.0.1", Subnet: "sbn", Family: ccev2.IPv4Family},
+	}
+	token1 := generatePSTSAllocateClientToken("ns/pod", "psts", "pod-uid-1", "sbn", addressing)
+	token2 := generatePSTSAllocateClientToken("ns/pod", "psts", "pod-uid-2", "sbn", addressing)
+	token3 := generatePSTSAllocateClientToken("ns/pod", "psts", "pod-uid-1", "sbn", addressing)
+
+	require.NotEmpty(t, token1)
+	require.NotEqual(t, token1, token2)
+	require.Equal(t, token1, token3)
+}
+
+func TestPSTSAllocationLifecycleIDRequiresContainerID(t *testing.T) {
+	resource := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cep",
+			Namespace: "ns",
+			UID:       "cep-uid",
+		},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "sandbox-1",
+				Netns:       "/var/run/netns/sandbox-1",
+				K8sObjectID: "pod-uid",
+			},
+		},
+	}
+
+	id, err := pstsAllocationLifecycleID(resource)
+	require.NoError(t, err)
+	require.Equal(t, "sandbox-1", id)
+
+	_, err = pstsAllocationLifecycleID(&ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+	})
+	require.EqualError(t, err, "missing external identifiers for PSTS endpoint ns/cep")
+
+	_, err = pstsAllocationLifecycleID(&ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{},
+		},
+	})
+	require.EqualError(t, err, "missing container-id for PSTS endpoint ns/cep")
+
+	_, err = pstsAllocationLifecycleID(nil)
+	require.EqualError(t, err, "nil CCEEndpoint when resolving PSTS lifecycle identifier")
+}
+
+func TestPSTSAllocationLifecycleIDChangesAcrossSandboxRebuilds(t *testing.T) {
+	resource1 := &ccev2.CCEEndpoint{
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "sandbox-a",
+				Netns:       "/var/run/netns/a",
+				K8sObjectID: "same-pod-uid",
+			},
+		},
+	}
+	resource2 := &ccev2.CCEEndpoint{
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "sandbox-b",
+				Netns:       "/var/run/netns/b",
+				K8sObjectID: "same-pod-uid",
+			},
+		},
+	}
+
+	id1, err := pstsAllocationLifecycleID(resource1)
+	require.NoError(t, err)
+	id2, err := pstsAllocationLifecycleID(resource2)
+	require.NoError(t, err)
+	require.NotEqual(t, id1, id2)
 }
 
 func TestAllocateIPReusePath(t *testing.T) {
@@ -758,6 +838,10 @@ func TestAllocateIPReusePath(t *testing.T) {
 	resource := &ccev2.CCEEndpoint{
 		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
 		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "sandbox-reuse",
+				K8sObjectID: "pod-uid-new",
+			},
 			Network: ccev2.EndpointNetworkSpec{
 				IPAllocation: &ccev2.IPAllocation{
 					PSTSName: "psts",

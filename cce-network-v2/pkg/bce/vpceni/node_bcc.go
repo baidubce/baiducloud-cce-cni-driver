@@ -56,8 +56,8 @@ const (
 
 var validate = validator.New()
 
-func buildReuseIPFamilyClientToken(clientToken string, isIPv6 bool) string {
-	if clientToken == "" {
+func buildReuseIPFamilyClientToken(clientToken, eniID string, isIPv6 bool) string {
+	if clientToken == "" || eniID == "" {
 		return ""
 	}
 
@@ -66,7 +66,7 @@ func buildReuseIPFamilyClientToken(clientToken string, isIPv6 bool) string {
 		family = "ipv6"
 	}
 
-	sum := md5.Sum([]byte(clientToken + "|" + family))
+	sum := md5.Sum([]byte(clientToken + "|" + eniID + "|" + family))
 	return "reuse-ip-" + family + "-" + hex.EncodeToString(sum[:])
 }
 
@@ -902,7 +902,7 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		// allocate ipv4
 		var tempIpstr []string
 		tempIpstr, err = n.bceclient.BatchAddPrivateIpCrossSubnetWithClientToken(
-			ctx, eniID, ipv4Result.SubnetID, []string{ipv4Result.PrivateIPAddress}, 1, false, buildReuseIPFamilyClientToken(clientToken, false),
+			ctx, eniID, ipv4Result.SubnetID, []string{ipv4Result.PrivateIPAddress}, 1, false, buildReuseIPFamilyClientToken(clientToken, eniID, false),
 		)
 		if err != nil {
 			scopedLog.WithError(err).Errorf("allocate ip cross subnet failed for eniID %s with ipv4Result %v", eniID, ipv4Result)
@@ -916,7 +916,7 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 
 	if operatorOption.Config.EnableIPv6 && ipv6Result != nil {
 		ipstr, err = n.bceclient.BatchAddPrivateIpCrossSubnetWithClientToken(
-			ctx, eniID, ipv6Result.SubnetID, []string{ipv6Result.PrivateIPAddress}, 1, true, buildReuseIPFamilyClientToken(clientToken, true),
+			ctx, eniID, ipv6Result.SubnetID, []string{ipv6Result.PrivateIPAddress}, 1, true, buildReuseIPFamilyClientToken(clientToken, eniID, true),
 		)
 		if n.manager.HandlerVPCError(scopedLog, err, ipv6Result.SubnetID) != nil {
 			scopedLog.WithError(err).Errorf("allocate ipv6 cross subnet failed for eniID %s with ipv6Result %v", eniID, ipv6Result)

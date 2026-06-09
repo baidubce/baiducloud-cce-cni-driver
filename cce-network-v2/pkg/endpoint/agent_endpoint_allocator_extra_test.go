@@ -314,9 +314,9 @@ func TestTryDeleteEndpointAfterPodDeleted_PSTSFixedTTL(t *testing.T) {
 	marked := false
 	patches := gomonkey.NewPatches()
 	defer patches.Reset()
-	patches.ApplyPrivateMethod(reflect.TypeOf(e), "markEndpointAsPodDeleted", func(_ *EndpointAllocator, _ *ccev2.CCEEndpoint) error {
+	patches.ApplyPrivateMethod(reflect.TypeOf(e), "markEndpointAsPodDeleted", func(_ *EndpointAllocator, _ *ccev2.CCEEndpoint, _ string) (bool, error) {
 		marked = true
-		return nil
+		return true, nil
 	})
 	patches.ApplyPrivateMethod(reflect.TypeOf(e), "deleteEndpointSafely", func(_ *EndpointAllocator, _ *ccev2.CCEEndpoint) error {
 		return errors.New("should not delete")
@@ -325,6 +325,50 @@ func TestTryDeleteEndpointAfterPodDeleted_PSTSFixedTTL(t *testing.T) {
 	err := e.tryDeleteEndpointAfterPodDeleted(ep, true, logrus.NewEntry(logrus.New()))
 	require.NoError(t, err)
 	require.True(t, marked)
+}
+
+func TestTryDeleteEndpointAfterPodDeleted_PSTSFixedTTLSkipsStaleContainer(t *testing.T) {
+	e := &EndpointAllocator{
+		pstsLister: &fakePSTSLister{
+			psts: &ccev2.PodSubnetTopologySpread{
+				ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "ns"},
+				Spec: ccev2.PodSubnetTopologySpreadSpec{
+					Strategy: &ccev2.IPAllocationStrategy{
+						Type: ccev2.IPAllocTypeFixed,
+						TTL:  &metav1.Duration{Duration: 10 * time.Second},
+					},
+				},
+			},
+		},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sPodName:  "pod",
+				ContainerID: "container-old",
+			},
+			Network: ccev2.EndpointNetworkSpec{
+				IPAllocation: &ccev2.IPAllocation{PSTSName: "p1"},
+			},
+		},
+	}
+
+	deleted := false
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyPrivateMethod(reflect.TypeOf(e), "markEndpointAsPodDeleted", func(_ *EndpointAllocator, _ *ccev2.CCEEndpoint, expectedContainerID string) (bool, error) {
+		require.Equal(t, "container-old", expectedContainerID)
+		return false, nil
+	})
+	patches.ApplyPrivateMethod(reflect.TypeOf(e), "deleteEndpointSafely", func(_ *EndpointAllocator, _ *ccev2.CCEEndpoint) error {
+		deleted = true
+		return nil
+	})
+
+	err := e.tryDeleteEndpointAfterPodDeleted(ep, true, logrus.NewEntry(logrus.New()))
+	require.NoError(t, err)
+	require.False(t, deleted)
 }
 
 func TestTryDeleteEndpointAfterPodDeleted_NonPSTSReleaseByOwner(t *testing.T) {
@@ -403,6 +447,251 @@ func TestWaitEndpointIPAllocated_InvalidStatus(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWaitEndpointIPAllocated_InvalidStatusUsesDefaultMessage(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateInvalid),
+			Log: []*models.EndpointStatusChange{
+				{Code: models.EndpointStatusChangeCodeFailed},
+			},
+		},
+	}
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "Get", func(_ *watchers.CCEEndpointClient, _ string, _ string) (*ccev2.CCEEndpoint, error) {
+		return ep, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, _, err := e.waitEndpointIPAllocated(ctx, ep)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "operator failed to allocate IP")
+}
+
+func TestWaitEndpointIPAllocated_GetErrorTimesOut(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "Get", func(_ *watchers.CCEEndpointClient, _ string, _ string) (*ccev2.CCEEndpoint, error) {
+		return nil, errors.New("temporary get error")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	_, _, err := e.waitEndpointIPAllocated(ctx, &ccev2.CCEEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out waiting for the condition")
+}
+
+func TestEndpointStatusMatchesSpec_NilInput(t *testing.T) {
+	require.False(t, endpointStatusMatchesSpec(nil, nil))
+	require.False(t, endpointStatusMatchesSpec(&ccev2.CCEEndpoint{}, nil))
+}
+
+func TestEndpointStatusMatchesSpec_Mismatch(t *testing.T) {
+	ep := &ccev2.CCEEndpoint{
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-old",
+				Netns:       "/var/run/netns/old",
+			},
+			Networking: &ccev2.EndpointNetworking{
+				Addressing: ccev2.AddressPairList{
+					&ccev2.AddressPair{IP: "10.0.0.2", Family: ccev2.IPv4Family},
+				},
+			},
+		},
+	}
+	expected := &ccev2.CCEEndpoint{
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+		},
+	}
+
+	require.False(t, endpointStatusMatchesSpec(ep, expected))
+}
+
+func TestEndpointStatusMatchesSpec_StateMismatch(t *testing.T) {
+	ep := &ccev2.CCEEndpoint{
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStatePodDeleted),
+		},
+	}
+	expected := &ccev2.CCEEndpoint{}
+
+	require.False(t, endpointStatusMatchesSpec(ep, expected))
+}
+
+func TestEndpointStatusMatchesSpec_MissingNetworking(t *testing.T) {
+	ep := &ccev2.CCEEndpoint{
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+		},
+	}
+	expected := &ccev2.CCEEndpoint{}
+
+	require.False(t, endpointStatusMatchesSpec(ep, expected))
+}
+
+func TestEndpointStatusMatchesSpec_MissingExternalIdentifiers(t *testing.T) {
+	ep := &ccev2.CCEEndpoint{
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+			Networking: &ccev2.EndpointNetworking{
+				Addressing: ccev2.AddressPairList{
+					&ccev2.AddressPair{IP: "10.0.0.2", Family: ccev2.IPv4Family},
+				},
+			},
+		},
+	}
+	expected := &ccev2.CCEEndpoint{}
+
+	require.False(t, endpointStatusMatchesSpec(ep, expected))
+}
+
+func TestEndpointStatusMatchesSpec_Success(t *testing.T) {
+	ep := &ccev2.CCEEndpoint{
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+			Networking: &ccev2.EndpointNetworking{
+				Addressing: ccev2.AddressPairList{
+					&ccev2.AddressPair{IP: "10.0.0.2", Family: ccev2.IPv4Family},
+				},
+			},
+		},
+	}
+	expected := &ccev2.CCEEndpoint{
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+		},
+	}
+
+	require.True(t, endpointStatusMatchesSpec(ep, expected))
+}
+
+func TestWaitEndpointIPAllocated_RequiresMatchingContainerAndNetns(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+	expected := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+		},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-old",
+				Netns:       "/var/run/netns/old",
+			},
+			Networking: &ccev2.EndpointNetworking{
+				Addressing: ccev2.AddressPairList{
+					&ccev2.AddressPair{IP: "10.0.0.2", Family: ccev2.IPv4Family},
+				},
+			},
+		},
+	}
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "Get", func(_ *watchers.CCEEndpointClient, _ string, _ string) (*ccev2.CCEEndpoint, error) {
+		return ep, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	_, _, err := e.waitEndpointIPAllocated(ctx, expected)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out waiting for the condition")
+}
+
+func TestWaitEndpointIPAllocated_SuccessWithMatchingContainerAndNetns(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+	expected := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+		},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "cep", Namespace: "ns"},
+		Status: ccev2.EndpointStatus{
+			State: string(models.EndpointStateIPAllocated),
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				K8sObjectID: "pod-uid",
+				ContainerID: "container-new",
+				Netns:       "/var/run/netns/new",
+			},
+			Networking: &ccev2.EndpointNetworking{
+				Addressing: ccev2.AddressPairList{
+					&ccev2.AddressPair{
+						IP:        "10.0.0.2",
+						Family:    ccev2.IPv4Family,
+						Interface: "eni-test",
+						Gateway:   "10.0.0.1",
+						CIDRs:     []string{"10.0.0.0/24"},
+					},
+				},
+			},
+		},
+	}
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "Get", func(_ *watchers.CCEEndpointClient, _ string, _ string) (*ccev2.CCEEndpoint, error) {
+		return ep, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ipv4, ipv6, err := e.waitEndpointIPAllocated(ctx, expected)
+	require.NoError(t, err)
+	require.NotNil(t, ipv4)
+	require.Nil(t, ipv6)
+	require.Equal(t, "10.0.0.2", ipv4.IP.String())
+	require.Equal(t, "10.0.0.1", ipv4.GatewayIP)
+	require.Equal(t, "eni-test", ipv4.InterfaceNumber)
+	require.Equal(t, []string{"10.0.0.0/24"}, ipv4.CIDRs)
+}
+
 func TestMarkEndpointAsPodDeleted_Success(t *testing.T) {
 	e := &EndpointAllocator{
 		cceEndpointClient: &watchers.CCEEndpointClient{},
@@ -411,6 +700,11 @@ func TestMarkEndpointAsPodDeleted_Success(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cep",
 			Namespace: "ns",
+		},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "container-old",
+			},
 		},
 	}
 
@@ -437,8 +731,9 @@ func TestMarkEndpointAsPodDeleted_Success(t *testing.T) {
 		}
 	})
 
-	err := e.markEndpointAsPodDeleted(ep)
+	marked, err := e.markEndpointAsPodDeleted(ep, "container-old")
 	require.NoError(t, err)
+	require.True(t, marked)
 	require.True(t, updateCalled)
 }
 
@@ -450,6 +745,11 @@ func TestMarkEndpointAsPodDeleted_UpdateError(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cep",
 			Namespace: "ns",
+		},
+		Spec: ccev2.EndpointSpec{
+			ExternalIdentifiers: &models.EndpointIdentifiers{
+				ContainerID: "container-old",
+			},
 		},
 	}
 
@@ -468,8 +768,82 @@ func TestMarkEndpointAsPodDeleted_UpdateError(t *testing.T) {
 		}
 	})
 
-	err := e.markEndpointAsPodDeleted(ep)
+	marked, err := e.markEndpointAsPodDeleted(ep, "container-old")
 	require.Error(t, err)
+	require.False(t, marked)
 	require.ErrorIs(t, err, updateErr)
 	require.Contains(t, err.Error(), "failed to update CEP status to PodDeleted")
+}
+
+func TestMarkEndpointAsPodDeleted_SkipsStaleContainer(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cep",
+			Namespace: "ns",
+		},
+	}
+
+	updateCalled := false
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "CCEEndpoints", func(_ *watchers.CCEEndpointClient, _ string) cceclientv2.CCEEndpointInterface {
+		return &fakeCCEEndpointInterface{
+			getFn: func(name string) (*ccev2.CCEEndpoint, error) {
+				return &ccev2.CCEEndpoint{
+					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+					Spec: ccev2.EndpointSpec{
+						ExternalIdentifiers: &models.EndpointIdentifiers{
+							ContainerID: "container-new",
+						},
+					},
+				}, nil
+			},
+			updateFn: func(updated *ccev2.CCEEndpoint) (*ccev2.CCEEndpoint, error) {
+				updateCalled = true
+				return updated, nil
+			},
+		}
+	})
+
+	marked, err := e.markEndpointAsPodDeleted(ep, "container-old")
+	require.NoError(t, err)
+	require.False(t, marked)
+	require.False(t, updateCalled)
+}
+
+func TestMarkEndpointAsPodDeleted_SkipsWhenLatestHasNoExternalIdentifiers(t *testing.T) {
+	e := &EndpointAllocator{
+		cceEndpointClient: &watchers.CCEEndpointClient{},
+	}
+	ep := &ccev2.CCEEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cep",
+			Namespace: "ns",
+		},
+	}
+
+	updateCalled := false
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod(reflect.TypeOf(e.cceEndpointClient), "CCEEndpoints", func(_ *watchers.CCEEndpointClient, _ string) cceclientv2.CCEEndpointInterface {
+		return &fakeCCEEndpointInterface{
+			getFn: func(name string) (*ccev2.CCEEndpoint, error) {
+				return &ccev2.CCEEndpoint{
+					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+				}, nil
+			},
+			updateFn: func(updated *ccev2.CCEEndpoint) (*ccev2.CCEEndpoint, error) {
+				updateCalled = true
+				return updated, nil
+			},
+		}
+	})
+
+	marked, err := e.markEndpointAsPodDeleted(ep, "container-old")
+	require.NoError(t, err)
+	require.False(t, marked)
+	require.False(t, updateCalled)
 }

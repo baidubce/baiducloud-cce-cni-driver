@@ -783,6 +783,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 					ipv4ClientToken = clientToken
 					assert.NotEmpty(t, clientToken)
 					assert.NotEqual(t, rawClientToken, clientToken)
+					assert.Contains(t, clientToken, "reuse-ip-ipv4-")
 					return []string{reuseIPv4}, nil
 				}),
 			env.mockCloud.EXPECT().
@@ -794,6 +795,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 					assert.NotEmpty(t, clientToken)
 					assert.NotEqual(t, rawClientToken, clientToken)
 					assert.NotEqual(t, ipv4ClientToken, clientToken)
+					assert.Contains(t, clientToken, "reuse-ip-ipv6-")
 					return []string{reuseIPv6}, nil
 				}),
 		)
@@ -805,6 +807,18 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod-dualstack", rawClientToken)
 		assert.NoError(t, err)
 		assert.Equal(t, eni.Spec.ENI.ID, eniID)
+	})
+
+	t.Run("reuse token changes when target eni changes", func(t *testing.T) {
+		rawClientToken := "raw-client-token"
+
+		first := buildReuseIPFamilyClientToken(rawClientToken, "eni-1", false)
+		second := buildReuseIPFamilyClientToken(rawClientToken, "eni-2", false)
+		third := buildReuseIPFamilyClientToken(rawClientToken, "eni-1", true)
+
+		assert.NotEmpty(t, first)
+		assert.NotEqual(t, first, second)
+		assert.NotEqual(t, first, third)
 	})
 
 	t.Run("rollback releases ipv4 and ipv6 separately when ipv6 allocation fails", func(t *testing.T) {

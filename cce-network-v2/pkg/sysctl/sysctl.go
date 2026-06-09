@@ -50,6 +50,12 @@ var (
 
 	// SetIfNeededFunc can be replaced in tests
 	SetIfNeededFunc = SetIfNeeded
+
+	// readFn / writeFn are the underlying read/write implementations used by
+	// SetIfNeeded. They are package-level variables so that tests can replace
+	// them without requiring gomonkey (which can fail when functions are inlined).
+	readFn  func(name string) (string, error)   = Read
+	writeFn func(name string, val string) error = Write
 )
 
 // An ErrInvalidSysctlParameter is returned when a parameter is invalid.
@@ -189,17 +195,34 @@ func CompareAndSet(name string, oldVal string, val string) error {
 
 // SetIfNeeded reads the current sysctl value and sets it to the target value if different
 // Returns error if setting fails, or nil if already set to target value or successfully set
+// If the sysctl file does not exist (e.g., IPv6 is completely disabled), returns nil without error
 func SetIfNeeded(paramName, targetValue string) error {
 	// Get current state before setting
-	currentValue, readErr := Read(paramName)
+	currentValue, readErr := readFn(paramName)
 	if readErr != nil {
-		// Continue to set even if read fails
+		// Check if the error is due to file not existing (e.g., IPv6 disabled)
+		// Use errors.Is for Go 1.13+ error wrapping, fallback to string matching for compatibility
+		if errors.Is(readErr, os.ErrNotExist) || strings.Contains(readErr.Error(), "no such file") {
+			// File doesn't exist, which means the feature is not available
+			// This is expected when IPv6 is disabled at kernel level
+			log.WithField(logfields.SysParamName, paramName).Warning("sysctl file does not exist, skipping")
+			return nil
+		}
+		// Continue to set even if read fails for other reasons
 		currentValue = ""
 	}
 
 	// Only set if not already at target value
 	if currentValue != targetValue {
-		return Write(paramName, targetValue)
+		writeErr := writeFn(paramName, targetValue)
+		if writeErr != nil {
+			// Check if the error is due to file not existing
+			if errors.Is(writeErr, os.ErrNotExist) || strings.Contains(writeErr.Error(), "no such file") {
+				log.WithField(logfields.SysParamName, paramName).Warning("sysctl file does not exist during write, skipping")
+				return nil
+			}
+			return writeErr
+		}
 	}
 
 	return nil

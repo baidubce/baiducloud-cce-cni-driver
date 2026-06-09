@@ -61,6 +61,8 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 	var (
 		owner  = resource.Namespace + "/" + resource.Name
 		status = &resource.Status
+		// lifecycleID scopes PSTS allocation tokens to a single sandbox/container attempt.
+		lifecycleID string
 
 		// reuseIPAction is the action to reuse IP
 		action = &DirectIPAction{
@@ -69,6 +71,12 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 		}
 	)
 	log = log.WithField("psts", resource.Spec.Network.IPAllocation.PSTSName).WithField("endpoint", owner)
+	lifecycleID, err := pstsAllocationLifecycleID(resource)
+	if err != nil {
+		log.WithError(err).Error("failed to resolve PSTS sandbox lifecycle identifier")
+		return err
+	}
+	log.WithField("containerID", lifecycleID).Debug("selected PSTS allocation lifecycle identifier")
 	log.Info("start allocate ip from psts")
 
 	psts, err := provider.pstsLister.PodSubnetTopologySpreads(resource.Namespace).Get(resource.Spec.Network.IPAllocation.PSTSName)
@@ -85,11 +93,11 @@ func (provider *pstsAllocatorProvider) AllocateIP(ctx context.Context, log *logr
 
 	if len(status.Networking.Addressing) == 0 {
 		// New pod: allocate new IP
-		return provider.allocateNewIP(ctx, psts, operation, action, status, log)
+		return provider.allocateNewIP(ctx, psts, operation, action, status, lifecycleID, log)
 	}
 
 	// Reuse existing IP
-	return provider.reuseExistingIP(ctx, operation, action, status, psts.Name, log)
+	return provider.reuseExistingIP(ctx, operation, action, status, psts.Name, lifecycleID, log)
 }
 
 // allocateNewIP allocates a new IP for a pod from PSTS
@@ -99,6 +107,7 @@ func (provider *pstsAllocatorProvider) allocateNewIP(
 	operation DirectEndpointOperation,
 	action *DirectIPAction,
 	status *ccev2.EndpointStatus,
+	lifecycleID string,
 	log *logrus.Entry,
 ) error {
 	subnets, err := filterAvailableSubnet(psts, log, operation)
@@ -121,7 +130,7 @@ func (provider *pstsAllocatorProvider) allocateNewIP(
 
 	// Try range subnets first (local pool allocation)
 	if len(rangeSubnets) > 0 {
-		allocated, releaseFuncs, err := provider.tryAllocateFromRangeSubnets(ctx, psts, rangeSubnets, operation, action, log)
+		allocated, releaseFuncs, err := provider.tryAllocateFromRangeSubnets(ctx, psts, rangeSubnets, operation, action, lifecycleID, log)
 		if allocated {
 			releaseIPFuncs = append(releaseIPFuncs, releaseFuncs...)
 			status.Networking.Addressing = action.Addressing
@@ -140,7 +149,7 @@ func (provider *pstsAllocatorProvider) allocateNewIP(
 	}
 
 	// Fallback to no-range subnets (VPC random allocation)
-	return provider.allocateFromNoRangeSubnets(ctx, psts.Name, noRangeSubnets, operation, action, status, log)
+	return provider.allocateFromNoRangeSubnets(ctx, psts.Name, noRangeSubnets, operation, action, status, lifecycleID, log)
 }
 
 // separateSubnetsByRange separates subnets into those with custom ranges and those without
@@ -174,6 +183,7 @@ func (provider *pstsAllocatorProvider) tryAllocateFromRangeSubnets(
 	rangeSubnets []*ccev1.Subnet,
 	operation DirectEndpointOperation,
 	action *DirectIPAction,
+	lifecycleID string,
 	log *logrus.Entry,
 ) (bool, []func(), error) {
 	remainingSubnets := append([]*ccev1.Subnet(nil), rangeSubnets...)
@@ -207,7 +217,7 @@ func (provider *pstsAllocatorProvider) tryAllocateFromRangeSubnets(
 		if ipv6Address != nil {
 			trialAction.Addressing = append(trialAction.Addressing, ipv6Address)
 		}
-		trialAction.ClientToken = generatePSTSAllocateClientToken(action.Owner, psts.Name, trialAction.SubnetID, trialAction.Addressing)
+		trialAction.ClientToken = generatePSTSAllocateClientToken(action.Owner, psts.Name, lifecycleID, trialAction.SubnetID, trialAction.Addressing)
 
 		log := log.WithField("ipv4", logfields.Repr(ipv4Address)).
 			WithField("ipv6", logfields.Repr(ipv6Address)).
@@ -271,6 +281,7 @@ func (provider *pstsAllocatorProvider) allocateFromNoRangeSubnets(
 	operation DirectEndpointOperation,
 	action *DirectIPAction,
 	status *ccev2.EndpointStatus,
+	lifecycleID string,
 	log *logrus.Entry,
 ) error {
 	if len(noRangeSubnets) == 0 {
@@ -279,7 +290,7 @@ func (provider *pstsAllocatorProvider) allocateFromNoRangeSubnets(
 
 	log.WithField("step", "allocate from no-range subnet").Info("allocating from VPC random allocation")
 	action.SubnetID = noRangeSubnets[0].Name
-	action.ClientToken = generatePSTSAllocateClientToken(action.Owner, pstsName, action.SubnetID, nil)
+	action.ClientToken = generatePSTSAllocateClientToken(action.Owner, pstsName, lifecycleID, action.SubnetID, nil)
 
 	err := operation.AllocateIP(ctx, action)
 	if err != nil {
@@ -300,12 +311,13 @@ func (provider *pstsAllocatorProvider) reuseExistingIP(
 	action *DirectIPAction,
 	status *ccev2.EndpointStatus,
 	pstsName string,
+	lifecycleID string,
 	log *logrus.Entry,
 ) error {
 	action.Addressing = status.Networking.Addressing
 	action.SubnetID = status.Networking.Addressing[0].Subnet
 	action.Interface = status.Networking.Addressing[0].Interface
-	action.ClientToken = generatePSTSAllocateClientToken(action.Owner, pstsName, action.SubnetID, action.Addressing)
+	action.ClientToken = generatePSTSAllocateClientToken(action.Owner, pstsName, lifecycleID, action.SubnetID, action.Addressing)
 
 	// For IP reuse, allocation failure is NOT tolerable
 	log = log.WithField("step", "allocate remote psts ip").
@@ -522,11 +534,33 @@ func hasCustomAllocationForSubnet(psts *ccev2.PodSubnetTopologySpread, subnetID 
 	return false
 }
 
-func generatePSTSAllocateClientToken(owner, pstsName, subnetID string, addressing ccev2.AddressPairList) string {
+// pstsAllocationLifecycleID returns the only accepted PSTS token lifecycle identifier:
+// the CEP spec container-id, which changes with sandbox/container recreation.
+//
+// Any missing CEP or missing container-id is treated as an error instead of falling back
+// to weaker identifiers. For fixed-IP PSTS, silently degrading to Pod UID / CEP UID / owner
+// would hide lifecycle gaps and reintroduce stale-token reuse across sandbox rebuilds.
+func pstsAllocationLifecycleID(resource *ccev2.CCEEndpoint) (string, error) {
+	if resource == nil {
+		return "", fmt.Errorf("nil CCEEndpoint when resolving PSTS lifecycle identifier")
+	}
+	if resource.Spec.ExternalIdentifiers == nil {
+		return "", fmt.Errorf("missing external identifiers for PSTS endpoint %s/%s", resource.Namespace, resource.Name)
+	}
+	if resource.Spec.ExternalIdentifiers.ContainerID == "" {
+		return "", fmt.Errorf("missing container-id for PSTS endpoint %s/%s", resource.Namespace, resource.Name)
+	}
+	return resource.Spec.ExternalIdentifiers.ContainerID, nil
+}
+
+func generatePSTSAllocateClientToken(owner, pstsName, lifecycleID, subnetID string, addressing ccev2.AddressPairList) string {
 	if owner == "" || pstsName == "" || subnetID == "" {
 		return ""
 	}
 	raw := fmt.Sprintf("psts-alloc-%s-%s-%s-%s", operatorOption.Config.CCEClusterID, owner, pstsName, subnetID)
+	if lifecycleID != "" {
+		raw += "|" + lifecycleID
+	}
 	for _, addr := range addressing {
 		raw += "|" + addr.IP
 	}

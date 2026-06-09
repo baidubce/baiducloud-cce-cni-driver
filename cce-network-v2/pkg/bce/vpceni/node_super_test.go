@@ -901,6 +901,173 @@ func TestResyncInterfacesAndIPsNew(t *testing.T) {
 	}
 }
 
+func TestApplyPendingIPMutations_GivenReleasedIP_WhenInformerStillHasOldIP_ThenHideIPUntilCacheCatchesUp(t *testing.T) {
+	node := &bceNetworkResourceSet{
+		pendingIPMutations: make(map[string]pendingIPMutation),
+	}
+	node.rememberPendingReleasedIPs([]string{"10.0.0.10"})
+
+	pool := ipamTypes.AllocationMap{
+		"10.0.0.10": {
+			Resource: "eni-1",
+			SubnetID: "sbn-1",
+		},
+	}
+
+	node.applyPendingIPMutations(pool)
+	assert.NotContains(t, pool, "10.0.0.10")
+	_, exists := node.pendingIPMutations["10.0.0.10"]
+	assert.True(t, exists, "mutation should remain until informer no longer reports the IP")
+
+	node.applyPendingIPMutations(ipamTypes.AllocationMap{})
+	_, exists = node.pendingIPMutations["10.0.0.10"]
+	assert.False(t, exists, "mutation should be cleared once informer state catches up")
+}
+
+func TestRememberPendingReleasedIPs_GivenNilMutationMapAndInvalidIPs_WhenCalled_ThenInitializesAndFilters(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+
+	node.rememberPendingReleasedIPs(nil)
+	assert.Nil(t, node.pendingIPMutations)
+
+	node.rememberPendingReleasedIPs([]string{"", "10.0.0.11"})
+	require.NotNil(t, node.pendingIPMutations)
+	assert.Len(t, node.pendingIPMutations, 1)
+	assert.Equal(t, pendingIPMutation{present: false}, node.pendingIPMutations["10.0.0.11"])
+}
+
+func TestRememberPendingAllocatedIPs_GivenNilMapAndInvalidAddresses_WhenCalled_ThenInitializesAndFilters(t *testing.T) {
+	node := &bceNetworkResourceSet{}
+
+	node.rememberPendingAllocatedIPs("eni-test", nil)
+	assert.Nil(t, node.pendingIPMutations)
+
+	node.rememberPendingAllocatedIPs("eni-test", []*models.PrivateIP{
+		nil,
+		{},
+		{
+			PrivateIPAddress: "10.0.0.12",
+			SubnetID:         "sbn-test",
+		},
+	})
+	require.NotNil(t, node.pendingIPMutations)
+	assert.Len(t, node.pendingIPMutations, 1)
+	assert.Equal(t, pendingIPMutation{
+		present: true,
+		ipInfo: ipamTypes.AllocationIP{
+			Resource: "eni-test",
+			SubnetID: "sbn-test",
+		},
+	}, node.pendingIPMutations["10.0.0.12"])
+}
+
+func TestApplyPendingIPMutations_GivenSameIPReallocatedAfterRelease_WhenApplied_ThenLatestAllocationWins(t *testing.T) {
+	node := &bceNetworkResourceSet{
+		pendingIPMutations: make(map[string]pendingIPMutation),
+	}
+	node.rememberPendingReleasedIPs([]string{"10.0.0.10"})
+	node.rememberPendingAllocatedIPs("eni-new", []*models.PrivateIP{
+		{
+			PrivateIPAddress: "10.0.0.10",
+			SubnetID:         "sbn-new",
+		},
+	})
+
+	pool := ipamTypes.AllocationMap{
+		"10.0.0.10": {
+			Resource: "eni-old",
+			SubnetID: "sbn-old",
+		},
+	}
+
+	node.applyPendingIPMutations(pool)
+	assert.Equal(t, ipamTypes.AllocationIP{
+		Resource: "eni-new",
+		SubnetID: "sbn-new",
+	}, pool["10.0.0.10"])
+}
+
+func TestApplyPendingIPMutations_GivenAllocatedIPAlreadyInInformer_WhenApplied_ThenClearsMutationWithoutChangingPool(t *testing.T) {
+	node := &bceNetworkResourceSet{
+		pendingIPMutations: map[string]pendingIPMutation{
+			"10.0.0.13": {
+				present: true,
+				ipInfo: ipamTypes.AllocationIP{
+					Resource: "eni-1",
+					SubnetID: "sbn-1",
+				},
+			},
+		},
+	}
+	pool := ipamTypes.AllocationMap{
+		"10.0.0.13": {
+			Resource: "eni-1",
+			SubnetID: "sbn-1",
+		},
+	}
+
+	node.applyPendingIPMutations(pool)
+
+	assert.Equal(t, ipamTypes.AllocationIP{
+		Resource: "eni-1",
+		SubnetID: "sbn-1",
+	}, pool["10.0.0.13"])
+	assert.Empty(t, node.pendingIPMutations)
+}
+
+func TestResyncInterfacesAndIPs_GivenPendingReleasedIP_WhenCalled_ThenReturnedPoolExcludesIP(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	node, err := bccTestContext(t)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+	require.NoError(t, err)
+
+	mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 2)
+	require.NoError(t, err)
+	require.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni}))
+
+	releasedIP := mockEni.Spec.ENI.PrivateIPSet[1].PrivateIPAddress
+	node.rememberPendingReleasedIPs([]string{releasedIP})
+
+	allocMap, err := node.ResyncInterfacesAndIPs(ctx, testLog.WithField("test", "pending-release-overlay"))
+	require.NoError(t, err)
+	assert.NotContains(t, allocMap, releasedIP)
+	_, exists := node.pendingIPMutations[releasedIP]
+	assert.True(t, exists, "removal mutation should be kept until informer catches up")
+}
+
+func TestResyncInterfacesAndIPs_GivenPendingAllocatedIP_WhenCalled_ThenReturnedPoolIncludesIP(t *testing.T) {
+	ccemock.InitMockEnv()
+
+	node, err := bccTestContext(t)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	sbn, err := k8s.CCEClient().CceV1().Subnets().Get(ctx, node.k8sObj.Spec.ENI.SubnetIDs[0], metav1.GetOptions{})
+	require.NoError(t, err)
+
+	mockEni, err := ccemock.NewMockEni(node.k8sObj.Name, node.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 1)
+	require.NoError(t, err)
+	require.NoError(t, ccemock.EnsureEnisToInformer(t, []*ccev2.ENI{mockEni}))
+
+	addedIP := &models.PrivateIP{
+		PrivateIPAddress: "10.10.10.10",
+		SubnetID:         sbn.Name,
+	}
+	node.rememberPendingAllocatedIPs(mockEni.Name, []*models.PrivateIP{addedIP})
+
+	allocMap, err := node.ResyncInterfacesAndIPs(ctx, testLog.WithField("test", "pending-allocate-overlay"))
+	require.NoError(t, err)
+	assert.Contains(t, allocMap, addedIP.PrivateIPAddress)
+	assert.Equal(t, ipamTypes.AllocationIP{
+		Resource: mockEni.Name,
+		SubnetID: sbn.Name,
+	}, allocMap[addedIP.PrivateIPAddress])
+}
+
 // TestGetENIQuota tests the getENIQuota function
 func TestGetENIQuota(t *testing.T) {
 	ccemock.InitMockEnv()

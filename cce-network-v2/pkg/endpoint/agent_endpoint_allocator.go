@@ -803,11 +803,7 @@ func (e *EndpointAllocator) waitEndpointIPAllocated(ctx context.Context, newEP *
 			}
 		}
 
-		// The ID of the spec is the same as that of the status,
-		//indicating that the synchronization is already in progress
-		if ep.Status.ExternalIdentifiers != nil &&
-			ep.Status.ExternalIdentifiers.K8sObjectID == newEP.Spec.ExternalIdentifiers.K8sObjectID &&
-			ep.Status.Networking != nil && len(ep.Status.Networking.Addressing) > 0 {
+		if endpointStatusMatchesSpec(ep, newEP) {
 			for _, address := range ep.Status.Networking.Addressing {
 				result := &ipam.AllocationResult{
 					IP:              net.ParseIP(address.IP),
@@ -826,6 +822,27 @@ func (e *EndpointAllocator) waitEndpointIPAllocated(ctx context.Context, newEP *
 		return false, nil
 	})
 	return ipv4Result, ipv6Result, err
+}
+
+func endpointStatusMatchesSpec(ep, expected *ccev2.CCEEndpoint) bool {
+	if ep == nil || expected == nil {
+		return false
+	}
+	// For same-Pod restarts, K8sObjectID stays stable while containerID/netns change.
+	// Require a full status/spec match so stale status from the previous container
+	// cannot be mistaken as the current restore result.
+	if ep.Status.State != string(models.EndpointStateIPAllocated) {
+		return false
+	}
+	if ep.Status.Networking == nil || len(ep.Status.Networking.Addressing) == 0 {
+		return false
+	}
+	if ep.Status.ExternalIdentifiers == nil || expected.Spec.ExternalIdentifiers == nil {
+		return false
+	}
+	return ep.Status.ExternalIdentifiers.K8sObjectID == expected.Spec.ExternalIdentifiers.K8sObjectID &&
+		ep.Status.ExternalIdentifiers.ContainerID == expected.Spec.ExternalIdentifiers.ContainerID &&
+		ep.Status.ExternalIdentifiers.Netns == expected.Spec.ExternalIdentifiers.Netns
 }
 
 // createDelegateEndpoint create or update a fixed CCEEndpoint
@@ -1036,9 +1053,19 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 			// Fixed mode: mark as PodDeleted first, then decide based on TTL
 			if psts.Spec.Strategy.Type == ccev2.IPAllocTypeFixed {
 				// Mark CEP as PodDeleted (Operator will release IP from ENI when it sees this status)
-				if err := e.markEndpointAsPodDeleted(ep); err != nil {
+				expectedContainerID := ""
+				if ep.Spec.ExternalIdentifiers != nil {
+					expectedContainerID = ep.Spec.ExternalIdentifiers.ContainerID
+				}
+				marked, err := e.markEndpointAsPodDeleted(ep, expectedContainerID)
+				if err != nil {
 					logEntry.WithError(err).Error("Failed to mark CEP as PodDeleted")
 					return err
+				}
+				if !marked {
+					logEntry.WithField("expectedContainerID", expectedContainerID).
+						Info("Skipped marking CEP as PodDeleted because CEP no longer belongs to the deleted container")
+					return nil
 				}
 
 				if psts.Spec.Strategy.TTL != nil && psts.Spec.Strategy.TTL.Seconds() > 0 {
@@ -1112,8 +1139,9 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 
 // markEndpointAsPodDeleted marks the CEP status as PodDeleted
 // This signals to Operator that it should release the IP from ENI
-func (e *EndpointAllocator) markEndpointAsPodDeleted(ep *ccev2.CCEEndpoint) error {
-	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+func (e *EndpointAllocator) markEndpointAsPodDeleted(ep *ccev2.CCEEndpoint, expectedContainerID string) (bool, error) {
+	marked := false
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		latest, err := e.cceEndpointClient.CCEEndpoints(ep.Namespace).Get(
 			context.TODO(),
 			ep.Name,
@@ -1122,6 +1150,15 @@ func (e *EndpointAllocator) markEndpointAsPodDeleted(ep *ccev2.CCEEndpoint) erro
 		if err != nil {
 			return err
 		}
+		if expectedContainerID != "" {
+			// DEL for an older container may arrive after ADD has already rebound the CEP
+			// to a newer container. Only transition to PodDeleted when the latest spec
+			// still belongs to the container that is being torn down.
+			if latest.Spec.ExternalIdentifiers == nil || latest.Spec.ExternalIdentifiers.ContainerID != expectedContainerID {
+				return nil
+			}
+		}
+
 		copyCEP := latest.DeepCopy()
 		// Update CEP status to PodDeleted and append status log
 		AppendEndpointStatusWithMessage(&copyCEP.Status, models.EndpointStatePodDeleted, models.EndpointStatusChangeCodeOk,
@@ -1139,6 +1176,8 @@ func (e *EndpointAllocator) markEndpointAsPodDeleted(ep *ccev2.CCEEndpoint) erro
 		if err != nil {
 			return fmt.Errorf("failed to update CEP status to PodDeleted: %w", err)
 		}
+		marked = true
 		return nil
 	})
+	return marked, err
 }

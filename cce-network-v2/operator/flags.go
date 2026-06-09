@@ -189,6 +189,9 @@ func init() {
 	flags.Bool(option.EnableRDMAName, defaults.EnableRDMA, "Enable RDMA support")
 	option.BindEnv(option.EnableRDMAName)
 
+	flags.Bool(option.EnableERIManagementName, defaults.EnableERIManagement, "Enable ERI management support")
+	option.BindEnv(option.EnableERIManagementName)
+
 	flags.String(option.K8sAPIServer, "", "Kubernetes API server URL")
 	option.BindEnv(option.K8sAPIServer)
 
@@ -324,8 +327,17 @@ func init() {
 	flags.Duration(operatorOption.ResourceHPCResyncInterval, operatorOption.DefaultResourceResyncInterval*10, "How often to resync resources")
 	option.BindEnv(operatorOption.ResourceHPCResyncInterval)
 
-	flags.Duration(operatorOption.ResourceENIResyncInterval, operatorOption.DefaultResourceResyncInterval*2, "How often to resync resources")
+	flags.Duration(operatorOption.AgentResourceResyncInterval, operatorOption.DefaultEniResysnInterval*2, "How often to resync ENI resources")
+	option.BindEnv(operatorOption.AgentResourceResyncInterval)
+
+	flags.Duration(operatorOption.ResourceENIResyncInterval, operatorOption.DefaultEniResysnInterval*2, "How often to resync ENI resources")
 	option.BindEnv(operatorOption.ResourceENIResyncInterval)
+
+	flags.Duration(operatorOption.ResourceRemoteENIResyncInterval, operatorOption.DefaultResourceResyncInterval*2, "How often to resync resources")
+	option.BindEnv(operatorOption.ResourceRemoteENIResyncInterval)
+
+	flags.Duration(operatorOption.ResourceCepResyncInterval, operatorOption.DefaultResourceCepResyncInterval, "How often to resync cep resources")
+	option.BindEnv(operatorOption.ResourceCepResyncInterval)
 
 	flags.Duration(operatorOption.SecurityGroupSynerDuration, 0, "How often to resync security group")
 	option.BindEnv(operatorOption.SecurityGroupSynerDuration)

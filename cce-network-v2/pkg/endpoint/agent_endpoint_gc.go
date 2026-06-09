@@ -10,6 +10,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -139,35 +140,41 @@ func (gcer *agentGCer) dynamicUsedIPsGC() {
 				continue
 			}
 
+			// Unified CEP checking logic: determine correct CEP name and log type based on network type
+			var cepName, networkType string
 			if gcer.ea.isRDMAMode() {
-				// rdma mode skip gc ips if cep is exsit
-				cep, err = gcer.ea.cceEndpointClient.Get(namespace, name)
-				if !kerrors.IsNotFound(err) {
-					delete(gcer.expiredIPMap, addr)
-					continue
-				}
+				// RDMA mode: name is podName, need to generate RDMA CEP name
+				cepName = bceutils.GetCEPNameFromPodName(true, name, gcer.ea.rdmaAttr.primaryMacAddress)
+				networkType = "rdma"
 			} else {
-				// ethernet skip if cep do not have containers ip
-				cep, err = gcer.ea.cceEndpointClient.Get(namespace, name)
-				if err == nil && cep != nil {
-					containersIPs := false
-					if cep.Status.Networking != nil && len(cep.Status.Networking.Addressing) != 0 {
-						for _, pair := range cep.Status.Networking.Addressing {
-							if pair.IP == addr {
-								containersIPs = true
-							}
+				// Ethernet mode: name is CEP name
+				cepName = name
+				networkType = "ethernet"
+			}
+
+			cep, err = gcer.ea.cceEndpointClient.Get(namespace, cepName)
+			if err == nil && cep != nil {
+				containersIPs := false
+				if cep.Status.Networking != nil && len(cep.Status.Networking.Addressing) != 0 {
+					for _, pair := range cep.Status.Networking.Addressing {
+						if pair.IP == addr {
+							containersIPs = true
+							break
 						}
 					}
-					if containersIPs {
-						delete(gcer.expiredIPMap, addr)
-						continue
-					}
 				}
-				if err != nil && !kerrors.IsNotFound(err) {
-					scopedLog.WithError(err).Error("get cep error")
+				if containersIPs {
+					scopedLog.Debugf("FROM GC dynamicUsedIPsGC: skip gc %s ip %s, because it belongs to cep: %s", networkType, addr, cep.Name)
 					delete(gcer.expiredIPMap, addr)
 					continue
 				}
+				// if cep exists but not contain this ip, this ip will be considered for gc
+				scopedLog.Debugf("FROM GC dynamicUsedIPsGC: %s ip %s does not belong to cep: %s, will be considered for gc", networkType, addr, cep.Name)
+			}
+			if err != nil && !kerrors.IsNotFound(err) {
+				scopedLog.WithError(err).Errorf("get %s cep error", networkType)
+				delete(gcer.expiredIPMap, addr)
+				continue
 			}
 
 			if !ok && (cep == nil || isThisCEPReadyForDelete(scopedLog, cep)) {

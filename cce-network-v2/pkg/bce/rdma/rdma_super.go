@@ -25,6 +25,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -34,6 +35,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
@@ -120,6 +122,9 @@ type bceRDMANetResourceSet struct {
 
 	log                     *logrus.Entry
 	eniAllocatedIPsErrorMap map[string]*ccev2.StatusChange
+
+	// firstERIMacAddress temporarily stores the found ERI MAC address for updating annotations
+	firstERIMacAddress string
 }
 
 // NewNetResourceSet returns a new NetResourceSet
@@ -323,6 +328,11 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 				return nil
 			}
 
+			// Collect any ERI MAC address
+			if e.Spec.ENI.MacAddress != "" && e.Annotations != nil && e.Annotations[k8s.AnnotationERIManaged] == "true" {
+				n.firstERIMacAddress = e.Spec.ENI.MacAddress
+			}
+
 			availabelENIsNumber++
 			if e.Status.CCEStatus == ccev2.ENIStatusUsingInPod {
 				usedENIsNumber++
@@ -352,6 +362,11 @@ func (n *bceRDMANetResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 			return nil
 		})
+
+	// If an ERI MAC address is collected, update the NRS annotation
+	if n.firstERIMacAddress != "" && n.firstERIMacAddress != defaults.EmptyMACAddress {
+		n.updateERIMacAddressAnnotation(ctx, n.firstERIMacAddress, scopedLog)
+	}
 
 	return a, nil
 }
@@ -391,6 +406,9 @@ func (n *bceRDMANetResourceSet) refreshENIAllocatedIPErrors(resource *ccev2.NetR
 				eniStastic.LastAllocatedIPError = eniStatus
 			}
 		}
+
+		// Update the map with the modified struct
+		resource.Status.ENIs[eniID] = eniStastic
 	}
 
 	for eniID := range n.eniAllocatedIPsErrorMap {
@@ -444,8 +462,15 @@ func (n *bceRDMANetResourceSet) PopulateStatusFields(resource *ccev2.NetResource
 		})
 
 	resource.Status.ENIs = eniStatusMap
-	resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
+	if len(crossSubnetUsed) > 0 {
+		resource.Status.IPAM.CrossSubnetUsed = crossSubnetUsed
+	} else {
+		resource.Status.IPAM.CrossSubnetUsed = nil
+	}
 	n.refreshENIAllocatedIPErrors(resource)
+
+	// PopulateStatusFields should only populate Status fields and not modify Annotations
+	// ERI MAC address annotation updates should be handled elsewhere
 }
 
 // PrepareIPAllocation is called to calculate the number of IPs that
@@ -837,15 +862,19 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 	})
 }
 
-func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev2.ENI, refresh func(eni *ccev2.ENI) *ccev2.ENI) error {
+func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, toUpdateEni *ccev2.ENI, refresh func(eni *ccev2.ENI) *ccev2.ENI) error {
 	var oldversion int64
+
+	if toUpdateEni == nil || toUpdateEni.Name == "" {
+		return fmt.Errorf("eni is nil or eni.Name is empty")
+	}
 
 	err := wait.PollImmediate(retryDuration, retryTimeout, func() (bool, error) {
 		// get eni
 		// append ip to eni
-		eni, ierr := n.manager.eniLister.Get(string(eni.Name))
+		eni, ierr := n.manager.eniLister.Get(string(toUpdateEni.Name))
 		if ierr != nil {
-			return false, fmt.Errorf("get eni %s failed: %v", eni.Name, ierr)
+			return false, fmt.Errorf("get eni %s failed: %v", toUpdateEni.Name, ierr)
 		}
 		eni = eni.DeepCopy()
 		oldversion = eni.Spec.VPCVersion
@@ -870,11 +899,11 @@ func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, eni *ccev
 		return true, ierr
 	})
 	if err != nil {
-		return fmt.Errorf("update eni %s failed: %v", eni.Name, err)
+		return fmt.Errorf("update eni %s failed: %v", toUpdateEni.Name, err)
 	}
 
 	n.mutex.Lock()
-	n.expiredVPCVersion[eni.Name] = oldversion
+	n.expiredVPCVersion[toUpdateEni.Name] = oldversion
 	n.mutex.Unlock()
 	return nil
 }
@@ -947,4 +976,51 @@ func (n *bceRDMANetResourceSet) GetMaximumBurstableAllocatableIPv4() int {
 		return quota.GetMaxIP() - 1
 	}
 	return 0
+}
+
+// updateERIMacAddressAnnotation uses patch operation to update ERI MAC address annotation in NRS
+func (n *bceRDMANetResourceSet) updateERIMacAddressAnnotation(ctx context.Context, macAddress string, scopedLog *logrus.Entry) {
+	// Check if the current annotation is already this MAC address
+	if n.k8sObj.Annotations != nil {
+		if currentMac, exists := n.k8sObj.Annotations[k8s.AnnotationERIMacAddress]; exists && currentMac == macAddress {
+			// MAC address has not changed, no need to update
+			return
+		}
+	}
+
+	scopedLog.WithFields(logrus.Fields{
+		"nrsName":    n.k8sObj.Name,
+		"newMacAddr": macAddress,
+	}).Info("Patching ERI MAC address annotation in NRS")
+
+	// Use patch operation to update annotation
+	err := wait.PollImmediate(200*time.Millisecond, 10*time.Second, func() (bool, error) {
+		// Construct patch data
+		patchData := []byte(fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`,
+			k8s.AnnotationERIMacAddress, macAddress))
+
+		// Execute patch operation
+		result, err := k8s.CCEClient().CceV2().NetResourceSets().Patch(
+			ctx,
+			n.k8sObj.Name,
+			types.MergePatchType,
+			patchData,
+			metav1.PatchOptions{},
+		)
+
+		if err == nil {
+			// Update local cache
+			n.k8sObj = result
+			return true, nil
+		}
+
+		scopedLog.WithError(err).Warning("Failed to patch ERI MAC address annotation, will retry")
+		return false, nil
+	})
+
+	if err != nil {
+		scopedLog.WithError(err).Error("Failed to patch ERI MAC address annotation after retries")
+	} else {
+		scopedLog.WithField("macAddr", macAddress).Info("Successfully patched ERI MAC address annotation")
+	}
 }

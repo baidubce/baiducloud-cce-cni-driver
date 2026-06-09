@@ -57,7 +57,7 @@ func newBBCNetworkResourceSet(super *bceNetworkResourceSet) *bbcNetworkResourceS
 }
 
 func (n *bbcNetworkResourceSet) tryRefreshBBCENI() *ccev2.ENI {
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 		e, ok := iface.Resource.(*eniResource)
 		if !ok {
 			return nil
@@ -80,7 +80,7 @@ func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 	if n.bbceni != nil {
 		return nil
 	}
-	bbceni, err := n.manager.bceclient.GetBBCInstanceENI(context.Background(), n.instanceID)
+	bbceni, err := n.bceclient.GetBBCInstanceENI(context.Background(), n.instanceID)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("failed to get instance bbc eni")
 		return err
@@ -187,7 +187,7 @@ func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 func (n *bbcNetworkResourceSet) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuotaManager, error) {
 	scopeLog = scopeLog.WithField("nodeName", n.k8sObj.Name).WithField("method", "generateIPResourceManager")
 	// default bbc ip quota
-	eniQuota := newCustomerIPQuota(scopeLog, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, n.manager.bceclient)
+	eniQuota := newCustomerIPQuota(scopeLog, k8s.WatcherClient(), n.k8sObj.Name, n.instanceID, n.bceclient)
 	eniQuota.SetMaxENI(1)
 	eniQuota.SetMaxIP(defaultBBCMaxIPsPerENI)
 
@@ -201,12 +201,12 @@ func (n *bbcNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 	if ipv4ToAllocate > 0 {
 		// allocate ip to bbc eni
 		if allocation.PoolID == ipamTypes.PoolID(n.primaryENISubnetID) {
-			ips, err = n.manager.bceclient.BBCBatchAddIP(ctx, &bbc.BatchAddIpArgs{
+			ips, err = n.bceclient.BBCBatchAddIP(ctx, &bbc.BatchAddIpArgs{
 				InstanceId:                     n.instanceID,
 				SecondaryPrivateIpAddressCount: ipv4ToAllocate,
 			})
 		} else {
-			ips, err = n.manager.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
+			ips, err = n.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
 				InstanceId: n.instanceID,
 				SingleEniAndSubentIps: []bbc.SingleEniAndSubentIp{
 					{
@@ -250,7 +250,7 @@ func (n *bbcNetworkResourceSet) createInterface(ctx context.Context, allocation 
 // releaseIPs implements realNodeInf
 func (n *bbcNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if len(ipv4ToRelease) > 0 {
-		err := n.manager.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+		err := n.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
 			InstanceId: n.instanceID,
 			PrivateIps: ipv4ToRelease,
 		})
@@ -275,7 +275,7 @@ func (n *bbcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 
 	eniQuota := n.getENIQuota()
 	if eniQuota != nil {
-		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name, func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil
@@ -328,15 +328,15 @@ func (n *bbcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 	return ipv4, "", err
 }
 
-// ReuseIPs implements realNodeInf
-func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
+// ReuseIPs implements realNodeInfipD
+func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
 	if n.tryRefreshBBCENI() == nil {
-		return "", false, ipsReleased, fmt.Errorf("bbc eni %s is not ready", n.instanceID)
+		return "", fmt.Errorf("bbc eni %s is not ready", n.instanceID)
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
 	if err != nil {
-		return "", false, ipsReleased, fmt.Errorf("invalid owner %s: %v", owner, err)
+		return "", fmt.Errorf("invalid owner %s: %v", owner, err)
 	}
 
 	scopeLog := n.log.WithFields(logrus.Fields{
@@ -349,7 +349,7 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 	// release ip from old bcc/ebc/bbc eni before reuse ip if necessary
 	// check ip conflict
 	// should to delete ip from the old eni
-	isLocalIP, ipsReleased, err := n.rleaseOldIP(ctx, scopeLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+	isLocalIP, _, err := n.releaseOldIP(ctx, scopeLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
 		eni, err := n.manager.enilister.Get(eniID)
 		if err != nil {
 			return fmt.Errorf("fail to release old ip. get eni %s failed: %v", eniID, err)
@@ -360,7 +360,7 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 			"instanceID":   instanceID,
 			"toReleaseIPs": toReleaseIPs,
 		})
-		err = n.manager.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
+		err = n.bceclient.BBCBatchDelIP(ctx, &bbc.BatchDelIpArgs{
 			InstanceId: instanceID,
 			PrivateIps: toReleaseIPs,
 		})
@@ -372,22 +372,13 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		return err
 	})
 	if err != nil {
-		return "", false, ipsReleased, err
+		return "", err
 	}
 	if isLocalIP {
 		scopeLog.Info("ip is local, no need to release ip from bbc eni")
-		return n.bbceni.Name, false, ipsReleased, nil
-	} else {
-		if len(ipsReleased) > 0 {
-			scopeLog.Info("ip is not local, need to release ip from bbc eni")
-			ipDeletedFromoldEni = true
-		}
+		return n.bbceni.Name, nil
 	}
 	// check if all ips are released from old bcc/ebc/bbc eni before reuse ip
-	if ipDeletedFromoldEni && (len(ips) != len(ipsReleased)) {
-		scopeLog.Warnf("ip is not local, but only some ips (%v) are released from bbc eni", ipsReleased)
-		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("ip is not local, but only some ips (%v) are released from bbc eni", ipsReleased)
-	}
 	var ipAndSubnets []bbc.IpAndSubnet
 	for _, pip := range ips {
 		ipAndSubnets = append(ipAndSubnets, bbc.IpAndSubnet{
@@ -395,7 +386,7 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 			SubnetId:  pip.SubnetID,
 		})
 	}
-	resp, err := n.manager.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
+	resp, err := n.bceclient.BBCBatchAddIPCrossSubnet(ctx, &bbc.BatchAddIpCrossSubnetArgs{
 		InstanceId: n.instanceID,
 		SingleEniAndSubentIps: []bbc.SingleEniAndSubentIp{
 			{
@@ -407,14 +398,14 @@ func (n *bbcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 
 	if err != nil {
 		scopeLog.WithError(err).Error("failed to reuse ip cross subnet")
-		return "", ipDeletedFromoldEni, ipsReleased, err
+		return "", err
 	} else if len(resp.PrivateIps) == 0 {
 		scopeLog.Error("failed to reuse ip cross subnet without any error")
-		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("failed to reuse ip cross subnet without any error")
+		return "", fmt.Errorf("failed to reuse ip cross subnet without any error")
 	}
 	scopeLog.WithField("ips", logfields.Repr(ips)).Info("failed to reuse ip cross subnet")
 
-	return n.bbceni.Name, ipDeletedFromoldEni, ipsReleased, nil
+	return n.bbceni.Name, nil
 }
 
 var _ realNodeInf = &bbcNetworkResourceSet{}

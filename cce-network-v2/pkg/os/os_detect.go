@@ -24,6 +24,12 @@ type HostOS interface {
 	// DisableDHCPv6
 	DisableDHCPv6(udevName, cceName string) error
 	DisableAndMonitorMacPersistant() error
+	// EnsureNetworkManagerUnmanaged ensures NetworkManager stops managing the specified interface
+	// Only operating systems that use NetworkManager by default will automatically manage elastic network interfaces.
+	// Ubuntu does not use NetworkManager by default, so there is no need to explicitly set the interface as unmanaged.
+	// Other operating systems use NetworkManager to manage elastic network interfaces by default,
+	// so it is necessary to explicitly set the interface as unmanaged.
+	EnsureNetworkManagerUnmanaged(ifName string) error
 }
 
 type OSRelease struct {

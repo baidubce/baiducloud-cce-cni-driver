@@ -8,7 +8,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	types100 "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/containernetworking/plugins/pkg/testutils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
@@ -36,8 +35,9 @@ func (m *MockNetworkChecker) SendIcmpProbeInNetNS(netns ns.NetNS, srcIP, targetI
 var _ NetworkChecker = &MockNetworkChecker{}
 
 var _ = Describe("VerifyNetworkConnectivity", func() {
-	var originalNS, targetNS ns.NetNS
+	var mockTargetNS *MockNetNS
 	var mockUtils *MockNetworkUtils
+
 	logger = logging.DefaultLogger.WithFields(logrus.Fields{
 		"cmdArgs": logfields.Json("test"),
 		"plugin":  "cptp",
@@ -45,20 +45,12 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 	})
 
 	BeforeEach(func() {
-		var err error
-		originalNS, err = testutils.NewNS()
-		Expect(err).NotTo(HaveOccurred())
-		targetNS, err = testutils.NewNS()
-		Expect(err).NotTo(HaveOccurred())
-
+		mockTargetNS = &MockNetNS{path: "/var/run/netns/test"}
 		mockUtils = &MockNetworkUtils{}
 	})
 
 	AfterEach(func() {
-		Expect(originalNS.Close()).To(Succeed())
-		Expect(testutils.UnmountNS(originalNS)).To(Succeed())
-		Expect(targetNS.Close()).To(Succeed())
-		Expect(testutils.UnmountNS(targetNS)).To(Succeed())
+		// 无需清理模拟对象
 	})
 
 	It("should verify network connectivity for IPv4 addresses", func() {
@@ -74,12 +66,18 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 			},
 		}
 
-		mockUtils.On("SendIcmpProbeInNetNS", targetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(true, nil)
+		mockUtils.On("SendIcmpProbeInNetNS", mockTargetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(true, nil)
 
-		err := targetNS.Do(func(ns.NetNS) error {
+		// 模拟 targetNS.Do 调用成功
+		mockTargetNS.On("Do", mock.AnythingOfType("func(ns.NetNS) error")).Return(nil).Run(func(args mock.Arguments) {
+			fn := args.Get(0).(func(ns.NetNS) error)
+			fn(mockTargetNS) // 执行传入的函数
+		})
+
+		err := mockTargetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
-			err := VerifyNetworkConnectivity(result, targetNS, 1500, mockUtils)
+			err := VerifyNetworkConnectivity(result, mockTargetNS, 1500, mockUtils)
 			Expect(err).NotTo(HaveOccurred())
 			return nil
 		})
@@ -99,10 +97,16 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 			},
 		}
 
-		err := targetNS.Do(func(ns.NetNS) error {
+		// 模拟 targetNS.Do 调用成功
+		mockTargetNS.On("Do", mock.AnythingOfType("func(ns.NetNS) error")).Return(nil).Run(func(args mock.Arguments) {
+			fn := args.Get(0).(func(ns.NetNS) error)
+			fn(mockTargetNS) // 执行传入的函数
+		})
+
+		err := mockTargetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
-			err := VerifyNetworkConnectivity(result, targetNS, 1500, mockUtils)
+			err := VerifyNetworkConnectivity(result, mockTargetNS, 1500, mockUtils)
 			Expect(err).NotTo(HaveOccurred())
 			return nil
 		})
@@ -124,10 +128,16 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 
 		mockUtils.On("GetDefaultGateway").Return(nil, fmt.Errorf("failed to get default gateway"))
 
-		err := targetNS.Do(func(ns.NetNS) error {
+		// 模拟 targetNS.Do 调用成功
+		mockTargetNS.On("Do", mock.AnythingOfType("func(ns.NetNS) error")).Return(nil).Run(func(args mock.Arguments) {
+			fn := args.Get(0).(func(ns.NetNS) error)
+			fn(mockTargetNS) // 执行传入的函数
+		})
+
+		err := mockTargetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
-			err := VerifyNetworkConnectivity(result, targetNS, 1500, mockUtils)
+			err := VerifyNetworkConnectivity(result, mockTargetNS, 1500, mockUtils)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get default gateway for vpc route mode"))
 			return nil
@@ -148,12 +158,18 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 			},
 		}
 
-		mockUtils.On("SendIcmpProbeInNetNS", targetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(false, fmt.Errorf("failed to send ICMP probe"))
+		mockUtils.On("SendIcmpProbeInNetNS", mockTargetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(false, fmt.Errorf("failed to send ICMP probe"))
 
-		err := targetNS.Do(func(ns.NetNS) error {
+		// 模拟 targetNS.Do 调用成功
+		mockTargetNS.On("Do", mock.AnythingOfType("func(ns.NetNS) error")).Return(nil).Run(func(args mock.Arguments) {
+			fn := args.Get(0).(func(ns.NetNS) error)
+			fn(mockTargetNS) // 执行传入的函数
+		})
+
+		err := mockTargetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
-			err := VerifyNetworkConnectivity(result, targetNS, 1500, mockUtils)
+			err := VerifyNetworkConnectivity(result, mockTargetNS, 1500, mockUtils)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to verify network connectivity"))
 			return nil
@@ -174,12 +190,18 @@ var _ = Describe("VerifyNetworkConnectivity", func() {
 			},
 		}
 
-		mockUtils.On("SendIcmpProbeInNetNS", targetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(false, nil)
+		mockUtils.On("SendIcmpProbeInNetNS", mockTargetNS, net.ParseIP("192.168.1.10"), net.ParseIP("192.168.1.1"), 1500).Return(false, nil)
 
-		err := targetNS.Do(func(ns.NetNS) error {
+		// 模拟 targetNS.Do 调用成功
+		mockTargetNS.On("Do", mock.AnythingOfType("func(ns.NetNS) error")).Return(nil).Run(func(args mock.Arguments) {
+			fn := args.Get(0).(func(ns.NetNS) error)
+			fn(mockTargetNS) // 执行传入的函数
+		})
+
+		err := mockTargetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 
-			err := VerifyNetworkConnectivity(result, targetNS, 1500, mockUtils)
+			err := VerifyNetworkConnectivity(result, mockTargetNS, 1500, mockUtils)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to ping gateway"))
 			return nil

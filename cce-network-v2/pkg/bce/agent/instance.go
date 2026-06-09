@@ -60,6 +60,11 @@ func GetInstanceID() (string, error) {
 	return defaultMetaClient.GetInstanceID()
 }
 
+// GetFeatureList returns the feature list including ERI and ENI quota
+func GetFeatureList() (*metadata.FeatureList, error) {
+	return defaultMetaClient.GetFeatureList()
+}
+
 // TODO: In 2.12, HPAS could only use BCC, but in 2.13, we should support both BBC, EBC and EHC.
 func GenerateENISpec() (eni *api.ENISpec, err error) {
 	vpcID, instanceType, instanceSpecType, availabilityZone, err := GetInstanceMetadata()

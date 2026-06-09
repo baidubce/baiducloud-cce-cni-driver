@@ -16,15 +16,20 @@ package rdma
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
@@ -34,7 +39,9 @@ import (
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 )
 
 const (
@@ -48,6 +55,12 @@ type rdmaNetResourceSetWrapper struct {
 
 	// rdmaeni is the eni of the node
 	rdmaENIName string
+
+	// nextCreateENITime tracks cooling down period for ENI creation
+	nextCreateENITime *time.Time
+
+	// creatingENI tracks ENI being created
+	creatingENI *ccev2.ENI
 }
 
 func newRdmaNetResourceSetWrapper(super *bceRDMANetResourceSet) *rdmaNetResourceSetWrapper {
@@ -95,10 +108,14 @@ func (n *rdmaNetResourceSetWrapper) ensureRdmaENI() (*ccev2.ENI, error) {
 		}
 		return ""
 	}
+	// If NRS is an ERI managed NRS, use special handling logic
+	if n.isERIManagedNRS() {
+		return n.handleERIManagedNRS()
+	}
 
 	if n.rdmaENIName != "" {
 		eni, err := n.manager.eniLister.Get(n.rdmaENIName)
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			goto forceGetFromIaaS
 		}
 		eni = eni.DeepCopy()
@@ -180,7 +197,7 @@ forceGetFromIaaS:
 
 	var ctx = context.Background()
 	eni, err := n.manager.eniLister.Get(rdmaEniId)
-	if errors.IsNotFound(err) {
+	if k8serrors.IsNotFound(err) {
 		// the hpc or eri do not use ensure subnet object
 
 		var (
@@ -237,12 +254,17 @@ forceGetFromIaaS:
 			return nil, fmt.Errorf("failed to create %s ENI: %w", vifFeatures, err)
 		}
 		n.log.Infof("create %s ENI %s resource successed", vifFeatures, eni.Name)
-		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
-		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to update %s ENI %s status: %w", vifFeatures, eni.Name, err)
+		// ERI managed RDMA NRS ENI does not need to update status to inuse here
+		if !n.isERIManagedNRS() {
+			(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+			_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to update %s ENI %s status: %w", vifFeatures, eni.Name, err)
+			}
+			n.log.Infof("update %s ENI %s status successed", vifFeatures, eni.Name)
+		} else {
+			n.log.Infof("Skip updating ERI managed ENI %s status to inuse", eni.Name)
 		}
-		n.log.Infof("update %s ENI %s status successed", vifFeatures, eni.Name)
 	} else if err != nil {
 		n.log.Errorf("failed to get %s ENI %s resource: %v", vifFeatures, eni.Name, err)
 		return nil, err
@@ -269,7 +291,17 @@ func (n *rdmaNetResourceSetWrapper) refreshBCCInfo() (*bccapi.InstanceModel, err
 	}
 	n.limiterLock.Unlock()
 
-	bccInfo, err := n.manager.bceClient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	if err != nil {
+		return nil, err
+	}
+	var bccInfo *bccapi.InstanceModel
+	if nrsType == string(metadata.InstanceTypeExHPAS) {
+		bccInfo, err = n.manager.hpasClient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	} else {
+		bccInfo, err = n.manager.bceClientd.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	}
+
 	if err != nil {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return nil, err
@@ -311,9 +343,13 @@ func (n *rdmaNetResourceSetWrapper) refreshENIQuota(scopeLog *logrus.Entry) (Rdm
 
 	n.limiterLock.Lock()
 	defer n.limiterLock.Unlock()
-
-	// default rdma ip quota
-	eniQuota := newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClient)
+	var eniQuota RdmaEniQuotaManager
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	if nrsType == string(metadata.InstanceTypeExHPAS) {
+		eniQuota = newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.hpasClient)
+	} else {
+		eniQuota = newCustomerIPQuota(scopeLog, client, k8sNode, n.instanceID, n.manager.bceClientd)
+	}
 
 	// Expect all BCC models to support ERI
 	if bccInfo.EriQuota != 0 {
@@ -334,6 +370,9 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 		eni, err := n.ensureRdmaENI()
 		if err != nil {
 			return nil, nil, err
+		}
+		if eni == nil {
+			return nil, nil, fmt.Errorf("eni is nil")
 		}
 		// allocate ips
 		ips, err := iaasClient.BatchAddPrivateIP(ctx, eni.Spec.ID, []string{}, ipv4ToAllocate)
@@ -361,11 +400,381 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 
 // createInterface implements realNodeInf
 func (n *rdmaNetResourceSetWrapper) createInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
-	_, err = n.ensureRdmaENI()
-	if err != nil {
-		return 0, "", err
+	// Check if this is ERI management mode
+	if n.isERIManagedNRS() {
+		return n.createERIInterface(ctx, allocation, scopedLog)
+	} else {
+		// Traditional RDMA ENI creation logic
+		_, err = n.ensureRdmaENI()
+		if err != nil {
+			return 0, "", err
+		}
 	}
 	return 1, "", nil
+}
+
+// createERIInterface creates ERI interface using dedicated method, following BCC mode
+func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allocation *ipam.AllocationAction, scopedLog *logrus.Entry) (interfaceNum int, msg string, err error) {
+	n.mutex.RLock()
+	resource := n.k8sObj
+	n.mutex.RUnlock()
+
+	// Check cooling time (following BCC mode)
+	if n.nextCreateENITime != nil && n.nextCreateENITime.After(time.Now()) {
+		msg = fmt.Sprintf("unable to create new ERI: cooling down, next available time is %v", n.nextCreateENITime.Format(time.RFC3339))
+		err = errors.New(msg)
+		return
+	}
+
+	var (
+		rdmaEniQuota      = n.getRdmaEniQuota()
+		availableERICount = 0
+	)
+
+	if rdmaEniQuota == nil {
+		msg = "unable to get RDMA ENI quota"
+		err = errors.New(msg)
+		return
+	}
+
+	// Count current available ERI numbers
+	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
+			e, ok := iface.Resource.(*eniResource)
+			if !ok {
+				return nil
+			}
+			// Only count ERI type ENIs
+			if e.Spec.Type == ccev2.ENIForERI {
+				availableERICount++
+			}
+			return nil
+		})
+
+	// Check if maximum ERI limit is reached
+	if availableERICount >= defaltRdmaEniNums {
+		msg = "unable to create ERI: maximum ERI limit reached"
+		err = errors.New(msg)
+		return
+	}
+
+	// Check if currently creating ERI
+	if n.creatingENI != nil {
+		msg = "unable to create ERI: currently creating ERI"
+		err = errors.New("currently creating ERI")
+		return
+	}
+
+	vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
+	if vifFeatures != bceutils.OverlayRDMA {
+		msg = "ERI managed NRS must have elastic_rdma vif features"
+		err = errors.New(msg)
+		return
+	}
+
+	vpcID := n.k8sObj.Spec.ENI.VpcID
+
+	// Get available subnets (referencing BCC mode)
+	availableSubnets := n.bceRDMANetResourceSet.FilterAvailableSubnetIds(resource.Spec.ENI.SubnetIDs, 1)
+	if len(availableSubnets) == 0 {
+		msg = fmt.Sprintf("no matching subnet available for ERI creation (VPC=%s AZ=%s SubnetIDs=%v)",
+			vpcID,
+			resource.Spec.ENI.AvailabilityZone,
+			resource.Spec.ENI.SubnetIDs,
+		)
+		err = errors.New(msg)
+		return
+	}
+
+	// Select the best subnet
+	bestSubnet := n.searchMaxAvailableSubnet(availableSubnets)
+	if bestSubnet == nil {
+		msg = "unable to find best subnet for ERI creation"
+		err = errors.New(msg)
+		return
+	}
+
+	scopedLog = scopedLog.WithFields(logrus.Fields{
+		"vpcID":      vpcID,
+		"instanceID": n.instanceID,
+		"node":       resource.Name,
+		"subnetID":   bestSubnet.Name,
+	})
+	scopedLog.Info("No ERI available, creating new ERI")
+
+	interfaceNum = 1
+	err = n.createERIOnCluster(ctx, scopedLog, resource, vifFeatures, vpcID, bestSubnet)
+
+	// Set cooling time (referencing BCC mode)
+	n.mutex.Lock()
+	if err != nil {
+		// If creation fails, set cooling time
+		next := time.Now().Add(time.Second * 5) // 5 seconds cooling time
+		n.nextCreateENITime = &next
+	} else {
+		n.nextCreateENITime = nil
+	}
+	n.mutex.Unlock()
+
+	allocation.PoolID = ipamTypes.PoolID(bestSubnet.Name)
+	allocation.InterfaceID = n.rdmaENIName
+
+	return
+}
+
+// searchMaxAvailableSubnet searches for the best available subnet
+func (n *rdmaNetResourceSetWrapper) searchMaxAvailableSubnet(subnets []*bcesync.BorrowedSubnet) *bcesync.BorrowedSubnet {
+	var bestSubnet *bcesync.BorrowedSubnet
+	for _, sbn := range subnets {
+		if sbn.Spec.Exclusive {
+			continue
+		}
+		if bestSubnet == nil || bestSubnet.BorrowedAvailableIPsCount < sbn.BorrowedAvailableIPsCount {
+			bestSubnet = sbn
+		}
+	}
+	return bestSubnet
+}
+
+// createERIOnCluster creates an ERI in the cluster
+func (n *rdmaNetResourceSetWrapper) createERIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, vifFeatures, vpcID string, bestSubnet *bcesync.BorrowedSubnet) error {
+	iaasClient := n.manager.getIaaSClient(vifFeatures)
+
+	// First check if ERI already exists
+	eriList, err := iaasClient.ListEnis(ctx, vpcID, n.instanceID)
+	if err != nil {
+		scopedLog.WithError(err).Error("Failed to list existing ERIs")
+		return fmt.Errorf("failed to list existing ERIs: %w", err)
+	}
+
+	var rdmaEni *client.EniResult
+	if len(eriList) == 0 {
+		// 1. First build the spec for ENI CR (based on known information)
+		eniSpec := n.buildENISpecForERI(resource, vifFeatures, vpcID, bestSubnet)
+
+		// 2. Actually create the ERI, return ERI ID if successful
+		scopedLog.Info("Creating new ERI via IaaS API")
+		eriID, err := n.createERI(ctx, vpcID, n.instanceID, vifFeatures, bestSubnet)
+		if err != nil {
+			scopedLog.WithError(err).Error("Failed to create ERI")
+			return fmt.Errorf("failed to create ERI: %w", err)
+		}
+		scopedLog.WithField("eriID", eriID).Info("Successfully created new ERI")
+
+		// 3. Directly use the ERI ID and known information to create ENI CR, avoiding re-reading
+		err = n.createENICRDirectly(ctx, scopedLog, eniSpec, eriID, resource, vifFeatures, vpcID)
+		if err != nil {
+			scopedLog.WithError(err).Error("Failed to create ENI CR for ERI")
+			return fmt.Errorf("failed to create ENI CR for ERI: %w", err)
+		}
+	} else {
+		// Use existing ERI (in this case, real data needs to be used)
+		rdmaEni = &eriList[0]
+		scopedLog.WithField("eriID", rdmaEni.Id).Info("Using existing ERI")
+
+		err = n.createENICRForExistingERI(ctx, scopedLog, resource, rdmaEni, vifFeatures, vpcID)
+		if err != nil {
+			scopedLog.WithError(err).Error("Failed to create ENI CR for existing ERI")
+			return fmt.Errorf("failed to create ENI CR for existing ERI: %w", err)
+		}
+	}
+
+	scopedLog.Info("Successfully created ERI interface")
+	return nil
+}
+
+// buildENISpecForERI builds the basic spec for ENI CR of ERI
+func (n *rdmaNetResourceSetWrapper) buildENISpecForERI(resource *ccev2.NetResourceSet, vifFeatures, vpcID string, bestSubnet *bcesync.BorrowedSubnet) *ccev2.ENISpec {
+	return &ccev2.ENISpec{
+		NodeName: resource.Name,
+		Type:     ccev2.ENIForERI,
+		UseMode:  ccev2.ENIUseModeSecondaryIP,
+		ENI: models.ENI{
+			// Fill in with known information to avoid subsequent re-reading
+			VpcID:      vpcID,
+			InstanceID: n.instanceID,
+			SubnetID:   bestSubnet.Name,
+			ZoneName:   bestSubnet.Spec.AvailabilityZone,
+			// ID, Name, MacAddress, PrivateIPSet will be filled after ERI creation
+		},
+		// Other ENI spec fields
+		RouteTableOffset:          resource.Spec.ENI.RouteTableOffset,
+		InstallSourceBasedRouting: resource.Spec.ENI.InstallSourceBasedRouting,
+	}
+}
+
+// ENICRCreateOptions encapsulates the parameters for creating ENI CR
+type ENICRCreateOptions struct {
+	EniID         string
+	EniSpec       *ccev2.ENISpec        // Optional, create default spec if nil
+	RdmaEni       *client.EniResult     // Optional, used to fill in real ERI data
+	Resource      *ccev2.NetResourceSet // Used to generate OwnerReference
+	VifFeatures   string
+	VpcID         string
+	MacAddress    string // Used to generate labelSelectorValue
+	CheckExisting bool   // Whether to check existing ENI CR
+}
+
+// createENICR unified method for creating ENI CR, merges the logic of the previous three methods
+func (n *rdmaNetResourceSetWrapper) createENICR(ctx context.Context, scopedLog *logrus.Entry, opts ENICRCreateOptions) error {
+	// Build ENI Spec
+	var finalSpec ccev2.ENISpec
+	if opts.EniSpec != nil {
+		finalSpec = *opts.EniSpec // Copy the passed-in spec
+	} else {
+		// Create default spec
+		finalSpec = ccev2.ENISpec{
+			NodeName: n.k8sObj.Name,
+			Type:     ccev2.ENIForERI,
+			UseMode:  ccev2.ENIUseModeSecondaryIP,
+			ENI: models.ENI{
+				VpcID:      opts.VpcID,
+				InstanceID: n.instanceID,
+			},
+		}
+	}
+
+	// Fill in ENI basic information
+	finalSpec.ENI.ID = opts.EniID
+	finalSpec.ENI.Name = opts.EniID
+
+	// Handle IP set and ERI detailed information
+	if opts.RdmaEni != nil {
+		// If there is complete ERI information, fill in the real data
+		var ipv4IPSet []*models.PrivateIP
+		for _, v := range opts.RdmaEni.PrivateIpSet {
+			ipv4IPSet = append(ipv4IPSet, &models.PrivateIP{
+				PrivateIPAddress: v.PrivateIpAddress,
+				PublicIPAddress:  "",
+				SubnetID:         opts.RdmaEni.SubnetID,
+				Primary:          v.Primary,
+			})
+		}
+		finalSpec.ENI.SubnetID = opts.RdmaEni.SubnetID
+		finalSpec.ENI.ZoneName = opts.RdmaEni.ZoneName
+		finalSpec.ENI.PrivateIPSet = ipv4IPSet
+		finalSpec.ENI.IPV6PrivateIPSet = []*models.PrivateIP{}
+		finalSpec.ENI.MacAddress = opts.RdmaEni.MacAddress
+		finalSpec.Type = ccev2.ENIType(opts.RdmaEni.Type)
+		opts.MacAddress = opts.RdmaEni.MacAddress // Use real MAC address
+	} else {
+		// Only ERI ID, create an empty IP set
+		finalSpec.ENI.PrivateIPSet = []*models.PrivateIP{}
+		finalSpec.ENI.IPV6PrivateIPSet = []*models.PrivateIP{}
+		finalSpec.ENI.MacAddress = opts.MacAddress
+	}
+
+	// Generate label selector value
+	getOwnerReference := func() string {
+		or := opts.Resource.GetOwnerReferences()
+		for _, ref := range or {
+			if ref.Kind == "Node" {
+				return ref.Name
+			}
+		}
+		return ""
+	}
+
+	labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(opts.Resource.Name,
+		getOwnerReference(), opts.Resource.Spec.InstanceID, "", opts.VifFeatures)
+
+	// Check if existing ENI CR already exists (if needed)
+	if opts.CheckExisting {
+		existingEni, err := n.manager.eniLister.Get(opts.EniID)
+		if err != nil && !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("failed to check existing ENI CR from cache: %w", err)
+		}
+
+		if err == nil && existingEni != nil {
+			// ENI CR already exists, check if labelSelectorValue matches
+			if existingEni.Labels[k8s.LabelNodeName] != labelSelectorValue {
+				return fmt.Errorf("existing ENI CR %s has mismatched labelSelectorValue: expected %s, got %s",
+					existingEni.Name, labelSelectorValue, existingEni.Labels[k8s.LabelNodeName])
+			}
+
+			// labelSelectorValue matches, set rdmaENIName and return
+			n.mutex.Lock()
+			n.rdmaENIName = existingEni.Name
+			n.mutex.Unlock()
+
+			scopedLog.WithField("eniCR", existingEni.Name).Info("Found existing ENI CR with matching labelSelectorValue")
+			return nil
+		}
+	}
+
+	// Create new ENI CR
+	eni := &ccev2.ENI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: opts.EniID,
+			Labels: map[string]string{
+				k8s.LabelInstanceID: n.instanceID,
+				k8s.LabelNodeName:   labelSelectorValue,
+				k8s.LabelENIType:    n.manager.getIaaSClient(opts.VifFeatures).GetRDMAIntType(),
+				k8s.VPCIDLabel:      opts.VpcID,
+			},
+			Annotations: map[string]string{
+				k8s.AnnotationERIManaged: "true",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: ccev2.SchemeGroupVersion.String(),
+				Kind:       ccev2.NRSKindDefinition,
+				Name:       opts.Resource.Name,
+				UID:        opts.Resource.UID,
+			}},
+		},
+		Spec:   finalSpec,
+		Status: ccev2.ENIStatus{},
+	}
+
+	// Manage creation status
+	n.mutex.Lock()
+	n.creatingENI = eni
+	n.mutex.Unlock()
+
+	defer func() {
+		n.mutex.Lock()
+		n.creatingENI = nil
+		n.mutex.Unlock()
+	}()
+
+	// Create ENI CR
+	createdEni, err := k8s.CCEClient().CceV2().ENIs().Create(ctx, eni, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create ERI managed ENI CR: %w", err)
+	}
+
+	// Set ENI name
+	n.mutex.Lock()
+	n.rdmaENIName = createdEni.Name
+	n.mutex.Unlock()
+
+	scopedLog.WithField("eniCR", createdEni.Name).Info("Successfully created ENI CR")
+	return nil
+}
+
+// createENICRDirectly creates ENI CR directly using ERI ID and known information
+func (n *rdmaNetResourceSetWrapper) createENICRDirectly(ctx context.Context, scopedLog *logrus.Entry, eniSpec *ccev2.ENISpec, eriID string, resource *ccev2.NetResourceSet, vifFeatures, vpcID string) error {
+	return n.createENICR(ctx, scopedLog, ENICRCreateOptions{
+		EniID:         eriID,
+		EniSpec:       eniSpec,
+		Resource:      resource,
+		VifFeatures:   vifFeatures,
+		VpcID:         vpcID,
+		MacAddress:    "", // New created ERI, MAC address temporarily empty
+		CheckExisting: false,
+	})
+}
+
+// createENICRForExistingERI creates ENI CR for an existing ERI
+func (n *rdmaNetResourceSetWrapper) createENICRForExistingERI(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, rdmaEni *client.EniResult, vifFeatures, vpcID string) error {
+	return n.createENICR(ctx, scopedLog, ENICRCreateOptions{
+		EniID:         rdmaEni.Id,
+		RdmaEni:       rdmaEni,
+		Resource:      n.k8sObj, // Use current NRS
+		VifFeatures:   n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures],
+		VpcID:         vpcID,
+		CheckExisting: true, // Check existing ENI CR
+	})
 }
 
 // releaseIPs implements realNodeInf
@@ -433,4 +842,153 @@ func (n *rdmaNetResourceSetWrapper) getMinimumAllocatable() int {
 		min = defaults.IPAMPreAllocation
 	}
 	return min
+}
+
+// isERIManagedNRS checks whether the current NRS is an ERI managed NRS
+func (n *rdmaNetResourceSetWrapper) isERIManagedNRS() bool {
+	// Check if the NRS has the annotation for ERI management
+	if value, exists := n.k8sObj.Annotations[k8s.AnnotationERIManaged]; exists && value == "true" {
+		return true
+	}
+	return false
+}
+
+// handleERIManagedNRS handles the special logic for ERI managed NRS
+func (n *rdmaNetResourceSetWrapper) handleERIManagedNRS() (*ccev2.ENI, error) {
+	// Get VIF features
+	vifFeatures := n.bceRDMANetResourceSet.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
+	if vifFeatures != "elastic_rdma" {
+		return nil, fmt.Errorf("ERI managed NRS must have elastic_rdma vif features")
+	}
+
+	// Generate label selector value
+	getOwnerReference := func() string {
+		or := n.k8sObj.GetOwnerReferences()
+		for _, ref := range or {
+			if ref.Kind == "Node" {
+				return ref.Name
+			}
+		}
+		return ""
+	}
+
+	labelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(n.k8sObj.Name,
+		getOwnerReference(), n.k8sObj.Spec.InstanceID, "", vifFeatures)
+
+	// First check if the corresponding ENI CR already exists
+	requirement := metav1.LabelSelectorRequirement{
+		Key:      k8s.LabelNodeName,
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   []string{labelSelectorValue},
+	}
+	labelSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{requirement},
+	}
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create label selector: %v", err)
+	}
+
+	k8sRdmaEnis, err := n.manager.eniLister.List(selector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list enis: %w", err)
+	}
+
+	// If ENI CR already exists, return directly
+	if len(k8sRdmaEnis) > 0 {
+		existingEni := k8sRdmaEnis[0]
+		n.rdmaENIName = existingEni.Name
+		n.log.Infof("Found existing ERI managed ENI %s", existingEni.Name)
+		return existingEni, nil
+	}
+	return nil, nil
+}
+
+// createERI creates an ERI interface and returns the created ERI ID
+func (n *rdmaNetResourceSetWrapper) createERI(ctx context.Context, vpcID, instanceID, vifFeatures string, bestSubnet *bcesync.BorrowedSubnet) (string, error) {
+	// 1. Generate ERI name (referencing ENI naming rules)
+	eriName := n.createNameForERI(option.Config.ClusterID, instanceID, n.k8sObj.Name)
+
+	// 2. Construct ERI creation parameters (referencing ENI creation parameters)
+	createArgs := &enisdk.CreateEniArgs{
+		Name:                        eriName,
+		SubnetId:                    bestSubnet.Name,
+		InstanceId:                  instanceID,
+		SecurityGroupIds:            n.k8sObj.Spec.ENI.SecurityGroups,
+		EnterpriseSecurityGroupIds:  n.k8sObj.Spec.ENI.EnterpriseSecurityGroupList,
+		Description:                 defaults.DefaultENIDescription,
+		NetworkInterfaceTrafficMode: "highPerformance", // Specify as ERI type (highPerformance means creating ERI, standard means creating ENI)
+		PrivateIpSet: []enisdk.PrivateIp{{
+			Primary: true,
+		}},
+	}
+
+	// Ensure enterprise security group ID is not nil
+	if createArgs.EnterpriseSecurityGroupIds == nil {
+		createArgs.EnterpriseSecurityGroupIds = []string{}
+	}
+
+	// 3. Call cloud API to create ERI
+	scopedLog := n.log.WithFields(logrus.Fields{
+		"eriName":        eriName,
+		"subnetID":       bestSubnet.Name,
+		"instanceID":     instanceID,
+		"vpcID":          vpcID,
+		"securityGroups": createArgs.SecurityGroupIds,
+	})
+
+	scopedLog.Info("Creating ERI via cloud API")
+
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	if err != nil {
+		return "", err
+	}
+	var eriID string
+	if nrsType == string(metadata.InstanceTypeExHPAS) {
+		eriID, err = n.manager.hpasClient.CreateENI(ctx, createArgs)
+	} else {
+		eriID, err = n.manager.bceClientd.CreateENI(ctx, createArgs)
+	}
+
+	if err != nil {
+		scopedLog.WithError(err).Error("Failed to create ERI")
+		return "", fmt.Errorf("failed to create ERI: %w", err)
+	}
+
+	scopedLog.WithField("eriID", eriID).Info("ERI created successfully")
+	return eriID, nil
+}
+
+// createNameForERI creates a name for ERI (referencing ENI naming rules)
+func (n *rdmaNetResourceSetWrapper) createNameForERI(clusterID, instanceID, nodeName string) string {
+	hash := sha1.Sum([]byte(time.Now().String()))
+	suffix := hex.EncodeToString(hash[:])
+	// ERI name length is 64, similar to ENI
+	name := fmt.Sprintf("%s/%s/%s-eri", clusterID, instanceID, nodeName)
+	if len(name) > 57 {
+		name = name[:57]
+	}
+	return fmt.Sprintf("%s/%s", name, suffix[:6])
+}
+
+// deleteERI deletes ERI (referencing ENI deletion logic)
+func (n *rdmaNetResourceSetWrapper) deleteERI(ctx context.Context, eriID string, scopedLog *logrus.Entry) {
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(n.instanceID)
+	if err != nil {
+		return
+	}
+
+	if nrsType == string(metadata.InstanceTypeExHPAS) {
+		err = n.manager.hpasClient.DeleteENI(ctx, eriID)
+	} else {
+		err = n.manager.bceClientd.DeleteENI(ctx, eriID)
+	}
+
+	if err != nil {
+		scopedLog.WithField("eriID", eriID).
+			WithError(err).Error("Failed to delete ERI")
+	} else {
+		scopedLog.WithField("eriID", eriID).
+			Info("Successfully deleted ERI")
+	}
 }

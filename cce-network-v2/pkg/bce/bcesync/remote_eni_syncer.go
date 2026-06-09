@@ -15,6 +15,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -25,6 +26,7 @@ import (
 type remoteVpcEniSyncher struct {
 	updater     syncer.ENIUpdater
 	bceclient   cloud.Interface
+	hpasclient  cloud.Interface
 	syncManager *SyncManager[eni.Eni]
 
 	VPCIDs    string
@@ -37,9 +39,42 @@ func (es *remoteVpcEniSyncher) setENIUpdater(updater syncer.ENIUpdater) {
 	es.updater = updater
 }
 
+// getClientForENI 根据ENI ID获取对应的客户端类型
+func (es *remoteVpcEniSyncher) getClientForENI(ctx context.Context, eniID string) cloud.Interface {
+	// 首先尝试通过ENI ID获取ENI资源
+	eniResource, err := es.updater.Lister().Get(eniID)
+	if err != nil {
+		// 如果获取ENI资源失败，使用默认的bceclient
+		log.WithField(taskLogField, eniControllerName).
+			WithField("eniID", eniID).
+			WithError(err).
+			Warnf("failed to get ENI resource for eniID %s, using default client", eniID)
+		return es.bceclient
+	}
+
+	// 通过ENI的InstanceID获取对应的NetResourceSet
+	nrsType, err := bceutils.GetNrsTypeByInstanceID(eniResource.Spec.ENI.InstanceID)
+	if err != nil {
+		log.WithField(taskLogField, eniControllerName).
+			WithField("eniID", eniID).
+			WithField("instanceID", eniResource.Spec.ENI.InstanceID).
+			WithError(err).
+			Warnf("failed to get NRS type for instanceID %s, using default client", eniResource.Spec.ENI.InstanceID)
+		return es.bceclient
+	}
+
+	if nrsType == string(metadata.InstanceTypeExHPAS) {
+		return es.hpasclient
+	}
+
+	// 默认使用bceclient
+	return es.bceclient
+}
+
 // statENI returns one ENI with the given name from bce cloud
 func (es *remoteVpcEniSyncher) statENI(ctx context.Context, eniID string) (*eni.Eni, error) {
-	eniCache, err := es.bceclient.StatENI(ctx, eniID)
+	client := es.getClientForENI(ctx, eniID)
+	eniCache, err := client.StatENI(ctx, eniID)
 	if err != nil {
 		log.WithField(taskLogField, eniControllerName).
 			WithField("eniID", eniID).

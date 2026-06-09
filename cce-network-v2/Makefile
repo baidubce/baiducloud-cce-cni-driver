@@ -163,6 +163,10 @@ init-coverage: ## Initialize converage report for CCE integration-tests.
 	$(QUIET) echo "mode: count" > coverage-all-tmp.out
 	$(QUIET) echo "mode: count" > coverage.out
 
+test-env:
+	docker build -t cce-network-test -f ./test_env.Dockerfile --build-arg WORKDIR=cce-network-v2 ..
+
+
 integration-tests: GO_TAGS_FLAGS+=integration_tests
 integration-tests: ## Runs all integration-tests for CCE.
 ifeq ($(SKIP_VET),"false")

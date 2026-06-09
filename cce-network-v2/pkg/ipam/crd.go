@@ -293,6 +293,7 @@ func (n *nodeStore) deleteLocalNodeResource() {
 // the local node has been added or updated. It updates the available IPs based
 // on the custom resource passed into the function.
 func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
+
 	n.mutex.Lock()
 	n.ownNode = node
 	restore := n.hasRestoreFinished
@@ -426,6 +427,10 @@ func (n *nodeStore) setOwnNodeWithoutPoolUpdate(node *ccev2.NetResourceSet) {
 // implement the trigger.TriggerFunc interface despite the argument being
 // unused.
 func (n *nodeStore) refreshNodeTrigger(reasons []string) {
+	// show the reasons for the refresh in this particular nodeStore
+	if len(reasons) > 0 {
+		log.WithField("reasons", reasons).Debug("Updating NRS due to IP allocation changes")
+	}
 	if err := n.refreshNode(); err != nil {
 		log.WithError(err).Warning("Unable to update NetResourceSet custom resource")
 		n.refreshTrigger.TriggerWithReason("retry after error")

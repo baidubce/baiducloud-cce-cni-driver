@@ -1,6 +1,7 @@
-FROM registry.baidubce.com/cce-plugin-dev/ubuntu-net-22-04:1.1
+# FROM registry.baidubce.com/cce-plugin-dev/ubuntu-net-22-04:1.1
+FROM registry.baidubce.com/cce-plugin-dev/ubuntu-net-22-04:1.2
 
-LABEL maintainer="WeiweiWang<wangweiwei22@baidu.com>"
+LABEL maintainer="ZhongZhaowei<zhongzhaowei@baidu.com>"
 WORKDIR /home/cce
 
 

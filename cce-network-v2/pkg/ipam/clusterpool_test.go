@@ -15,11 +15,52 @@ import (
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
+	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 )
+
+// testConfigurationClusterPool supports both IPv4 and IPv6 based on the family parameter
+type testConfigurationClusterPool struct {
+	family Family
+}
+
+func (t *testConfigurationClusterPool) IPv4Enabled() bool {
+	return t.family == IPv4
+}
+
+func (t *testConfigurationClusterPool) IPv6Enabled() bool {
+	return t.family == IPv6
+}
+
+func (t *testConfigurationClusterPool) HealthCheckingEnabled() bool {
+	return true
+}
+
+func (t *testConfigurationClusterPool) UnreachableRoutesEnabled() bool {
+	return false
+}
+
+func (t *testConfigurationClusterPool) IPAMMode() string {
+	return ipamOption.IPAMClusterPool
+}
+
+func (t *testConfigurationClusterPool) SetIPv4NativeRoutingCIDR(cidr *cidr.CIDR) {}
+
+func (t *testConfigurationClusterPool) GetIPv4NativeRoutingCIDR() *cidr.CIDR {
+	return nil
+}
+
+func (t *testConfigurationClusterPool) GetCCEEndpointGC() time.Duration {
+	return 0
+}
+
+func (t *testConfigurationClusterPool) GetFixedIPTimeout() time.Duration {
+	return 0
+}
 
 type fakeK8sNetResourceSetAPI struct {
 	mutex lock.Mutex
@@ -643,7 +684,7 @@ func TestNewCRDWatcher(t *testing.T) {
 		t.Run(string(tc.family), func(t *testing.T) {
 			RegisterTestingT(t)
 
-			fakeConfig := &testConfiguration{}
+			fakeConfig := &testConfigurationClusterPool{family: tc.family}
 			fakeK8sEventRegister := &ownerMock{}
 			events := make(chan string, 1)
 			fakeK8sNetResourceSetAPI := &fakeK8sNetResourceSetAPI{
@@ -778,7 +819,7 @@ func TestNewCRDWatcher(t *testing.T) {
 func TestNewCRDWatcher_restoreFinished(t *testing.T) {
 	RegisterTestingT(t)
 
-	fakeConfig := &testConfiguration{}
+	fakeConfig := &testConfigurationClusterPool{family: IPv4}
 	fakeK8sEventRegister := &ownerMock{}
 	events := make(chan string, 1)
 	fakeK8sNetResourceSetAPI := &fakeK8sNetResourceSetAPI{

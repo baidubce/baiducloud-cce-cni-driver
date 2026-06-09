@@ -40,7 +40,9 @@ set-env:
 
 #make prepare, download dependencies
 prepare: set-env
-	mkdir -p $(OUTDIR)
+	mkdir -p $(OUTDIR)/deploy
+	mkdir -p $(OUTDIR)/tools
+	mkdir -p $(OUTDIR)/arm
 	go env
 
 gomod: set-env
@@ -51,7 +53,14 @@ compile: build
 
 build: prepare
 	make -C cce-network-v2 build
-	mv cce-network-v2/output $(OUTDIR)/cce-network-v2
+	mv cce-network-v2/output $(OUTDIR)/
+	make -C cce-network-v2 build TARGET_ARCH=arm64
+	mv cce-network-v2/output $(OUTDIR)/arm/
+	mv cce-network-v2/tools/cni $(OUTDIR)/tools/
+	mv cce-network-v2/tools/cni-arm $(OUTDIR)/tools/
+	mv cce-network-v2/deploy/dockerfile $(OUTDIR)/deploy/
+	mv cce-network-v2/VERSION $(OUTDIR)/
+	mv cce-network-v2/deploy/cce-network-v2 $(OUTDIR)/
 
 # make test, test your code
 test: prepare test-case

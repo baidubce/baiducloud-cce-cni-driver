@@ -992,7 +992,11 @@ func (n *NetResource) PopulateIPReleaseStatus(node *v2.NetResourceSet) {
 		}
 		releaseStatus[ip] = ipamTypes.IPReleaseStatus(status)
 	}
-	node.Status.IPAM.ReleaseIPs = releaseStatus
+	if len(releaseStatus) > 0 {
+		node.Status.IPAM.ReleaseIPs = releaseStatus
+	} else {
+		node.Status.IPAM.ReleaseIPs = nil
+	}
 }
 
 // syncToAPIServer synchronizes the contents of the NetResourceSet resource

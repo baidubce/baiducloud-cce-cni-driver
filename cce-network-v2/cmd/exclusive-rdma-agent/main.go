@@ -44,8 +44,8 @@ var (
 	driverName       string // driver name used to identify the RDMA network device
 )
 
-func init() {
-
+// initFlags initializes and parses command line flags
+func initFlags() {
 	flag.StringVar(&conflistFilePath, "config", "", "path to the conflist file together with its name")
 	flag.StringVar(&resourceType, "rstype", "rdma", "set the resource type used to announce that pod needs rdma")
 	flag.StringVar(&driverName, "driver", "", "Set the driver name used to identify the RDMA network device")
@@ -63,7 +63,11 @@ func init() {
 	}
 }
 
+// main main 函数是程序的入口点，初始化标志和验证参数，然后启动代理。
 func main() {
+	// Initialize flags and validate arguments
+	initFlags()
+
 	// agent start
 	logger.Info("exclusive-rdma-agent is starting!")
 	run()

@@ -32,11 +32,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/endpoint"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nodediscovery"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/rate"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var (
@@ -85,7 +88,8 @@ func (h *postRDMAIPAM) Handle(params rdmaipamapi.PostRdmaipamParams) middleware.
 		}
 	}()
 
-	for masterMac, ri := range h.daemon.rdmaIpam {
+	hasAllocatedIP := false
+	for ipamKey, ri := range h.daemon.rdmaIpam {
 		var ipv4Result, ipv6Result *ipam.AllocationResult
 		ipv4Result, ipv6Result, err = ri.ADD(family, owner, containerID, netns)
 		if err != nil {
@@ -94,8 +98,30 @@ func (h *postRDMAIPAM) Handle(params rdmaipamapi.PostRdmaipamParams) middleware.
 			goto DELAPPLIED
 		}
 
+		// Skip if no IP was allocated (e.g., resource type mismatch)
+		if ipv4Result == nil && ipv6Result == nil {
+			scopeLog.Debugf("No IP allocated from IPAM %s, skipping", ipamKey)
+			continue
+		}
+
+		hasAllocatedIP = true
+
+		// Get the real MAC address
+		var actualMacAddress string
+		if endpointAllocator, ok := ri.(*endpoint.EndpointAllocator); ok {
+			// If it is an EndpointAllocator, get the real MAC address from its rdmaAttr
+			actualMacAddress = endpointAllocator.GetPrimaryMacAddress()
+			if actualMacAddress == "" {
+				// If the MAC address is empty, fall back to using ipamKey (compatible with traditional RDMA mode)
+				actualMacAddress = ipamKey
+			}
+		} else {
+			// In the case of non-EndpointAllocator, directly use ipamKey
+			actualMacAddress = ipamKey
+		}
+
 		if ipv4Result != nil {
-			ipv4Result.PrimaryMAC = masterMac
+			ipv4Result.PrimaryMAC = actualMacAddress
 		}
 
 		resp = &models.RDMAIPAMResponse{
@@ -116,6 +142,7 @@ func (h *postRDMAIPAM) Handle(params rdmaipamapi.PostRdmaipamParams) middleware.
 		}
 
 		if ipv6Result != nil {
+			ipv6Result.PrimaryMAC = actualMacAddress
 			resp.Address.IPV6 = ipv6Result.IP.String()
 			resp.IPV6 = &models.IPAMAddressResponse{
 				Cidrs:           ipv6Result.CIDRs,
@@ -129,13 +156,33 @@ func (h *postRDMAIPAM) Handle(params rdmaipamapi.PostRdmaipamParams) middleware.
 		scopeLog.WithField("resp", logfields.Repr(resp)).WithField("ipv4", resp.Address.IPV4).WithField("ipv6", resp.Address.IPV6).Debug("allocate next rdma ip success")
 		response.Payload = append(response.Payload, resp)
 	}
+
+	// If no IP was allocated from any IPAM instance, return empty but valid response
+	if !hasAllocatedIP {
+		scopeLog.Info("No RDMA IP allocated from any IPAM instance, returning empty response")
+		emptyResp := &models.RDMAIPAMResponse{
+			HostAddressing: node.GetNodeAddressing(),
+			Address:        &models.AddressPair{},
+		}
+		response.Payload = append(response.Payload, emptyResp)
+	}
 	scopeLog.WithField("response", logfields.Repr(response)).Debug("allocate rdma ips success")
 	return rdmaipamapi.NewPostRdmaipamCreated().WithPayload(response.Payload)
 
 DELAPPLIED:
 	for _, resp := range response.Payload {
-		for masterMac, ri := range h.daemon.rdmaIpam {
-			if (resp.IPV4 != nil && resp.IPV4.MasterMac == masterMac) || (resp.IPV6 != nil && resp.IPV6.MasterMac == masterMac) {
+		for ipamKey, ri := range h.daemon.rdmaIpam {
+			var actualMacAddress string
+			if endpointAllocator, ok := ri.(*endpoint.EndpointAllocator); ok {
+				actualMacAddress = endpointAllocator.GetPrimaryMacAddress()
+				if actualMacAddress == "" {
+					actualMacAddress = ipamKey
+				}
+			} else {
+				actualMacAddress = ipamKey
+			}
+
+			if (resp.IPV4 != nil && resp.IPV4.MasterMac == actualMacAddress) || (resp.IPV6 != nil && resp.IPV6.MasterMac == actualMacAddress) {
 				if err = ri.DEL(owner, containerID); err != nil {
 					scopeLog.WithField("ipv4", resp.Address.IPV4).WithField("ipv6", resp.Address.IPV6).WithError(err).Error("delete rdma ip error")
 					allErr = append(allErr, err)
@@ -290,27 +337,71 @@ func (d *Daemon) configureRDMAIPAM() {
 	}
 }
 
+// createERIManagedIPAMInstance creates an ERI managed IPAM instance for the given daemon
+func (d *Daemon) createERIManagedIPAMInstance() {
+	if !option.Config.EnableERIManagement {
+		return
+	}
+
+	rdmaIpamLog.Info("ERI management is enabled, creating ERI managed IPAM instance")
+
+	nodeName := nodeTypes.GetName()
+	eriManagedNRSName := bceutils.GetEriMangedNrsName(nodeName)
+
+	// Copy configuration and set to RDMA mode
+	cpy := deepcopy.Copy(option.Config)
+	config := cpy.(*option.DaemonConfig)
+	config.IPAM = ipamOption.IPAMRdma
+
+	// Create ERIOwnerWrapper to wrap rdmaDiscovery for independent UpdateNetResourceSetResource method
+	eriOwner := nodediscovery.NewERIOwnerWrapper(d.rdmaDiscovery)
+
+	// Directly create ERI managed IPAM instance and put it in rdmaIpam
+	d.rdmaIpam[eriManagedNRSName] = endpoint.NewIPAM(
+		eriManagedNRSName,
+		true,
+		"",                   // MAC address is empty initially, can be updated later via UpdatePrimaryMacAddress
+		bceutils.OverlayRDMA, // ERI management uses elastic_rdma VIF features
+		d.nodeAddressing,
+		config,
+		eriOwner,
+		d.k8sWatcher,
+		nil,
+	)
+
+	rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Info("ERI managed IPAM instance created at startup")
+
+	d.UpdateERIManagedIPAMMACFromNRS(eriManagedNRSName)
+}
+
 func (d *Daemon) startRDMAIPAM() {
 	if !option.Config.EnableRDMA {
 		return
 	}
 	rdmaIpamLog.Info("RDMA is enabled, will be starting rdma ipam")
 
+	// Initialize rdmaIpam map to ensure both ERI managed and standard RDMA can use it
+	if d.rdmaIpam == nil {
+		d.rdmaIpam = make(map[string]ipam.CNIIPAMServer)
+	}
+
 	if d.hasRoCE() {
 		bootstrapStats.rdmaIpam.Start()
 		rdmaIpamLog.Info("Initializing rdmaIpam")
 
-		d.rdmaIpam = make(map[string]ipam.CNIIPAMServer)
 		// one roce interface one rdmaIpam instance
 		for _, rii := range rdmaIfMaps {
 			cpy := deepcopy.Copy(option.Config)
 			config := cpy.(*option.DaemonConfig)
 			config.IPAM = ipamOption.IPAMRdma
 			// Set up ipam conf after init() because we might be running d.conf.KVStoreIPv4Registration
-			d.rdmaIpam[rii.MacAddress] = endpoint.NewIPAM(rii.NetResourceSetName, true, rii.MacAddress, d.nodeAddressing, config, d.rdmaDiscovery, d.k8sWatcher, nil)
+			d.rdmaIpam[rii.MacAddress] = endpoint.NewIPAM(rii.NetResourceSetName, true, rii.MacAddress, rii.VifFeatures, d.nodeAddressing, config, d.rdmaDiscovery, d.k8sWatcher, nil)
 		}
 		bootstrapStats.rdmaIpam.End(true)
 	}
+
+	// Create ERI managed IPAM instance if ERI management is enabled
+	d.createERIManagedIPAMInstance()
 }
 
 func (d *Daemon) hasRoCE() bool {
@@ -328,4 +419,56 @@ func (d *Daemon) hasRoCE() bool {
 		return false
 	}
 	return true
+}
+
+// UpdateERIManagedIPAMMAC updates the MAC address of ERI managed IPAM instance after obtaining real MAC address
+func (d *Daemon) UpdateERIManagedIPAMMAC(realMacAddress, eriManagedNRSName string) {
+	if !option.Config.EnableERIManagement {
+		rdmaIpamLog.Debug("ERI management not enabled, skipping MAC address update")
+		return
+	}
+
+	// Check if ERI managed IPAM instance already exists
+	ipamInstance, exists := d.rdmaIpam[eriManagedNRSName]
+	if !exists {
+		rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Warn("ERI managed IPAM instance not found for MAC address update")
+		return
+	}
+
+	if endpointAllocator, ok := ipamInstance.(*endpoint.EndpointAllocator); ok {
+		// Check if MAC address has actually changed to avoid unnecessary updates
+		currentMacAddress := endpointAllocator.GetPrimaryMacAddress()
+		if currentMacAddress == realMacAddress {
+			return
+		}
+		endpointAllocator.UpdatePrimaryMacAddress(realMacAddress)
+	} else {
+		rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Error("IPAM instance is not EndpointAllocator type")
+	}
+}
+
+// UpdateERIManagedIPAMMACFromNRS automatically gets MAC address from NRS annotation and updates IPAM
+func (d *Daemon) UpdateERIManagedIPAMMACFromNRS(eriManagedNRSName string) {
+	// Try to get MAC address from NRS annotation
+	cceClient := k8s.CCEClient()
+	if cceClient == nil {
+		rdmaIpamLog.Fatal("CCE client not available, cannot get MAC address from NRS")
+	}
+
+	nrs, err := cceClient.CceV2().NetResourceSets().Get(context.TODO(), eriManagedNRSName, metav1.GetOptions{})
+	if err != nil {
+		rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Fatal("NRS not found, cannot get MAC address")
+	}
+
+	if nrs.Annotations == nil {
+		rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Fatal("NRS has no annotations")
+	}
+
+	macAddress, exists := nrs.Annotations[k8s.AnnotationERIMacAddress]
+	if !exists || macAddress == "" || macAddress == defaults.EmptyMACAddress {
+		rdmaIpamLog.WithField("nrsName", eriManagedNRSName).Fatal("No valid ERI MAC address found in NRS annotation")
+	}
+
+	// Update IPAM with the MAC address from NRS
+	d.UpdateERIManagedIPAMMAC(macAddress, eriManagedNRSName)
 }

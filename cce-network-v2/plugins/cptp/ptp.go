@@ -89,7 +89,7 @@ var _ IPAM = &DefaultIPAM{}
 
 // NetworkConfigurer interface defines methods for network configuration
 type NetworkConfigurer interface {
-	SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error)
+	SetupContainerVeth(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error)
 	SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error
 	RollbackVeth(netns ns.NetNS, hostInterface, containerInterface *current.Interface) error
 }
@@ -97,8 +97,22 @@ type NetworkConfigurer interface {
 // DefaultNetworkConfigurer implements the NetworkConfigurer interface
 type DefaultNetworkConfigurer struct{}
 
-func (d *DefaultNetworkConfigurer) SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
-	return setupContainerVethLegacy(podname, namespace, netns, ifName, mtu, pr)
+// SetupContainerVeth 设置容器虚拟网卡。
+//
+// 参数:
+//   - containerID (string)：容器的ID。
+//   - namespace (string)：容器所在的命名空间。
+//   - netns (ns.NetNS)：容器的网络命名空间。
+//   - ifName (string)：容器的网卡名称。
+//   - mtu (int)：容器的MTU值。
+//   - pr (current.Result)：当前结果，包含容器的网络配置信息。
+//
+// 返回值:
+//   - current.Interface（*current.Interface）：容器的网卡配置信息。
+//   - current.Interface（*current.Interface）：主机上的网卡配置信息。
+//   - error（error）：错误信息，如果没有错误则为nil。
+func (d *DefaultNetworkConfigurer) SetupContainerVeth(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
+	return setupContainerVethLegacy(containerID, namespace, netns, ifName, mtu, pr)
 }
 
 func (d *DefaultNetworkConfigurer) SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error {
@@ -145,7 +159,18 @@ type NetConf struct {
 	PluginIpRequestRetryTimes int    `json:"retryTimes,omitempty"`
 }
 
-func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
+// setupContainerVethLegacy setupContainerVethLegacy 设置容器的虚拟网卡，使用传统方式。
+// containerID：字符串类型，容器ID。
+// namespace：字符串类型，容器所在的命名空间。
+// netns：ns.NetNS类型，容器所在的网络命名空间。
+// ifName：字符串类型，容器虚拟网卡的名称。
+// mtu：int类型，容器虚拟网卡的MTU值。
+// pr：*current.Result类型，IP地址分配结果。
+// 返回值：
+// - hostInterface：*current.Interface类型，主机虚拟网卡信息。
+// - containerInterface：*current.Interface类型，容器虚拟网卡信息。
+// - error：error类型，错误信息，如果没有错误则为nil。
+func setupContainerVethLegacy(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
 	// The IPAM result will be something like IP=192.168.3.5/24, GW=192.168.3.1.
 	// What we want is really a point-to-point link but veth does not support IFF_POINTTOPOINT.
 	// Next best thing would be to let it ARP but set interface to 192.168.3.5/32 and
@@ -163,7 +188,7 @@ func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, 
 	err := netns.Do(func(hostNS ns.NetNS) error {
 		var hostInterfaceNameTmp string
 
-		hostInterfaceNameTmp = vethNameForPod(podname, namespace, "veth")
+		hostInterfaceNameTmp = vethNameForPod(containerID, namespace, "veth")
 		hostVeth, contVeth0, err := ip.SetupVethWithName(ifName, hostInterfaceNameTmp, mtu, "", hostNS)
 		if err != nil {
 			return err
@@ -542,6 +567,20 @@ func validateCniContainerInterface(intf current.Interface) error {
 	return nil
 }
 
+// configureNetworkWithIPAM 配置网络使用IPAM，并返回结果。如果出现错误，则释放IP资源。
+// 参数：
+//   - conf *NetConf：网络配置信息指针
+//   - pK8Sargs *K8SArgs：kubernetes相关参数指针
+//   - args *skel.CmdArgs：命令行参数指针
+//   - netns ns.NetNS：网络命名空间指针
+//   - networkConfigurer NetworkConfigurer：网络配置器接口
+//   - networkChecker NetworkChecker：网络检查器接口
+//   - ipam IPAM：IP地址管理插件接口
+//   - ipMasqManager IPMasqManager：IP Masquerade 管理器接口
+//
+// 返回值：
+//   - *current.Result：当前结果类型的指针，包含IP配置信息
+//   - error：可能出现的错误，如果没有错误则为nil
 func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdArgs, netns ns.NetNS, networkConfigurer NetworkConfigurer, networkChecker NetworkChecker, ipam IPAM, ipMasqManager IPMasqManager) (*current.Result, error) {
 	// Execute the IPAM plugin to allocate IP resources
 	r, err := ipam.ExecAdd(conf.IPAM.Type, args.StdinData)
@@ -588,7 +627,7 @@ func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdAr
 	}
 
 	// Set up the veth pair between the host and the container
-	hostInterface, containerInterface, err := networkConfigurer.SetupContainerVeth(string(pK8Sargs.K8S_POD_NAME), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
+	hostInterface, containerInterface, err := networkConfigurer.SetupContainerVeth(string(pK8Sargs.K8S_POD_INFRA_CONTAINER_ID), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup container veth: %w", err)
 	}
@@ -636,6 +675,22 @@ func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdAr
 	// to specify the DNS settings instead of the ptp plugin.
 	if dnsConfSet(conf.DNS) {
 		result.DNS = conf.DNS
+	}
+
+	// Add ICMP accept rule to calico_forward chain
+	if iptables.ChainExists(CalicoForwardChain) {
+		if err := manageICMPAcceptRule(hostInterface.Name, true); err != nil {
+			logger.WithError(err).Error("Failed to add ICMP accept rule to calico-FORWARD chain")
+			return nil, fmt.Errorf("failed to add ICMP accept rule: %w", err)
+		}
+
+		// Clean up ICMP accept rule from calico-FORWARD chain after connectivity check
+		defer func() {
+			if subErr := manageICMPAcceptRule(hostInterface.Name, false); subErr != nil {
+				logger.WithError(subErr).Error("Failed to remove ICMP accept rule from calico-FORWARD chain")
+				err = fmt.Errorf("%w; rollback failed: %w", err, subErr)
+			}
+		}()
 	}
 
 	// After the container network is configured, verify the reliability of the
@@ -696,4 +751,30 @@ type K8SArgs struct {
 	K8S_POD_NAMESPACE types.UnmarshallableString `json:"k8s_pod_namespace"`
 	// K8S_POD_INFRA_CONTAINER_ID is pod's container ID
 	K8S_POD_INFRA_CONTAINER_ID types.UnmarshallableString `json:"k8s_pod_infra_container_id"`
+}
+
+var iptables IPTables = NewRealIPTables()
+
+// manageICMPAcceptRule manages ICMP accept rules in calico-FORWARD chain
+// action: true for add, false for remove
+func manageICMPAcceptRule(ifName string, ifAdd bool) error {
+	rules := []IPTablesRule{
+		{
+			Table:    FilterTable,
+			Chain:    CalicoForwardChain,
+			Position: 1,
+			Params:   []string{"-i", ifName, "-p", ICMPProtocol, "-j", AcceptTarget},
+		},
+		{
+			Table:    FilterTable,
+			Chain:    CalicoForwardChain,
+			Position: 2,
+			Params:   []string{"-o", ifName, "-p", ICMPProtocol, "-j", AcceptTarget},
+		},
+	}
+
+	if ifAdd {
+		return iptables.AddRules(rules)
+	}
+	return iptables.DeleteRules(rules)
 }

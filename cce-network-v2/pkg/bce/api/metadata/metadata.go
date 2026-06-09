@@ -17,6 +17,7 @@ package metadata
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -36,6 +37,12 @@ const (
 
 type InstanceType string
 type InstanceTypeEx string
+
+// FeatureList represents the response from feature_list endpoint
+type FeatureList struct {
+	ENIQuota string `json:"eni_quota"`
+	ERIQuota string `json:"eri_quota"`
+}
 
 var (
 	InstanceTypeExBBC     InstanceTypeEx = "bbc"
@@ -67,6 +74,7 @@ type Interface interface {
 	GetLinkGateway(string, string) (string, error)
 	GetLinkMask(string, string) (string, error)
 	GetVifFeatures(macAddress string) (string, error)
+	GetFeatureList() (*FeatureList, error)
 
 	ListMacs() ([]string, error)
 }
@@ -331,6 +339,20 @@ func (c *Client) GetVifFeatures(macAddress string) (string, error) {
 	}
 	vifFeatures := strings.TrimSpace(string(body))
 	return vifFeatures, nil
+}
+
+func (c *Client) GetFeatureList() (*FeatureList, error) {
+	body, err := c.sendRequest(metadataBasePath + "feature_list")
+	if err != nil {
+		return nil, err
+	}
+
+	var featureList FeatureList
+	if err := json.Unmarshal(body, &featureList); err != nil {
+		return nil, fmt.Errorf("failed to parse feature list response: %v", err)
+	}
+
+	return &featureList, nil
 }
 
 func (c *Client) ListMacs() ([]string, error) {

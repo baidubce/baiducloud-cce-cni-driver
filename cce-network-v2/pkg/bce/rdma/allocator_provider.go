@@ -45,7 +45,8 @@ type BCERDMAAllocatorProvider struct {
 	sbnlister listv1.SubnetLister
 
 	// bceClient to get bce objects
-	bceClient cloud.Interface
+	bceClient  cloud.Interface
+	hpasClient cloud.Interface
 
 	//iaasClient client.IaaSClient
 	eriClient *client.EriClient
@@ -65,10 +66,12 @@ func (provider *BCERDMAAllocatorProvider) Init(ctx context.Context) error {
 	provider.enilister = k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
 	provider.sbnlister = k8s.CCEClient().Informers.Cce().V1().Subnets().Lister()
 	bceClient := bceoption.BCEClient()
+	hpasClient := bceoption.BCEHPASClient()
 	provider.bceClient = bceClient
-	provider.eriClient = client.NewEriClient(bceClient)
+	provider.eriClient = client.NewEriClient(bceClient, hpasClient)
 	provider.hpcClient = client.NewHpcClient(bceClient)
-	provider.manager = newInstancesManager(provider.bceClient, provider.eriClient, provider.hpcClient, provider.enilister, provider.sbnlister, watchers.CCEEndpointClient)
+	provider.hpasClient = hpasClient
+	provider.manager = newInstancesManager(provider.bceClient, provider.hpasClient, provider.eriClient, provider.hpcClient, provider.enilister, provider.sbnlister, watchers.CCEEndpointClient)
 	return nil
 }
 

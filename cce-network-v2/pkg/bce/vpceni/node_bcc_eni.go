@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -86,7 +87,7 @@ func (eni *eniResource) ForeachAddress(instanceID string, fn ipamTypes.AddressIt
 
 // ForeachInstance will iterate over each instance inside `instances`, and call
 // `fn`. This function is read-locked for the entire execution.
-func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+func (m *InstancesManager) ForeachInstanceReadyOnNode(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
 	// Select only the ENI of the local node
 	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
 		k8s.LabelInstanceID: instanceID,
@@ -109,9 +110,47 @@ func (m *InstancesManager) ForeachInstance(instanceID, nodeName string, fn ipamT
 		// Do not process the ENI which is being deleted or in attaching/detaching status.
 		// It is not useful to process it, because the IPs are not assigned to the ENI.
 		if eni.DeletionTimestamp != nil || vpcStatus == ccev2.VPCENIStatusAttaching ||
-			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted {
+			vpcStatus == ccev2.VPCENIStatusDetaching || vpcStatus == ccev2.VPCENIStatusDeleted ||
+			eni.Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
 			continue
 		}
+		err = fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
+			Resource: (*eniResource)(enis[i]),
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ForeachInstanceWithNotReady will iterate over each instance inside `instances`, and call
+// `fn`. This function is read-locked for the entire execution.
+func (m *InstancesManager) ForeachInstanceWithAllEni(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+	// Select only the ENI of the local node
+	selector, err := metav1.LabelSelectorAsSelector(metav1.SetAsLabelSelector(labels.Set{
+		k8s.LabelInstanceID: instanceID,
+		k8s.LabelNodeName:   nodeName,
+	}))
+	if err != nil {
+		panic(fmt.Errorf("failed to create label selector: %v", err))
+	}
+	enis, err := m.enilister.List(selector)
+	if err != nil {
+		return fmt.Errorf("list ENIs failed: %w", err)
+	}
+
+	sort.Slice(enis, func(i, j int) bool {
+		return enis[i].CreationTimestamp.After(enis[j].CreationTimestamp.Time)
+	})
+	// This time, we will process all the ENIs, including those which are being deleted or in attaching/detaching status
+	for i := 0; i < len(enis); i++ {
+
+		// Do not process the ENI which is being deleted
+		if enis[i].DeletionTimestamp != nil {
+			continue
+		}
+
 		err = fn(instanceID, enis[i].Spec.ENI.ID, ipamTypes.InterfaceRevision{
 			Resource: (*eniResource)(enis[i]),
 		})
@@ -130,7 +169,7 @@ func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
 
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
 		haveSynced := true
-		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				e, ok := iface.Resource.(*eniResource)
 				if !ok {
@@ -159,6 +198,8 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 	n.mutex.RUnlock()
 
 	if n.nextCreateENITime != nil && n.nextCreateENITime.After(time.Now()) {
+		msg = fmt.Sprintf("unable to create new ENI: cooling down, next available time is %v", n.nextCreateENITime.Format(time.RFC3339))
+		err = errors.New(msg)
 		return
 	}
 
@@ -174,7 +215,7 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 		return
 	}
 
-	n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
@@ -246,7 +287,7 @@ func (n *bccNetworkResourceSet) createInterface(ctx context.Context, allocation 
 
 // createENIOnCluster The ENI object is created in the cluster and the ENI Synchronizer
 // will automatically create the ENI object from VPC.
-// The ENI object is created successfully and the node will record a status of “creating ENI”.
+// The ENI object is created successfully and the node will record a status of "creating ENI".
 func (n *bccNetworkResourceSet) createENIOnCluster(ctx context.Context, scopedLog *logrus.Entry, resource *ccev2.NetResourceSet, subnet *bcesync.BorrowedSubnet) error {
 	eniName := CreateNameForENI(option.Config.ClusterID, n.instanceID, resource.Name)
 	newENI := &ccev2.ENI{
@@ -368,7 +409,26 @@ func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.E
 	}
 	createENIArgs.PrivateIpSet = privateIPs
 
-	eniID, err := n.manager.bceclient.CreateENI(ctx, createENIArgs)
+	// handle IPv6 private IPs if IPv6 is enabled
+	if operatorOption.Config.EnableIPv6 {
+		var ipv6PrivateIPs []enisdk.PrivateIp
+		for i := 0; i < len(resource.Spec.ENI.IPV6PrivateIPSet); i++ {
+			ipv6PrivateIPs = append(ipv6PrivateIPs, enisdk.PrivateIp{
+				PublicIpAddress:  resource.Spec.ENI.IPV6PrivateIPSet[i].PublicIPAddress,
+				Primary:          resource.Spec.ENI.IPV6PrivateIPSet[i].Primary,
+				PrivateIpAddress: resource.Spec.ENI.IPV6PrivateIPSet[i].PrivateIPAddress,
+			})
+		}
+		// if no IPv6 private IPs are specified, create a primary IPv6 IP
+		if len(ipv6PrivateIPs) == 0 {
+			ipv6PrivateIPs = append(ipv6PrivateIPs, enisdk.PrivateIp{
+				Primary: true,
+			})
+		}
+		createENIArgs.Ipv6PrivateIpSet = ipv6PrivateIPs
+	}
+
+	eniID, err := n.bceclient.CreateENI(ctx, createENIArgs)
 	if err != nil {
 		scopedLog.WithField("request", logfields.Json(createENIArgs)).
 			WithContext(ctx).
@@ -381,7 +441,7 @@ func (n *bceNetworkResourceSet) createENI(ctx context.Context, resource *ccev2.E
 }
 
 func (n *bceNetworkResourceSet) deleteENI(ctx context.Context, eniID string, scopedLog *logrus.Entry) {
-	err := n.manager.bceclient.DeleteENI(ctx, eniID)
+	err := n.bceclient.DeleteENI(ctx, eniID)
 	if err != nil {
 		scopedLog.WithField("eniID", eniID).
 			WithContext(ctx).

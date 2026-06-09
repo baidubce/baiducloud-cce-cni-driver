@@ -46,11 +46,15 @@ const (
 )
 
 var (
-	Namespace = "kube-system"
-
-	serviceName = "cce-ipam-v2"
-	secretName  = "cce-ipam-v2-webhook-certs"
-	CertDir     = "/home/cce/config/certs"
+	Namespace        = "kube-system"
+	EnableInitialize = true
+	serviceName      = "cce-ipam-v2"
+	secretName       = "cce-ipam-v2-webhook-certs"
+	CertDir          = "/home/cce/config/certs"
+	APIServerURL     = ""
+	Kubeconfig       = ""
+	Qps              = 0
+	Burst            = 0
 
 	uninit   = make(chan struct{})
 	onceInit = sync.Once{}
@@ -63,6 +67,11 @@ func RegisterWebhookFlags(pset *pflag.FlagSet) {
 	pset.StringVar(&secretName, "webhook-secret-name", secretName, "secret name for webhook server to store certs")
 	pset.StringVar(&mutatingWebhookConfigurationName, "mutating-webhook-configuration-name", mutatingWebhookConfigurationName, "name of mutating configuration object for webhook server")
 	pset.StringVar(&validatingWebhookConfigurationName, "validting-webhook-configuration-name", validatingWebhookConfigurationName, "name of validting configuration object for webhook server")
+	pset.BoolVar(&EnableInitialize, "enable-initialize", true, "enable initialize for webhook server")
+	pset.StringVar(&APIServerURL, "apiserver-url", APIServerURL, "apiserver url")
+	pset.StringVar(&Kubeconfig, "kubeconfig", Kubeconfig, "kubeconfig path")
+	pset.IntVar(&Qps, "qps", Qps, "qps for k8s client")
+	pset.IntVar(&Burst, "burst", Burst, "burst for k8s client")
 }
 
 func Inited() chan struct{} {

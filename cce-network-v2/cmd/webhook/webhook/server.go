@@ -84,9 +84,12 @@ func addHandlersWithGate(m map[string]admission.Handler, fn GateFunc) {
 // Running this function will block the current coroutine
 func RunWebhookServer() error {
 	server := standaloneWebhookServer()
-	err := initialize()
-	if err != nil {
-		return err
+	var err error
+	if webhookcontroller.EnableInitialize {
+		err = initialize()
+		if err != nil {
+			return err
+		}
 	}
 	_ = clientgoscheme.AddToScheme(scheme)
 	logger := klog.NewKlogr()

@@ -17,11 +17,13 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -68,6 +70,7 @@ type EndpointManager struct {
 	sbnLister     ccelisterv1.SubnetLister
 	nrsLister     ccelister.NetResourceSetLister
 	eventRecorder record.EventRecorder
+	syncedPool    sync.Map // key: string, value: string (revision)
 }
 
 func NewEndpointManager(getterUpdater CCEEndpointGetterUpdater, reuseIPImplement DirectIPAllocator) *EndpointManager {
@@ -167,6 +170,29 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 		cancel()
 	}()
 
+	// Generate unique identifier for CEP
+	cepKey := fmt.Sprintf("%s/%s", resource.Namespace, resource.Name)
+
+	// Check if CEP is in synchronization pool and compare revision
+	if manager.isInSyncedPool(cepKey) {
+		storedRevision := manager.getSyncedPoolRevision(cepKey)
+		if storedRevision != "" {
+			isNewer, err := compareResourceVersions(resource.ResourceVersion, storedRevision)
+			if err != nil {
+				logEntry.WithError(err).Error("Failed to compare resource versions")
+				return err
+			}
+			if !isNewer {
+				logEntry.Infof("CEP %s/%s is stale (current: %s, stored: %s), skipping update",
+					resource.Namespace, resource.Name, resource.ResourceVersion, storedRevision)
+				return nil
+			}
+			logEntry.Infof("CEP %s/%s has newer version (current: %s, stored: %s), removing from synced pool",
+				resource.Namespace, resource.Name, resource.ResourceVersion, storedRevision)
+			manager.removeFromSyncedPool(cepKey)
+		}
+	}
+
 	// reuse ip when pod rescheduler or recreate
 	if (resource.Status.Networking != nil &&
 		resource.Status.Networking.NodeIP == newNodeName &&
@@ -176,7 +202,7 @@ func (manager *EndpointManager) Update(resource *ccev2.CCEEndpoint) error {
 		return nil
 	}
 
-	logEntry.Info("received to update delegate cep")
+	logEntry.Infof("received to update delegate cep: %s/%s, %v", newObj.Namespace, newObj.Name, newStatus.Networking)
 
 	if newStatus.Networking == nil {
 		newStatus.Networking = &ccev2.EndpointNetworking{
@@ -221,7 +247,7 @@ update:
 		if errors.IsConflict(apiError) || errors.IsResourceExpired(apiError) {
 			return false, nil
 		}
-		if apiError != nil {
+		if apiError != nil || returnObj == nil {
 			logEntry.WithError(apiError).Errorf("update cep failed")
 			return false, apiError
 		}
@@ -234,6 +260,11 @@ update:
 	}
 	logEntry.Infof("success to update cep")
 	newObj = returnObj
+
+	// Add CEP to synchronization pool after successful update with new revision
+	manager.addToSyncedPool(cepKey, newObj.ResourceVersion)
+	logEntry.Infof("add cep %s/%s to synced pool with revision %s", newObj.Namespace, newObj.Name, newObj.ResourceVersion)
+
 	return apiError
 }
 
@@ -522,3 +553,46 @@ func (manager *EndpointManager) recordEvent(op string, start time.Time, err erro
 }
 
 var _ EndpointEventHandler = &EndpointManager{}
+
+// Helper methods for SyncedPool management
+// addToSyncedPool adds a CEP to the synchronization pool with current revision
+func (manager *EndpointManager) addToSyncedPool(key string, revision string) {
+	manager.syncedPool.Store(key, revision)
+	managerLog.WithFields(logrus.Fields{
+		"key":      key,
+		"revision": revision,
+	}).Debug("Added CEP to synchronization pool")
+}
+
+// removeFromSyncedPool removes a CEP from the synchronization pool
+func (manager *EndpointManager) removeFromSyncedPool(key string) {
+	manager.syncedPool.Delete(key)
+	managerLog.WithFields(logrus.Fields{
+		"key": key,
+	}).Debug("Removed CEP from synchronization pool")
+}
+
+// isInSyncedPool checks if a CEP exists in the synchronization pool
+func (manager *EndpointManager) isInSyncedPool(key string) bool {
+	_, exists := manager.syncedPool.Load(key)
+	return exists
+}
+
+func (manager *EndpointManager) getSyncedPoolRevision(key string) string {
+	if value, exists := manager.syncedPool.Load(key); exists {
+		if revision, ok := value.(string); ok {
+			return revision
+		}
+	}
+	return ""
+}
+
+// compareResourceVersions compares two resourceVersion strings and returns true if current is newer than stored.
+func compareResourceVersions(current, stored string) (bool, error) {
+	curRV, err1 := resource.ParseQuantity(current)
+	storedRV, err2 := resource.ParseQuantity(stored)
+	if err1 != nil || err2 != nil {
+		return false, fmt.Errorf("invalid resource version format: current=%s, stored=%s", current, stored)
+	}
+	return curRV.Cmp(storedRV) >= 0, nil
+}

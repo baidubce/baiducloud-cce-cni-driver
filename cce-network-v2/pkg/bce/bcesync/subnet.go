@@ -40,6 +40,7 @@ type subnetSyncher struct {
 	SyncManager  *SyncManager[vpc.Subnet]
 	updater      syncer.SubnetUpdater
 	bceclient    cloud.Interface
+	hpasclient   cloud.Interface
 	resyncPeriod time.Duration
 }
 
@@ -47,6 +48,7 @@ type subnetSyncher struct {
 // add vpcIDs to list
 func (ss *subnetSyncher) Init(ctx context.Context) error {
 	ss.bceclient = option.BCEClient()
+	ss.hpasclient = option.BCEHPASClient()
 	ss.resyncPeriod = operatorOption.Config.ResourceResyncInterval
 	ss.SyncManager = NewSyncManager(subnetControllerName, ss.resyncPeriod, ss.syncSubnet)
 	return nil

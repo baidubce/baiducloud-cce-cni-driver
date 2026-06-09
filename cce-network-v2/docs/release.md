@@ -1,6 +1,15 @@
 # 2.0
 v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历史如下：
 
+### 2.13 (2024/08/01)
+新特性功能：
+1. 支持 eri 全生命周期管理
+2. 支持使用 rdma 的容器通过申请的资源来决定选择使用 HPC 或 ERI 子设备
+
+#### 2.13.0 (2024/08/01)
+1. [Feature]支持 eri 全生命周期管理
+2. [Feature]支持使用 rdma 的容器通过申请的资源来决定选择使用 HPC 或 ERI 子设备
+
 ### 2.12 (2024/06/28)
 新特性功能：
 1. 支持 Burstable ENI 池，有效避免子网 IP 资源紧张时，节点 ENI 池资源不足的问题。
@@ -8,10 +17,29 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. 增加节点网络配置集功能 NetResourceConfigSet，支持指定节点独立配置网络资源。
 4. 增加对 HPAS 实例的支持
 
-#### 2.12.18 [暂未发布]
+#### 2.12.18 [20250801]
 1. [Bug] 修复 cce-network-v2 目录下的 Makefile，解决 make docker-arm 无法编译出 arm64 镜像的问题
 2. [Bug] 修改 CCEEndpoint GC 清理逻辑，由以 Pod 为中心的垃圾回收机制修改为以 IP 为中心的垃圾回收机制，解决因容器残留导致误清理 CCEEndpoint 对象，导致未释放 IP 被错误重用的问题
 3. [Optimize] 支持 Ubuntu 操作系统的 22.04 及以上所有版本的 MacAddressPolicy 参数修改为 None 并对其配置进行监控，以解决 Veth Pair 的 MacAddress 偶发被修改而导致的 Pod 网络不通的问题
+4. [Optimize] 优化 ENI 状态机的代码结构，增加 ENI 状态机的代码注释，删去了 ENI 在终态下的冗余处理
+5. [Optimize] 实现 webhook 支持 kubeclient 客户端参数可配置，并使 webhook 支持静态证书配置
+6. [Optimize] 优化 ENI 状态处理，当节点上 ENI 状态未 Ready 时，不使用当前的 ENI，并进行明显报错处理
+7. [Optimize] 优化 ENI 创建逻辑。当前节点上存在非删除状态，并且不是readyOnNode状态的eni时，不去创建新的eni
+8. [Optimize] 修改 cce-network-agent 的代码，当网卡在iaas侧存在，但是在节点上不存在时，增加bind和unbind操作，尝试自动解决网卡掉卡的问题
+9. [Optimize] 优化 cce-network-agent 的同步逻辑，设置新的 configmap 中的参数 agent-resource-resync-interval，作为单机 eni resync 的时间
+10. [Bug] 修复进行 Pod 创建过程中因为 calico 规则导致 IP 可用性检查失败的的问题
+11. [Bug] 修复 operator 中 nrs 控制器偶发的空指针问题
+12. [Bug] 创建网卡时识别ipv6支持与否，确认eni是否需要ipv6主IP
+13. [Optimize] 增加对弹性网卡的创建过程中，支持在操作系统驱动支持情况下，将网卡的 current hardware settings 中 ring buffer rx 与 tx 调整为与 pre-set maximum 一致
+14. [Bug] 修复 RDMA 场景下，容器删除时，roce 组件不能正确调用的问题
+15. [Bug] 修复 RDMA 场景下，当同命名空间同名 pod 短时间内删除重建并调度到同一节点时出现 IP 无法回收，pod 占用多组 RDMA IP 的问题
+16. [Bug] 修复 PSTS 场景下，同一 pod 多次申请 IP 导致泄漏的问题
+17. [Bug] 修复 PSTS 场景下，同一个 IP 在多个 eni cr上导致 pod 创建卡住的问题
+18. [Bug] 修复当 ipv6 模式下，由于弹性网卡 ipv6 网关 mac 地址不准确导致流量不通的问题
+19. [Bug] 修复弹性网卡在被改名后重新被 networkManager 纳管导致概率性 IP 丢失，从而导致 eni 初始化配置失败影响节点就绪的问题
+20. [Bug] 修复 eni-pre-allocate-num 参数不生效问题
+21. [Bug] 增加RDMA 类型 ENI状态容错，在发现有该类型的 CR 时直接为其加上 inuse 状态
+22. [Optimize] 优化nrs status 接口调用次数
 
 #### 2.12.17 [20250317]
 1. [Optimize] NRS Manager Resync 同步逻辑由串行执行修改为并发执行

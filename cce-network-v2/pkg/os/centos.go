@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
@@ -23,6 +26,10 @@ IPV6_PEERROUTES="no"`
 	etcPath            = "/etc-host"
 	networkScriptsPath = etcPath + "/sysconfig/network-scripts"
 	sysconfigPath      = networkScriptsPath + "/ifcfg-%s"
+
+	retryInterval = 500 * time.Millisecond
+	timeout       = 10 * time.Second
+	settleTime    = 200 * time.Millisecond
 )
 
 // in centos 7, the os-release file is like:
@@ -91,4 +98,48 @@ createNew:
 
 func (c *centos) DisableAndMonitorMacPersistant() error {
 	return nil
+}
+
+// EnsureNetworkManagerUnmanaged ensures NetworkManager stops managing the specified interface
+func (c *centos) EnsureNetworkManagerUnmanaged(ifName string) error {
+	// Check if NetworkManager is available
+	err := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "which", "nmcli").Run()
+	if err != nil {
+		log.Warnf("NetworkManager not available on current operator system, skipping configuration for %s", ifName)
+		return nil
+	}
+
+	log.Infof("Setting %s as unmanaged by NetworkManager with retry on current operator system", ifName)
+
+	return wait.PollImmediate(retryInterval, timeout, func() (bool, error) {
+		// 1. Execute configuration command
+		err := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "nmcli", "device", "set", ifName, "managed", "false").Run()
+		if err != nil {
+			log.WithError(err).Warnf("Failed to set %s as unmanaged, will retry", ifName)
+			return false, nil // Return false to continue retry, don't return error
+		}
+
+		// 2. Wait for configuration to take effect
+		time.Sleep(settleTime)
+
+		// 3. Check if configuration is effective
+		cmd := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "nmcli", "-t", "-f", "GENERAL.STATE", "device", "show", ifName)
+		output, err := cmd.Output()
+		if err != nil {
+			log.WithError(err).Warnf("Failed to check NetworkManager status for %s, will retry", ifName)
+			return false, nil // Return false to continue retry, don't return error
+		}
+
+		// Parse output to find unmanaged status
+		outputStr := strings.TrimSpace(string(output))
+		isUnmanaged := strings.Contains(strings.ToLower(outputStr), "unmanaged")
+
+		if isUnmanaged {
+			log.Infof("Successfully set %s as unmanaged by NetworkManager (verified)", ifName)
+			return true, nil // Success, stop retry
+		}
+
+		log.Warnf("Device %s is still managed by NetworkManager, retrying...", ifName)
+		return false, nil // Return false to continue retry
+	})
 }

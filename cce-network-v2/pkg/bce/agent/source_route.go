@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -81,6 +82,7 @@ func ensureENIRule(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
 				alreadyExistedToRule[key] = r
 			}
 		}
+
 		if key == "" {
 			continue
 		}
@@ -93,6 +95,7 @@ func ensureENIRule(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
 				// if the rule is not belong to the table, replace the table id
 				netlink.RuleDel(&r)
 				scopedLog.WithFields(logrus.Fields{
+					"type": "ENI",
 					"rule": logfields.Repr(r),
 				}).Infof("rule not belong to table %d, delete the rule", tableID)
 
@@ -104,16 +107,19 @@ func ensureENIRule(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
 			// Eni's secondary IP is constantly dynamically updated
 			netlink.RuleDel(&r)
 			scopedLog.WithFields(logrus.Fields{
+				"type": "ENI",
 				"rule": logfields.Repr(r),
 			}).Infof("rule not belong to eni yet, delete the rule")
 			continue
 		}
+
 		// delete old rules which not belong to the eni
 		if r.Table == ruleTable && ruleTable != mainRouteTableID {
 			if err = netlink.RuleDel(&r); err != nil {
 				return fmt.Errorf("failed to delete rule: %w", err)
 			}
 			scopedLog.WithFields(logrus.Fields{
+				"type": "ENI",
 				"rule": logfields.Repr(r),
 			}).Infof("delete rule for source based routing success")
 		}
@@ -122,13 +128,209 @@ func ensureENIRule(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
 	// add new rules for source based routing
 	for _, ip := range allSourceIPs {
 		if _, ok := alreadyExistedFromRule[ip]; !ok {
-			addRule(scopedLog, ip, tableID, true, fromRulePrority)
+			if err := addRule(scopedLog, ip, tableID, true, fromRulePrority); err != nil {
+				return fmt.Errorf("failed to add from rule for IP %s: %w", ip, err)
+			}
 		}
 		if _, ok := alreadyExistedToRule[ip]; !ok {
-			addRule(scopedLog, ip, mainRouteTableID, false, toRulePrority)
+			if err := addRule(scopedLog, ip, mainRouteTableID, false, toRulePrority); err != nil {
+				return fmt.Errorf("failed to add to rule for IP %s: %w", ip, err)
+			}
 		}
 	}
 	return nil
+}
+
+// ensureERIRule install source based routing rule offset
+func ensureERIRule(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
+	// install source based routing rule offset
+	var (
+		tableID         = eni.Status.ENIIndex + eni.Spec.RouteTableOffset
+		fromRulePrority = tableID + fromENISecondaryIPRulePriority
+		toRulePrority   = tableID + toENISecondaryIPRulePriority
+
+		allSourceIPs           []string
+		alreadyExistedFromRule = make(map[string]netlink.Rule)
+		alreadyExistedToRule   = make(map[string]netlink.Rule)
+	)
+
+	// Only process primary IP, skip non-primary private IP rules
+	for _, v := range eni.Spec.PrivateIPSet {
+		if v.Primary {
+			allSourceIPs = append(allSourceIPs, v.PrivateIPAddress)
+			if v.PublicIPAddress != "" {
+				allSourceIPs = append(allSourceIPs, v.PublicIPAddress)
+			}
+		}
+	}
+	for _, v := range eni.Spec.IPV6PrivateIPSet {
+		if v.Primary {
+			allSourceIPs = append(allSourceIPs, v.PrivateIPAddress)
+			if v.PublicIPAddress != "" {
+				allSourceIPs = append(allSourceIPs, v.PublicIPAddress)
+			}
+		}
+	}
+	if len(allSourceIPs) == 0 {
+		return nil
+	}
+
+	// install source based routing
+	// Get a list of rules and routes ready.
+	rules, err := netlink.RuleList(netlink.FAMILY_ALL)
+	if err != nil {
+		return fmt.Errorf("failed to list all rules: %w", err)
+	}
+	for _, r := range rules {
+		var key string
+		// which table the rule belongs to
+		var ruleTable = tableID
+		fromFlow := true
+		// source based routing rule is formatted as: 192.168.4.2/32
+
+		if r.Src != nil && r.Src.IP != nil &&
+			!r.Src.IP.Equal(net.IPv4zero) &&
+			!r.Src.IP.Equal(net.IPv6zero) &&
+			r.Priority == fromRulePrority {
+			key = r.Src.IP.String()
+			if r.Table == ruleTable {
+				alreadyExistedFromRule[key] = r
+			}
+		} else if r.Dst != nil && r.Dst.IP != nil &&
+			!r.Dst.IP.Equal(net.IPv4zero) &&
+			!r.Dst.IP.Equal(net.IPv6zero) &&
+			r.Priority == toRulePrority {
+			fromFlow = false
+			key = r.Dst.IP.String()
+			ruleTable = mainRouteTableID
+			if r.Table == ruleTable {
+				alreadyExistedToRule[key] = r
+			}
+		}
+
+		if key == "" {
+			continue
+		}
+
+		if set.SlinceContains(allSourceIPs, key) {
+			if r.Table != ruleTable ||
+				(fromFlow && r.Priority != fromRulePrority) ||
+				(!fromFlow && r.Priority != toRulePrority) {
+				// if the rule is not belong to the table, replace the table id
+				netlink.RuleDel(&r)
+				scopedLog.WithFields(logrus.Fields{
+					"type": "ERI",
+					"rule": logfields.Repr(r),
+				}).Infof("rule not belong to table %d, delete the rule", tableID)
+
+			}
+			continue
+		} else if (fromFlow && r.Priority == fromRulePrority) ||
+			(!fromFlow && r.Priority == toRulePrority) {
+			// if the rule is belong to the eni, delete the rule
+			// Eni's secondary IP is constantly dynamically updated
+			netlink.RuleDel(&r)
+			scopedLog.WithFields(logrus.Fields{
+				"type": "ERI",
+				"rule": logfields.Repr(r),
+			}).Infof("rule not belong to eni yet, delete the rule")
+			continue
+		}
+
+		// delete old rules which not belong to the eni
+		if r.Table == ruleTable && ruleTable != mainRouteTableID {
+			if err = netlink.RuleDel(&r); err != nil {
+				return fmt.Errorf("failed to delete rule: %w", err)
+			}
+			scopedLog.WithFields(logrus.Fields{
+				"type": "ERI",
+				"rule": logfields.Repr(r),
+			}).Infof("delete rule for source based routing success")
+		}
+	}
+
+	// add new rules for source based routing
+	for _, ip := range allSourceIPs {
+		if _, ok := alreadyExistedFromRule[ip]; !ok {
+			if err := addRule(scopedLog, ip, tableID, true, fromRulePrority); err != nil {
+				return fmt.Errorf("failed to add from rule for IP %s: %w", ip, err)
+			}
+		}
+		if _, ok := alreadyExistedToRule[ip]; !ok {
+			if err := addRule(scopedLog, ip, mainRouteTableID, false, toRulePrority); err != nil {
+				return fmt.Errorf("failed to add to rule for IP %s: %w", ip, err)
+			}
+		}
+	}
+
+	// Add additional from all oif <interface_name> lookup rt_<interface_name> rule
+	elink, err := link.FindENILinkByMac(eni.Spec.ENI.MacAddress)
+	if err != nil {
+		return fmt.Errorf("failed to find ENI link by mac: %w", err)
+	}
+	linkName := elink.Attrs().Name
+
+	// Check if from all oif rule already exists and clean up old cce-eri rules
+	oifRuleExists, err := cleanupOldCCEERIRulesAndCheckOifRule(scopedLog, rules, linkName, tableID, fromRulePrority)
+	if err != nil {
+		return err
+	}
+
+	// Add from all oif rule if it doesn't exist
+	if !oifRuleExists {
+		rule := netlink.NewRule()
+		rule.Table = tableID
+		rule.Priority = fromRulePrority
+		rule.OifName = linkName
+
+		if err := netlink.RuleAdd(rule); err != nil {
+			scopedLog.WithFields(logrus.Fields{
+				"type": "ERI",
+				"rule": logfields.Repr(rule),
+			}).Errorf("add from all oif rule for ERI failed: %v", err)
+			return fmt.Errorf("failed to add from all oif rule for ERI: %w", err)
+		}
+		scopedLog.WithFields(logrus.Fields{
+			"type": "ERI",
+			"rule": logfields.Repr(rule),
+		}).Infof("add from all oif rule for ERI success")
+	}
+
+	return nil
+}
+
+// isOldCCEERIRuleToDelete checks if a rule is an old cce-eri rule that should be deleted
+func isOldCCEERIRuleToDelete(r netlink.Rule, linkName string, tableID int, fromRulePriority int) bool {
+	return r.OifName != "" && strings.HasPrefix(r.OifName, "cce-eri") &&
+		(r.OifName != linkName || r.Table != tableID || r.Priority != fromRulePriority)
+}
+
+// cleanupOldCCEERIRulesAndCheckOifRule cleans up old cce-eri rules that don't match current conditions
+// and checks if the oif rule already exists
+func cleanupOldCCEERIRulesAndCheckOifRule(scopedLog *logrus.Entry, rules []netlink.Rule, linkName string, tableID int, fromRulePrority int) (bool, error) {
+	oifRuleExists := false
+	for _, r := range rules {
+		if isOldCCEERIRuleToDelete(r, linkName, tableID, fromRulePrority) {
+			if err := netlink.RuleDel(&r); err != nil {
+				scopedLog.WithFields(logrus.Fields{
+					"type": "ERI",
+					"rule": logfields.Repr(r),
+				}).Errorf("failed to delete old cce-eri rule: %v", err)
+				return false, fmt.Errorf("failed to delete old cce-eri rule: %w", err)
+			}
+			scopedLog.WithFields(logrus.Fields{
+				"type": "ERI",
+				"rule": logfields.Repr(r),
+			}).Infof("deleted old cce-eri rule that doesn't match current conditions")
+			continue
+		}
+
+		if r.OifName == linkName && r.Table == tableID && r.Priority == fromRulePrority {
+			oifRuleExists = true
+			break
+		}
+	}
+	return oifRuleExists, nil
 }
 
 func ensureENINDPProxy(scopedLog *logrus.Entry, eni *ccev2.ENI) error {
@@ -200,7 +402,7 @@ func ensureENIArpProxy(scopedLog *logrus.Entry, macAddr string) error {
 	return nil
 }
 
-func addRule(scopedLog *logrus.Entry, ip string, table int, from bool, priority int) {
+func addRule(scopedLog *logrus.Entry, ip string, table int, from bool, priority int) error {
 	// Source must be restricted to a single IP, not a full subnet
 	var (
 		src  net.IPNet
@@ -223,10 +425,11 @@ func addRule(scopedLog *logrus.Entry, ip string, table int, from bool, priority 
 	if err := netlink.RuleAdd(rule); err != nil {
 		scopedLog.WithFields(logrus.Fields{
 			"rule": logfields.Repr(rule),
-		}).Infof("add rule for source based routing failed")
-		return
+		}).Errorf("add rule for source based routing failed: %v", err)
+		return fmt.Errorf("failed to add rule for source based routing: %w", err)
 	}
 	scopedLog.WithFields(logrus.Fields{
 		"rule": logfields.Repr(rule),
 	}).Infof("add rule for source based routing success")
+	return nil
 }

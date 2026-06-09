@@ -33,9 +33,19 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
+
+// init init 函数用于初始化 fake k8s 客户端，避免 nil 指针解引用
+// 如果初始化失败则 panic 出错误信息
+func init() {
+	// 初始化 fake k8s 客户端，避免 nil 指针解引用
+	if err := k8s.InitNewFakeK8sClient(); err != nil {
+		panic(fmt.Sprintf("failed to initialize fake k8s client: %v", err))
+	}
+}
 
 func TestIPNotAvailableInPoolError(t *testing.T) {
 	err := NewIPNotAvailableInPoolError(net.ParseIP("1.1.1.1"))
@@ -87,6 +97,12 @@ func (t *testConfigurationCRD) IPv4NativeRoutingCIDR() *cidr.CIDR        { retur
 func (t *testConfigurationCRD) GetCCEEndpointGC() time.Duration          { return 0 }
 func (t *testConfigurationCRD) GetFixedIPTimeout() time.Duration         { return 0 }
 
+// newFakeNetResourceSetStore 新建一个 fakeNetResourceSetStore，用于测试
+// 参数：conf - 配置信息，类型为 Configuration
+//
+//	c - C 对象指针，用于断言
+//
+// 返回值：*nodeStore - 返回一个 nodeStore 指针，包含了初始化的 allocators、allocationPoolSize、conf、refreshTrigger 和 hasRestoreFinished 字段
 func newFakeNetResourceSetStore(conf Configuration, c *C) *nodeStore {
 	t, err := trigger.NewTrigger(trigger.Parameters{
 		Name:        "fake-crd-allocator-node-refresher",
@@ -101,6 +117,7 @@ func newFakeNetResourceSetStore(conf Configuration, c *C) *nodeStore {
 		allocationPoolSize: map[Family]int{},
 		conf:               conf,
 		refreshTrigger:     t,
+		hasRestoreFinished: true,
 	}
 	return store
 }

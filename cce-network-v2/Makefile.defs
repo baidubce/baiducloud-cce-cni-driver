@@ -23,8 +23,10 @@ LOCALSTATEDIR?=/var
 RUNDIR?=/var/run
 CONFDIR?=/etc
 
+GOOS = linux
 NATIVE_ARCH = $(shell GOARCH= $(GO) env GOARCH)
 export GOARCH ?= $(NATIVE_ARCH)
+TARGET_ARCH ?= $(GOARCH)
 
 INSTALL = install
 
@@ -126,38 +128,7 @@ else
     endif
 endif
 
-GO_BUILD = CGO_ENABLED=0 $(GO) build
-
-# Support CGO cross-compiling for amd64 and arm64 targets
-CGO_CC =
-CROSS_ARCH =
-ifneq ($(GOARCH),$(NATIVE_ARCH))
-    CROSS_ARCH = $(GOARCH)
-endif
-ifeq ($(CROSS_ARCH),arm64)
-    CGO_CC = CC=aarch64-linux-gnu-gcc
-else ifeq ($(CROSS_ARCH),amd64)
-    CGO_CC = CC=x86_64-linux-gnu-gcc
-endif
-GO_BUILD_WITH_CGO = CGO_ENABLED=1 $(CGO_CC) $(GO) build
-
-ifneq ($(RACE),)
-    GO_BUILD_FLAGS += -race
-    GO_TEST_FLAGS += -race
-    GOTEST_COVER_OPTS += -covermode=atomic
-
-    # GO_BUILD becomes GO_BUILD_WITH_CGO as `-race` requires CGO
-    GO_BUILD = $(GO_BUILD_WITH_CGO)
-    ifeq ($(LOCKDEBUG),)
-        LOCKDEBUG=1
-    endif
-else
-    GOTEST_COVER_OPTS += -covermode=count
-endif
-
-ifneq ($(LOCKDEBUG),)
-    GO_TAGS_FLAGS += lockdebug
-endif
+GO_BUILD = CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(TARGET_ARCH) $(GO) build
 
 GO_BUILD_FLAGS += -ldflags '$(GO_BUILD_LDFLAGS) $(EXTRA_GO_BUILD_LDFLAGS)' -tags=$(call join-with-comma,$(GO_TAGS_FLAGS)) $(EXTRA_GO_BUILD_FLAGS)
 GO_TEST_FLAGS += -tags=$(call join-with-comma,$(GO_TAGS_FLAGS))

@@ -235,6 +235,21 @@ func (s *OptionSuite) TestEnabledFunctions(c *C) {
 	c.Assert(d.IPAMMode(), Equals, ipamOption.IPAMVpcEni)
 }
 
+// TestERIManagementEnabled tests the ERIManagementEnabled function
+func (s *OptionSuite) TestERIManagementEnabled(c *C) {
+	// Test with default configuration (ERI management disabled)
+	d := &DaemonConfig{}
+	c.Assert(d.ERIManagementEnabled(), Equals, false)
+
+	// Test with ERI management explicitly disabled
+	d = &DaemonConfig{EnableERIManagement: false}
+	c.Assert(d.ERIManagementEnabled(), Equals, false)
+
+	// Test with ERI management enabled
+	d = &DaemonConfig{EnableERIManagement: true}
+	c.Assert(d.ERIManagementEnabled(), Equals, true)
+}
+
 func (s *OptionSuite) TestLocalAddressExclusion(c *C) {
 	d := &DaemonConfig{}
 	err := d.parseExcludedLocalAddresses([]string{"1.1.1.1/32", "3.3.3.0/24", "f00d::1/128"})

@@ -51,14 +51,14 @@ type InstancesManager struct {
 	cepClient *watchers.CCEEndpointUpdaterImpl
 
 	// bceClient to get bce objects
-	bceclient cloud.Interface
-	// tmp cache with bce
-
+	bceclientd  cloud.Interface
+	hpasclientd cloud.Interface
 }
 
 // newInstancesManager returns a new instances manager
 func newInstancesManager(
 	bceclient cloud.Interface,
+	hpasclient cloud.Interface,
 	enilister listv2.ENILister, sbnlister listv1.SubnetLister,
 	cepClient *watchers.CCEEndpointUpdaterImpl) *InstancesManager {
 
@@ -67,13 +67,11 @@ func newInstancesManager(
 
 		enilister: enilister,
 		sbnlister: sbnlister,
-		bceclient: bceclient,
 		cepClient: cepClient,
-	}
-}
 
-func (m *InstancesManager) HPASWrapper() error {
-	return m.bceclient.HPASWrapper(context.Background())
+		bceclientd:  bceclient,
+		hpasclientd: hpasclient,
+	}
 }
 
 // CreateNetResource is called when the IPAM layer has learned about a new

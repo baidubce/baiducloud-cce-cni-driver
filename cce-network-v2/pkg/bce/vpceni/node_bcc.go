@@ -17,11 +17,12 @@ package vpceni
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
@@ -36,6 +37,31 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/tools/cache"
 )
+
+const (
+	// Retry constants for BCC API operations
+	maxRetryAttempts = 3
+	baseRetryDelay   = 100 * time.Millisecond
+)
+
+// retryOperation executes an operation with exponential backoff retry
+func retryOperation(operation func() error, logger *logrus.Entry, operationName string) error {
+	var err error
+	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
+		err = operation()
+		if err == nil {
+			return nil
+		}
+
+		if attempt < maxRetryAttempts-1 {
+			delay := time.Duration(1<<uint(attempt)) * baseRetryDelay
+			logger.WithError(err).Warnf("%s failed (attempt %d/%d), retrying in %v",
+				operationName, attempt+1, maxRetryAttempts, delay)
+			time.Sleep(delay)
+		}
+	}
+	return fmt.Errorf("%s failed after %d attempts: %w", operationName, maxRetryAttempts, err)
+}
 
 // bccNetworkResourceSet is a wrapper of bceNetworkResourceSet, which is used to distinguish bcc node
 type bccNetworkResourceSet struct {
@@ -67,7 +93,7 @@ func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) 
 	}
 	n.bccLock.RUnlock()
 
-	bccInfo, err := n.manager.bceclient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
+	bccInfo, err := n.bceclient.GetBCCInstanceDetail(context.TODO(), n.instanceID)
 	if err != nil {
 		n.log.Errorf("faild to get bcc instance detail: %v", err)
 		return n.bccInfo, err
@@ -83,7 +109,7 @@ func (n *bccNetworkResourceSet) refreshBCCInfo() (*bccapi.InstanceModel, error) 
 	// add security group to node
 	if operatorOption.Config.SecurityGroupSynerDuration > 0 {
 		n.securityGroupIDs = bccInfo.NicInfo.SecurityGroups
-		esgs, err := n.manager.bceclient.ListEsg(context.TODO(), n.instanceID)
+		esgs, err := n.bceclient.ListEsg(context.TODO(), n.instanceID)
 		if err != nil {
 			n.log.WithError(err).Error("list esg failed")
 		} else {
@@ -115,7 +141,7 @@ func (n *bccNetworkResourceSet) refreshENIQuota(scopeLog *logrus.Entry) (ENIQuot
 		return nil, err
 	}
 
-	eniQuota := newCustomerIPQuota(scopeLog, client, n.k8sObj.Name, n.instanceID, n.manager.bceclient)
+	eniQuota := newCustomerIPQuota(scopeLog, client, n.k8sObj.Name, n.instanceID, n.bceclient)
 	// default bbc ip quota
 	defaltENINums, defaultIPs := getDefaultBCCEniQuota(k8sNode)
 
@@ -163,6 +189,17 @@ func (n *bccNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 	return n.__prepareIPAllocation(scopedLog, true)
 }
 
+// __prepareIPAllocation 函数用于准备IP分配，返回一个ipam.AllocationAction类型的指针和错误信息。
+// 参数：
+//   - scopedLog (*logrus.Entry)：日志记录器的入口点，用于记录日志。
+//   - checkSubnet (bool)：是否检查子网，默认为false。
+//
+// 返回值：
+//   - a (*ipam.AllocationAction)：包含可用IP分配信息的ipam.AllocationAction类型的指针。
+//     AvailableForAllocationIPv4、AvailableForAllocationIPv6和PoolID字段将被设置为可用的IP数量和池ID。
+//     InterfaceID字段将被设置为可用的接口ID。
+//     AvailableInterfaces字段将被设置为可用的接口数量。
+//   - err (error)：如果发生错误，则为非nil错误；否则为nil。
 func (n *bccNetworkResourceSet) __prepareIPAllocation(scopedLog *logrus.Entry, checkSubnet bool) (a *ipam.AllocationAction, err error) {
 	a = &ipam.AllocationAction{}
 	eniQuota := n.bceNetworkResourceSet.getENIQuota()
@@ -171,7 +208,7 @@ func (n *bccNetworkResourceSet) __prepareIPAllocation(scopedLog *logrus.Entry, c
 	}
 	eniCount := 0
 
-	err = n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+	err = n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// available eni have been found
 			eniCount++
@@ -198,8 +235,9 @@ func (n *bccNetworkResourceSet) __prepareIPAllocation(scopedLog *logrus.Entry, c
 
 			// Eni that is not in an in use state should not be ignored.
 			// Otherwise, this will result in the creation of a new eni.
-			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse {
-				return fmt.Errorf("can not prepare ip allocation. eni %s is not inuse on vpc, please try again later", interfaceID)
+			if e.Status.CCEStatus != ccev2.ENIStatusReadyOnNode {
+				return fmt.Errorf("can not prepare ip allocation. eni %s status is %s on vpc, please try again later",
+					interfaceID, e.Status.CCEStatus)
 			}
 			// The limits include the primary IP, so we need to take it into account
 			// when computing the effective number of available addresses on the ENI.
@@ -284,7 +322,7 @@ func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 	var ips []string
 	if ipv4ToAllocate > 0 {
 		// allocate ip
-		ips, err = n.manager.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv4ToAllocate, allocation.InterfaceID, false)
+		ips, err = n.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv4ToAllocate, allocation.InterfaceID, false)
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			return nil, nil, fmt.Errorf("allocate ip to eni %s failed: %v", allocation.InterfaceID, err)
@@ -302,7 +340,7 @@ func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 	// allocate ipv6
 	if ipv6ToAllocate > 0 {
 		// allocate ipv6
-		ips, err = n.manager.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv6ToAllocate, allocation.InterfaceID, true)
+		ips, err = n.bceclient.BatchAddPrivateIP(ctx, []string{}, ipv6ToAllocate, allocation.InterfaceID, true)
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
 			err = fmt.Errorf("allocate ipv6 to eni %s failed: %v", allocation.InterfaceID, err)
@@ -323,13 +361,13 @@ func (n *bccNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 // perform the release of IPs.
 func (n *bccNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.ReleaseAction, ipv4ToRelease, ipv6ToRelease []string) error {
 	if len(ipv4ToRelease) > 0 {
-		err := n.manager.bceclient.BatchDeletePrivateIP(ctx, ipv4ToRelease, release.InterfaceID, false)
+		err := n.bceclient.BatchDeletePrivateIP(ctx, ipv4ToRelease, release.InterfaceID, false)
 		if err != nil {
 			return fmt.Errorf("release ipv4 %v from eni %s failed: %v", ipv4ToRelease, release.InterfaceID, err)
 		}
 	}
 	if len(ipv6ToRelease) > 0 {
-		err := n.manager.bceclient.BatchDeletePrivateIP(ctx, ipv6ToRelease, release.InterfaceID, true)
+		err := n.bceclient.BatchDeletePrivateIP(ctx, ipv6ToRelease, release.InterfaceID, true)
 		if err != nil {
 			return fmt.Errorf("release ipv6 %v from eni %s failed: %v", ipv6ToRelease, release.InterfaceID, err)
 		}
@@ -385,7 +423,14 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 				ipsToRelease = append(ipsToRelease, ipv6Result.PrivateIPAddress)
 			}
 			if len(ipsToRelease) > 0 {
-				err2 := n.manager.bceclient.BatchDeletePrivateIP(ctx, ipsToRelease, eniID, true)
+				err2 := retryOperation(func() error {
+					deleteErr := n.bceclient.BatchDeletePrivateIP(ctx, ipsToRelease, eniID, true)
+					if deleteErr != nil && strings.Contains(deleteErr.Error(), "PrivateIpInvalid") {
+						// PrivateIpInvalid error is treated as success
+						return nil
+					}
+					return deleteErr
+				}, scopedLog, "BatchDeletePrivateIP")
 				if err2 != nil {
 					scopedLog.WithError(err2).Error("release ip failed")
 				}
@@ -394,7 +439,7 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 	}()
 
 	// allocate ipv4
-	ipstr, err = n.manager.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, sbnID, []string{}, 1, false)
+	ipstr, err = n.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, sbnID, []string{}, 1, false)
 	if n.manager.HandlerVPCError(scopedLog, err, sbnID) != nil {
 		scopedLog.WithError(err).Error("allocate ip cross subnet failed")
 		return
@@ -413,7 +458,7 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 	scopedLog.WithField("ipv4", ipstr).Debug("allocate ipv4 cross subnet success")
 
 	if operatorOption.Config.EnableIPv6 && sbn.Spec.IPv6CIDR != "" {
-		ipstr, err = n.manager.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, sbnID, []string{}, 1, true)
+		ipstr, err = n.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, sbnID, []string{}, 1, true)
 		if n.manager.HandlerVPCError(scopedLog, err, sbnID) != nil {
 			scopedLog.WithError(err).Error("allocate ipv6 cross subnet failed")
 			return
@@ -435,13 +480,13 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 }
 
 // ReuseIPs implements realNodeInf
-func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
+func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
-		return "", false, ipsReleased, fmt.Errorf("allocate ip cross subnet not support primary ip mode")
+		return "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
 	scopedLog := n.log.WithField("action", "reuseIPs")
 	if len(ips) == 0 {
-		return "", false, ipsReleased, fmt.Errorf("no ip to reuse")
+		return "", fmt.Errorf("no ip to reuse")
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(owner)
@@ -471,57 +516,50 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 			}
 		}
 	}
-	// get eni
-	action, err := n.__prepareIPAllocation(scopedLog, false)
-	if err != nil {
-		return
-	}
-	if action.AvailableForAllocationIPv4 == 0 && action.AvailableForAllocationIPv6 == 0 {
-		if action.AvailableInterfaces == 0 {
-			return "", false, ipsReleased, fmt.Errorf("no available ip for allocation on node %s", n.k8sObj.Name)
-		}
-		_, eniID, err = n.CreateInterface(ctx, action, scopedLog)
-		if err != nil {
-			return "", false, ipsReleased, fmt.Errorf("create interface failed: %v", err)
-		}
-		return "", false, ipsReleased, fmt.Errorf("no available eni for allocation on node %s, try to create new eni %s", n.k8sObj.Name, eniID)
-	}
-	eniID = action.InterfaceID
-	scopedLog = scopedLog.WithField("eni", eniID)
-	scopedLog.Debug("prepare allocate ip cross subnet for eni")
+	scopedLog.Debugf("try to reuseIPs ipv4Result: %v, ipv6Result: %v", ipv4Result, ipv6Result)
 
+	// step1: release ip from old bcc/ebc/bbc eni before reuse ip if necessary
 	// release ip from old bcc/ebc/bbc eni before reuse ip if necessary
 	// check ip conflict
 	// should to delete ip from the old eni
-	isLocalIP, ipsReleased, err := n.rleaseOldIP(ctx, scopedLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
+	isLocalIP, eniID, err := n.releaseOldIP(ctx, scopedLog, ips, namespace, name, func(ctx context.Context, scopedLog *logrus.Entry, eniID string, toReleaseIPs []string) error {
 		scopedLog.WithField("oldENI", eniID).WithField("toReleaseIPs", toReleaseIPs)
-		err = n.manager.bceclient.BatchDeletePrivateIP(ctx, toReleaseIPs, eniID, false)
-		if err != nil {
+		err = n.bceclient.BatchDeletePrivateIP(ctx, toReleaseIPs, eniID, false)
+		if err != nil && !strings.Contains(err.Error(), "PrivateIpInvalid") {
 			scopedLog.Warnf("release ip %s from eni %s failed: %v", toReleaseIPs, eniID, err)
 		} else {
-			scopedLog.Info("release ip from old eni success")
+			err = nil
+			scopedLog.Debugf("release ip %s from eni %s success", toReleaseIPs, eniID)
 		}
 		return err
 	})
 	if err != nil {
-		return
+		return eniID, err
 	}
 	if isLocalIP {
-		enis, _ := watchers.ENIClient.GetByIP(ipv4Result.PrivateIPAddress)
-		eniID = enis[0].Name
-		scopedLog.Infof("ip %s is local ip, directly reusable", ips[0].PrivateIPAddress)
-		return
-	} else {
-		if len(ipsReleased) > 0 {
-			scopedLog.WithField("ipsReleased", ipsReleased).Debugf("ips %v is not local ip, release from old eni success", ips)
-			ipDeletedFromoldEni = true
+		scopedLog.Infof("ip %s is local ip, directly reusable, eniID: %s", ips[0].PrivateIPAddress, eniID)
+		return eniID, nil
+	}
+
+	scopedLog.Infof("ip %s is not local ip, try to reuse ip by choose available eni", ips[0].PrivateIPAddress)
+
+	//step2: try to prepare ip allocation for reuse ip
+	action, err := n.__prepareIPAllocation(scopedLog, false)
+	if err != nil {
+		return eniID, err
+	}
+	if action.AvailableForAllocationIPv4 == 0 && action.AvailableForAllocationIPv6 == 0 {
+		if action.AvailableInterfaces == 0 {
+			return "", fmt.Errorf("no available ip for allocation on node %s", n.k8sObj.Name)
 		}
+		_, eniID, err = n.CreateInterface(ctx, action, scopedLog)
+		if err != nil {
+			return "", fmt.Errorf("create interface failed: %v", err)
+		}
+		return "", fmt.Errorf("no available eni for allocation on node %s, try to create new eni %s", n.k8sObj.Name, eniID)
 	}
-	// check if all ips are released from old bcc/ebc/bbc eni before reuse ip
-	if ipDeletedFromoldEni && (len(ips) != len(ipsReleased)) {
-		scopedLog.Warnf("ip is not local, but only some ips (%v) are released from bcc/ebc eni", ipsReleased)
-		return "", ipDeletedFromoldEni, ipsReleased, fmt.Errorf("ip is not local, but only some ips (%v) are released from bcc/ebc eni", ipsReleased)
-	}
+	eniID = action.InterfaceID
+	scopedLog.Infof("found available eni %s, prepare allocate ipv4 %s cross subnet", eniID, ips[0].PrivateIPAddress)
 
 	defer func() {
 		// to roll back ip
@@ -534,7 +572,14 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 				ipsToRelease = append(ipsToRelease, ipv6Result.PrivateIPAddress)
 			}
 			if len(ipsToRelease) > 0 {
-				err2 := n.manager.bceclient.BatchDeletePrivateIP(ctx, ipsToRelease, eniID, true)
+				err2 := retryOperation(func() error {
+					deleteErr := n.bceclient.BatchDeletePrivateIP(ctx, ipsToRelease, eniID, true)
+					if deleteErr != nil && strings.Contains(deleteErr.Error(), "PrivateIpInvalid") {
+						// PrivateIpInvalid error is treated as success
+						return nil
+					}
+					return deleteErr
+				}, scopedLog, "BatchDeletePrivateIP")
 				if err2 != nil {
 					scopedLog.WithError(err2).Error("release ip failed")
 				}
@@ -542,37 +587,42 @@ func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.Priv
 		}
 	}()
 
-	// allocate ipv4
-	ipstr, err = n.manager.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, ipv4Result.SubnetID, []string{ipv4Result.PrivateIPAddress}, 1, false)
-	if err != nil {
-		ipv4Result = nil
-		scopedLog.WithError(err).Error("allocate ip cross subnet failed")
-		return
+	if ipv4Result != nil {
+		// allocate ipv4
+		var tempIpstr []string
+		allocateErr := retryOperation(func() error {
+			var retryErr error
+			tempIpstr, retryErr = n.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, ipv4Result.SubnetID, []string{ipv4Result.PrivateIPAddress}, 1, false)
+			if retryErr != nil && strings.Contains(retryErr.Error(), "EniPrivateIpExistException") {
+				// EniPrivateIpExistException error is treated as success
+				return nil
+			}
+			return retryErr
+		}, scopedLog, "BatchAddPrivateIpCrossSubnet")
+
+		if allocateErr != nil {
+			scopedLog.WithError(allocateErr).Errorf("allocate ip cross subnet failed for eniID %s with ipv4Result %v", eniID, ipv4Result)
+			return eniID, allocateErr
+		}
+		if len(tempIpstr) != 1 {
+			scopedLog.Warnf("IP %s is already allocated in eni %s", ipv4Result.PrivateIPAddress, eniID)
+		}
+		scopedLog.WithField("ipv4", tempIpstr).Debugf("reuse ip for owner %s in eni %s success", owner, eniID)
 	}
-	if len(ipstr) != 1 {
-		ipv4Result = nil
-		err = fmt.Errorf("allocate ip cross subnet failed, ipstr len %d", len(ipstr))
-		scopedLog.WithError(err).Error("allocate ip cross subnet failed")
-		return
-	}
-	scopedLog.WithField("ipv4", ipstr).Debug("allocate ipv4 cross subnet success")
 
 	if operatorOption.Config.EnableIPv6 && ipv6Result != nil {
-		ipstr, err = n.manager.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, ipv6Result.SubnetID, []string{ipv6Result.PrivateIPAddress}, 1, true)
+		ipstr, err = n.bceclient.BatchAddPrivateIpCrossSubnet(ctx, eniID, ipv6Result.SubnetID, []string{ipv6Result.PrivateIPAddress}, 1, true)
 		if n.manager.HandlerVPCError(scopedLog, err, ipv6Result.SubnetID) != nil {
-			scopedLog.WithError(err).Error("allocate ipv6 cross subnet failed")
-			return
+			scopedLog.WithError(err).Errorf("allocate ipv6 cross subnet failed for eniID %s with ipv6Result %v", eniID, ipv6Result)
+			return eniID, err
 		}
 		if len(ipstr) != 1 {
-			err = fmt.Errorf("allocate ipv6 cross subnet failed, ipstr len %d", len(ipstr))
-			scopedLog.WithError(err).Error("allocate ipv6 cross subnet failed")
-			return
+			scopedLog.Warnf("IP %s is already allocated in eni %s", ipv6Result.PrivateIPAddress, eniID)
 		}
-		scopedLog.WithField("ipv6", ipstr).Debug("allocate ipv6 cross subnet success")
+		scopedLog.WithField("ipv6", ipstr).Debugf("reuse ip for owner %s in eni %s success", owner, eniID)
 	}
-	scopedLog.Debug("update eni success")
-	return
-
+	scopedLog.Infof("reuse ip for owner %s success", owner)
+	return eniID, nil
 }
 
 var _ realNodeInf = &bccNetworkResourceSet{}

@@ -52,7 +52,7 @@ func (n *ebcNetworkResourceSet) prepareIPAllocation(scopedLog *logrus.Entry) (a 
 
 	// may should create a new primary ENI
 	if a.AvailableInterfaces == 0 && a.InterfaceID == "" && n.usePrimaryENIWithSecondaryMode {
-		n.manager.ForeachInstance(n.instanceID, n.k8sObj.Name,
+		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				_, ok := iface.Resource.(*eniResource)
 				if !ok {
@@ -196,7 +196,7 @@ func (n *ebcNetworkResourceSet) allocateIPs(ctx context.Context, scopedLog *logr
 	// case2: use primary eni with secondary ip mode
 	if ipv4ToAllocate > 0 {
 		// allocate ip
-		resp, err := n.manager.bceclient.BCCBatchAddIP(ctx, &bccapi.BatchAddIpArgs{
+		resp, err := n.bceclient.BCCBatchAddIP(ctx, &bccapi.BatchAddIpArgs{
 			InstanceId:                     n.instanceID,
 			SecondaryPrivateIpAddressCount: ipv4ToAllocate,
 			AllocateMultiIpv6Addr:          ipv6ToAllocate > 0,
@@ -232,7 +232,7 @@ func (n *ebcNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.Re
 		return n.bccNetworkResourceSet.releaseIPs(ctx, release, ipv4ToRelease, ipv6ToRelease)
 	}
 	if len(ipv4ToRelease) > 0 {
-		err := n.manager.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
+		err := n.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
 			InstanceId: n.instanceID,
 			PrivateIps: ipv4ToRelease,
 		})
@@ -241,7 +241,7 @@ func (n *ebcNetworkResourceSet) releaseIPs(ctx context.Context, release *ipam.Re
 		}
 	}
 	if len(ipv6ToRelease) > 0 {
-		err := n.manager.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
+		err := n.bceclient.BCCBatchDelIP(ctx, &bccapi.BatchDelIpArgs{
 			InstanceId: n.instanceID,
 			PrivateIps: ipv6ToRelease,
 		})
@@ -259,9 +259,9 @@ func (n *ebcNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 	return nil, "", fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
 }
 
-func (n *ebcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, ipDeletedFromoldEni bool, ipsReleased []string, err error) {
+func (n *ebcNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner string) (eniID string, err error) {
 	if !n.usePrimaryENIWithSecondaryMode {
 		return n.bccNetworkResourceSet.reuseIPs(ctx, ips, owner)
 	}
-	return "", false, ipsReleased, fmt.Errorf("ebc primary interface with secondary IP mode not support allocate ip cross subnet")
+	return "", fmt.Errorf("ebc primary interface with secondary IP mode not support reuse ip")
 }

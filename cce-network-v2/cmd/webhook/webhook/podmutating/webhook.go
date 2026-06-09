@@ -3,6 +3,7 @@ package podmutating
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 
@@ -26,6 +27,13 @@ var (
 
 	log = logging.NewSubysLogger("podmutating-webhook")
 )
+
+// PatchOperation - JSON Patch operation struct
+type PatchOperation struct {
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
+	Value interface{} `json:"value,omitempty"`
+}
 
 type MutatingPodHandler struct {
 	epWebhook *ewebhook.EndpointWebhook
@@ -77,12 +85,81 @@ func (h *MutatingPodHandler) Handle(ctx context.Context, req admission.Request) 
 	if reflect.DeepEqual(obj, pod) {
 		return admission.Allowed("")
 	}
+
 	klog.Infof("mutating %s pod (%s/%s) with psts success", req.Operation, obj.Namespace, obj.Name)
-	marshalled, err := json.Marshal(pod)
+
+	// Generate business-related JSON Patch operations
+	patches, err := h.generatePatches(pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
-	return admission.PatchResponseFromRaw(req.AdmissionRequest.Object.Raw, marshalled)
+
+	// Create response
+	return h.createPatchResponse(patches)
+}
+
+// generatePatches - directly generate JSON Patch operations for business modifications, no field comparison needed
+func (h *MutatingPodHandler) generatePatches(mutatedPod *corev1.Pod) ([]PatchOperation, error) {
+	var patches []PatchOperation
+
+	// 1. patch resources field
+	if len(mutatedPod.Spec.Containers) > 0 {
+		resources := mutatedPod.Spec.Containers[0].Resources
+		if len(resources.Requests) > 0 || len(resources.Limits) > 0 {
+			patches = append(patches, PatchOperation{
+				Op:    "add",
+				Path:  "/spec/containers/0/resources",
+				Value: resources,
+			})
+			klog.V(4).Info("added container resources patch")
+		}
+	}
+
+	// 2. patch affinity field
+	if mutatedPod.Spec.Affinity != nil {
+		patches = append(patches, PatchOperation{
+			Op:    "add",
+			Path:  "/spec/affinity",
+			Value: mutatedPod.Spec.Affinity,
+		})
+		klog.V(4).Info("added affinity patch")
+	}
+
+	// 3. patch TopologySpreadConstraints field
+	if len(mutatedPod.Spec.TopologySpreadConstraints) > 0 {
+		patches = append(patches, PatchOperation{
+			Op:    "add",
+			Path:  "/spec/topologySpreadConstraints",
+			Value: mutatedPod.Spec.TopologySpreadConstraints,
+		})
+		klog.V(4).Info("added topologySpreadConstraints patch")
+	}
+
+	return patches, nil
+}
+
+// createPatchResponse - create JSON Patch response
+func (h *MutatingPodHandler) createPatchResponse(patches []PatchOperation) admission.Response {
+	if len(patches) == 0 {
+		return admission.Allowed("")
+	}
+
+	// Serialize patches
+	patchBytes, err := json.Marshal(patches)
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("marshal patches: %w", err))
+	}
+
+	// Create response
+	patchType := admissionv1.PatchTypeJSONPatch
+	return admission.Response{
+		AdmissionResponse: admissionv1.AdmissionResponse{
+			UID:       "",
+			Allowed:   true,
+			Patch:     patchBytes,
+			PatchType: &patchType,
+		},
+	}
 }
 
 var _ admission.DecoderInjector = &MutatingPodHandler{}

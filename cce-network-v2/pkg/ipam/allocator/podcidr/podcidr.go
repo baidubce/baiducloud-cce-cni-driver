@@ -400,6 +400,8 @@ func (n *NodesPodCIDRManager) Delete(nodeName string) error {
 // Resync resyncs the nodes with k8s.
 func (n *NodesPodCIDRManager) Resync(context.Context, time.Time) {
 	n.Mutex.Lock()
+	defer n.Mutex.Unlock()
+
 	if !n.canAllocatePodCIDRs {
 		nrsDatas, err := n.nodeGetter.Lister().List(labels.Everything())
 		if err != nil {
@@ -424,7 +426,6 @@ func (n *NodesPodCIDRManager) Resync(context.Context, time.Time) {
 		n.nodesToAllocate = nil
 		log.Infof("completed to allocate new %d nodes cidr", len(n.nodesToAllocate))
 	}
-	n.Mutex.Unlock()
 
 	n.k8sReSync.Trigger()
 }

@@ -43,23 +43,32 @@ func (s *ENIStatus) AppendVPCStatus(vpcStatus VPCENIStatus) {
 }
 
 func (s *ENIStatus) AppendCCEENIStatus(status CCEENIStatus) {
-	if s.CCEStatus != status {
-		s.CCEStatus = status
-		change := ENIStatusChange{
-			StatusChange: StatusChange{
-				Code: "ok",
-				Time: metav1.Now(),
-			},
-			CCEENIStatus: status,
-		}
-
-		if len(s.CCEStatusChangeLog) < 20 {
-			s.CCEStatusChangeLog = append(s.CCEStatusChangeLog, change)
-		} else {
-			s.CCEStatusChangeLog = s.CCEStatusChangeLog[1:19]
-			s.CCEStatusChangeLog = append(s.CCEStatusChangeLog, change)
-		}
+	// If cce eni status changed or cce eni status is not ENIStatusReadyOnNode,
+	// append the change log
+	if s.CCEStatus == status && status == ENIStatusReadyOnNode {
+		return
 	}
+
+	s.CCEStatus = status
+	if status != ENIStatusReadyOnNode {
+		s.CCEStatus = ENIStatusErrorOnNode
+	}
+	change := ENIStatusChange{
+		StatusChange: StatusChange{
+			Code:    "ok",
+			Message: string(status),
+			Time:    metav1.Now(),
+		},
+		CCEENIStatus: s.CCEStatus,
+	}
+
+	if len(s.CCEStatusChangeLog) < 10 {
+		s.CCEStatusChangeLog = append(s.CCEStatusChangeLog, change)
+	} else {
+		s.CCEStatusChangeLog = s.CCEStatusChangeLog[len(s.CCEStatusChangeLog)-9:]
+		s.CCEStatusChangeLog = append(s.CCEStatusChangeLog, change)
+	}
+	return
 }
 
 func FiltePrimaryAddress(IPs []*models.PrivateIP) []*models.PrivateIP {

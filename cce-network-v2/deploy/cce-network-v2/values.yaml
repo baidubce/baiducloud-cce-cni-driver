@@ -15,21 +15,78 @@ network:
       # Overrides the image tag whose default is the chart appVersion.
       tag: ""
     resources: { }
+    disableHttp2: false
     rdma:
       enable: true
     webhook:
       mutating: cce-network-v2-mutating-webhook
       validating: ""
       enable: true
-    affinity:
-      nodeAffinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 1
-          preference:
-            matchExpressions:
-            - key: cluster-role
-              operator: In
-              values: ["master"]    
+      resources: { }
+      cert: |
+        -----BEGIN CERTIFICATE-----
+        MIIDqjCCApKgAwIBAgIUbpu2Cda01w82lhZJkO8gFbAF3iswDQYJKoZIhvcNAQEL
+        BQAwKTEXMBUGA1UEAwwOY2NlLW5ldHdvcmstdjIxDjAMBgNVBAoMBUJhaWR1MB4X
+        DTI1MDQwOTEzMDExOFoXDTQ1MDQwNDEzMDExOFowKTEXMBUGA1UEAwwOY2NlLW5l
+        dHdvcmstdjIxDjAMBgNVBAoMBUJhaWR1MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A
+        MIIBCgKCAQEAmO8gRXmeBm+KwL1c3/Fu9lmUJSYfOUpydk1Y40ZXWxZTr0ymGdDU
+        E9ajBnHyc3Vn0uosj9a8TiMJ+Z2czDbO8uHO9WjRMFYsn2w5RtjKLX8p+nfl2GN0
+        aqzO1Gwfl3KV2th6ESCuJQCna8r5a71az5j8phB42B3RDkTDpTrPJPP9WEooqp/Y
+        C5sqf5seTra7BZz6obziuyjnT9hv2wGrT17PYv+g2iZ75e6F0UavvRrN2HtwirTm
+        qPijyyCPh2VR9nYkxs4xYkrCDVMQbD8GNr9aMKktMJdshCgDteH5NEABBCHiKDSN
+        JPA9Lzcy/Lrl2TGd+9EkUPwpLUZnwZRfBwIDAQABo4HJMIHGMAkGA1UdEwQCMAAw
+        CwYDVR0PBAQDAgXgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMFcGA1UdEQRQME6CDmNj
+        ZS1uZXR3b3JrLXYyghtjY2UtbmV0d29yay12Mi5jY2UtOXl6ZDdiaHaCH2NjZS1u
+        ZXR3b3JrLXYyLmNjZS05eXpkN2Jodi5zdmMwHQYDVR0OBBYEFHFq3YFad2pqRX8X
+        0Z1t8nrLqQkJMB8GA1UdIwQYMBaAFE9jAMTeQgWs3dt72IP9c06U0xOpMA0GCSqG
+        SIb3DQEBCwUAA4IBAQCBCMzryYBkfwFN19HZb03zW+WqUYufzMoWjAmgYrG/Ea6+
+        FohwHB1+M4oYAfZU9v1pYeVNDkqfMI6+t7umEEndRocC9ipR02bVWA5fUY07RuQx
+        5Sy2LXTQKNertw64NtpEf9g6q8/jmA35QIcf/qwN7t7afGGk5GQljMSh1iaxGTSG
+        3iduTZJqeGEfDmM2A2QyQCnTRVm5xEvWjTBq1XzlStXxjhiplDOicAi2JS09LYFQ
+        0IT3oFGhAhoOvl/S1x+wSFtaHpUvEilxCtUNkwFwv7De0ZKoQfaT148+2hGUDZpw
+        jlSSF3zAYCsVp3f/JJ+3B3LaWTfRA27O6lfC8FEl
+        -----END CERTIFICATE-----
+      key: |
+        -----BEGIN PRIVATE KEY-----
+        MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCY7yBFeZ4Gb4rA
+        vVzf8W72WZQlJh85SnJ2TVjjRldbFlOvTKYZ0NQT1qMGcfJzdWfS6iyP1rxOIwn5
+        nZzMNs7y4c71aNEwViyfbDlG2Motfyn6d+XYY3RqrM7UbB+XcpXa2HoRIK4lAKdr
+        yvlrvVrPmPymEHjYHdEORMOlOs8k8/1YSiiqn9gLmyp/mx5OtrsFnPqhvOK7KOdP
+        2G/bAatPXs9i/6DaJnvl7oXRRq+9Gs3Ye3CKtOao+KPLII+HZVH2diTGzjFiSsIN
+        UxBsPwY2v1owqS0wl2yEKAO14fk0QAEEIeIoNI0k8D0vNzL8uuXZMZ370SRQ/Ckt
+        RmfBlF8HAgMBAAECggEAEPYG9I2TZWVTfyLBPSOanym6JhCUn+xOG3633/o6JU5U
+        Q6R9kMQPRo/5uUpD4w2J++NKw+fDL0Ca55sqUPUMffVl2DkivM33LvXNYw/CBHUO
+        TnVOVscDmfJxEdqtT5o+smxrGqEu5HMDyQ7+xeB/RMzTywXCppKlT9l31UhbbDPo
+        k7m+3fpCqg++gyAgbuT7k9x+7iCkMWg4hXijallTr8BeyAm+ySABC5CjteRRBclN
+        AJVGWhk3A9bK6Ai1zd3FlIgypDaYBD26Cr6wiQkWp3CdnneFVY6IoaJOvk41Fk0e
+        1gt5FvwF3lfJQ1U1Ofs9GKOQFr+kJXBo+j1u2Qw8EQKBgQDFaR5zkblnb1jGG68Z
+        goZA7CUZ4Ejt7hWCO50n2i5LGqMW4s/k4Rk9iC+AubdoQCzl7bMDL+sCepHDXz+U
+        Ln6hA/ZWoBy1cyqDchtBWfoG637ISHmaDnfGSJtr+HFd54HsFbxvS4x/B+aHqKdH
+        cnXS5JTzE4kz9puNdyesZuC+TwKBgQDGUsPgr/61TdSlWsz1FpLkXhmoGRA4xsSw
+        hal1GUE90MX2i9aAYg3EFNNkPcAWU8SKRJBecWF3zbDlsu8EcAJuCiP6L86sqaS2
+        q7kGoABfpwqG1TVYpsiKXd5c/iejRu94CcCYu3BXGj5/BbrJxJp1nVh9IdeTMJ7d
+        Y0/lzXAdyQKBgHo89isvz/NZgknhuJH+Pa2TzAFy3RXfeBgVW+Hiewnsa5JvTbX3
+        II72dhuqZAQ8wNB7WH6fvFDjnsCwiQjzpVuEvZO0PzKoJmoQTQoxcd25Et9n6UxY
+        qxfvu7WmuGQiR1PtvanYyR2bwca8yyA1ovm8qvK9ZRb1HCsD3mAlsAKHAoGBAImg
+        1h4PBIt9P5ygrqtGxxmD0/o7qm48QjLeDwMcS5JCV58I3AqsATGZ4jkmQS89Yp8x
+        hZ6EwEcLjz9YNVa3BHiowN7WXm6kK5I5CWX3k0rN+RgozaR/2ZtsGOwf1BITIAwF
+        eIqFSSipJcWwjDeJIEeOseHkol2a2CR6zu+C6dNBAoGBAJGFnbvLxK0WUS9YXiIB
+        pS+M0GX7dyEotaYdfbN6hZXCcTtLpHl+eUbWc/H6RU5TRiKFRIT8qR9qZT2Y/+oH
+        ufzZeysDiX+pYLh1e+UpI7PtDoirSvc73hI59PHjc0ehTxJrjxDHJBNQYdagGNMn
+        5s5XE1uQyc9/NE6SHBj5A+kY
+        -----END PRIVATE KEY-----
+      caBundle:
+        LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNekNDQWh1Z0F3SUJBZ0lVUFR6MUxzZGtTK3djYnk5MTZJMVBZNGNNSTRNd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0tURVhNQlVHQTFVRUF3d09ZMk5sTFc1bGRIZHZjbXN0ZGpJeERqQU1CZ05WQkFvTUJVSmhhV1IxTUI0WApEVEkxTURRd09URXpNREV4T0ZvWERUUTFNRFF3TkRFek1ERXhPRm93S1RFWE1CVUdBMVVFQXd3T1kyTmxMVzVsCmRIZHZjbXN0ZGpJeERqQU1CZ05WQkFvTUJVSmhhV1IxTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEEKTUlJQkNnS0NBUUVBdER4Z3ZIVnR3NjRZd1NKNFNlR2pDeHdyRWUxR3dNSm12Mko0UVh4RUV3d01JV2d5OUd1SApta3gzLytmems1UFE2MGU4aXhad2FGSGQ1QzFUeDFEcnVkaUhnb1pIRWNJaXRYdDFhcHlvSGhEMXgxWDQzUDF3CjNPeW56amM0VEpNd1FuamVUaGlyeTBXUlpObGZRU0VycWJoeWxFWFYxVFNBTk5JaC9scUZwa08rNUJ5SElOMU0KZG5vMVB5aEkwMmNPUkdaNUxMeHZvcGhKM1cxdG9SS1JIcjNzVVNWdmJYRTFFbjhXVG92VTBNUXEwbGp4RzBLeApYYVNsZGl6OWkzc2dZNGM5amgrSFowc1UwSUMwa0kvSFBTS0RJbndOWXh3eitJbFkvOGRJWWk5N3RmdHBYVEIxCmozVUJCM1I1dy8wZmVNcTk4Sm5ISXZMaWFORHNMQllHTFFJREFRQUJvMU13VVRBZEJnTlZIUTRFRmdRVVQyTUEKeE41Q0JhemQyM3ZZZy8xelRwVFRFNmt3SHdZRFZSMGpCQmd3Rm9BVVQyTUF4TjVDQmF6ZDIzdllnLzF6VHBUVApFNmt3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFOQmdrcWhraUc5dzBCQVFzRkFBT0NBUUVBRjk0c0xtOHR3cm9rCitaVW1EeVBRK0lnaGpDQmg4WXRYaVNPcE9FK3dlaHNaazRPbWh1OExwSFZsTS9SNnBQY1g3Q1VwQkI2L29PckQKSlVQRDVkWWdrYmFlaWZDa3BuOWZSczB0MVJZWVVkTkNtOUNZeVRwWG5yTjBwbC9XWm9XU3FMMlV3Z0wzb1djcwpSeUdTWWdtcE5hSHFYZ3NURjh5aGF6NW9pWCtZcXlIUktoNTNibFdONk9wMGdxTEM0V2lWS1MwckFpdURSQUNCCjFTRXNESTJic3F4OGJDUnlBL09MMVg4QkJVcUJFWmI1Rlk5L2pMUjJjY3pHVWROZS9YNVR1T2taYXFlRzBVNGcKQi9QdDFwY2ptVFVQU3RRdmJ6SmNpczJEdGsyVVpoRmxsZEVkeGxYS1VPMWQ1bCtTNkNqMWZjRXc4NWwzM2h4UAorZWVOMFNtek1nPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+    affinity: {}
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app.cce.baidubce.com
+            operator: In
+            values:
+            - cce-network-operator
+        topologyKey: kubernetes.io/hostname
   agent:
     name: agent
     image:
@@ -47,9 +104,23 @@ network:
                 operator: NotIn
                 values:
                   - virtual-kubelet
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 5%
 tolerations:
   - operator: "Exists"
 
+# 此处的部署模式分为三种：
+# standalone: 独立部署方式，所有组件都部署在用户集群
+# pro-meta: 托管部署模式下部署在pro-meta集群的部分组件
+# incluster: 托管部署模式下部署在用户集群的部分组件
+DeploymentMod: "standalone"
+
+apiserverServiceEnv:
+  enable: false
+  kubernetesServiceHost: ""
+  kubernetesServicePort: ""
 
 imagePullSecrets: [ ]
 nameOverride: ""
@@ -64,7 +135,10 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
-podAnnotations: { }
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "19965"
+  prometheus.io/path: "/metrics"
 
 podSecurityContext: { }
 # fsGroup: 2000
@@ -119,8 +193,8 @@ ccedConfig:
   debug: false
   # 在非k8s环境运行使用
   # k8s-kubeconfig-path: /run/kubeconfig
-  k8s-client-burst: 100
-  k8s-client-qps: 50
+  k8s-client-burst: 300
+  k8s-client-qps: 200
   k8s-api-discovery: false
   leader-election-lease-duration: 60s
   leader-election-renew-deadline: 30s
@@ -168,13 +242,16 @@ ccedConfig:
   # ipam 模式. privatecloudbase: 私有云底座;vpc-eni: BCE VPC ENI
   ipam: vpc-eni
   endpoint-gc-interval: 30s
+
   # vpc 资源同步周期
-  resource-resync-interval: 20s
+  resource-resync-interval: 10s
+  # eni 资源同步周期
+  resource-eni-resync-interval: 5s
   # 资源重新同步的并发协程数
   resource-resync-workers: 64
-  nrs-resource-resync-workers: 500
-  rdma-resource-resync-workers: 500
-  eni-resource-resync-workers: 100
+  nrs-resource-resync-workers: 1000
+  rdma-resource-resync-workers: 1000
+  eni-resource-resync-workers: 1000
   subnet-resource-resync-workers: 10
 
   # agent vpc-eni 配置
@@ -190,13 +267,13 @@ ccedConfig:
   eni-pre-allocate-num: 1
   eni-route-table-offset: 127
   # 启用burstable ENI池，默认使用保持最少 1 个 ENI 空闲
-  burstable-mehrfach-eni: 1
+  burstable-mehrfach-eni: 0
   # ippool 优化配置
   ippool-min-allocate-ips: 10
   ippool-pre-allocate: 2
-  ippool-max-above-watermark: 24
+  ippool-max-above-watermark: 2
   # 自动释放超限的IP，默认不开启释放（开启 burstable ENI 的节点默认默认不会开启 IP 释放）
-  release-excess-ips: false
+  release-excess-ips: true
   excess-ip-release-delay: 180
 
   cce-endpoint-gc-interval: 20s

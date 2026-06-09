@@ -14,8 +14,10 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -57,16 +59,19 @@ type VPCENISyncerRouter struct {
 func (es *VPCENISyncerRouter) Init(ctx context.Context) error {
 	eventRecorder := k8s.EventBroadcaster().NewRecorder(scheme.Scheme, corev1.EventSource{Component: eniControllerName})
 	bceclient := option.BCEClient()
-	resyncPeriod := operatorOption.Config.ResourceENIResyncInterval
+	hpasclient := option.BCEHPASClient()
+	resyncPeriod := operatorOption.Config.ResourceRemoteENIResyncInterval
 
 	// 1. init vpc remote syncer
 	vpcRemote := &remoteVpcEniSyncher{
 		bceclient:     bceclient,
+		hpasclient:    hpasclient,
 		eventRecorder: eventRecorder,
 		ClusterID:     operatorOption.Config.CCEClusterID,
 	}
 	es.eni = &eniSyncher{
 		bceclient:    bceclient,
+		hpasclient:   hpasclient,
 		resyncPeriod: resyncPeriod,
 
 		remoteSyncer:  vpcRemote,
@@ -131,6 +136,7 @@ type eniSyncher struct {
 	syncManager  *SyncManager[eni.Eni]
 	updater      syncer.ENIUpdater
 	bceclient    cloud.Interface
+	hpasclient   cloud.Interface
 	resyncPeriod time.Duration
 
 	remoteSyncer  remoteEniSyncher
@@ -234,22 +240,26 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 			ctx:      ctx,
 			resource: newObj,
 			scopeLog: scopeLog,
+			isSync:   false,
 		}
-
+		// When the state machine returns a non-delay type error, the retry mechanism is triggered.
+		// When the state machine returns a delay type error, it indicates that the status of the
+		// ENI CR is temporarily consistent with the VPC side status, and no further state changes
+		// are needed in this processing.
+		// When the state machine does not return an error, the final state flag（isSync）determines
+		// whether its status needs to be updated.
 		err = machine.start()
 		isNeedSkipUpdate = machine.isSync
-		eniStatus = &newObj.Status
-		_, isDelayError := err.(*cm.DelayEvent)
-		if isDelayError {
-			goto UpdateStatus
-		} else if err != nil {
-			scopeLog.WithError(err).Error("eni machine failed")
+		eniStatus = &machine.resource.Status
+		delayEvent, isDelayError := err.(*cm.DelayEvent)
+		if err != nil {
+			if isDelayError {
+				scopeLog.WithField("eni", newObj.Name).Infof("eni receive delay event, will retry after %v seconds", delayEvent.Duration)
+			}
 			return err
 		}
 	}
 
-	// When the Finalizer is null, only patching is allowed, updates will ignore changes.
-UpdateStatus:
 	if isNeedSkipUpdate {
 		return nil
 	}
@@ -363,90 +373,129 @@ type eniStateMachine struct {
 
 // Start state machine flow
 func (esm *eniStateMachine) start() error {
+	//set the sync flag to true, indicating that the status needs to be updated only in non-final states.
+	esm.isSync = true
 	// ENI for RDMA (ccev2.ENIForHPC or ccev2.ENIForERI) need do nothing, so return nil directly.
 	// esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name) can not stat ENI for RDMA, it will return
 	// error like [Code: EniNotFoundException; Message: eni:eni-tzjatpp7gbh6 resource not exist;
 	// RequestId: 148ca1d1-174f-494a-8192-5bae2a3bf0c7]". So we need to check ENI type first.
-	if esm.resource.Spec.Type == ccev2.ENIForHPC || esm.resource.Spec.Type == ccev2.ENIForERI {
-		return nil
+	if esm.resource.Spec.Type == ccev2.ENIForHPC {
+		return esm.handleRdmaENI()
 	}
 	var err error
-	if esm.resource.Status.VPCStatus == ccev2.VPCENIStatusInuse {
-		esm.scopeLog.Debugf("eni %s is already in inused", esm.resource.Name)
-	} else if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusDeleted {
-		// TODO: The preCreated ENI's OwnerReferences maybe can be managed by instance-group in the feature.
-		owners := esm.resource.OwnerReferences
-		managedByMe := false
-		if len(owners) != 0 {
-			for _, o := range owners {
-				if o.APIVersion == ccev2.SchemeGroupVersion.String() && o.Kind == ccev2.NRSKindDefinition {
-					managedByMe = true
-					break
-				}
+	switch esm.resource.Status.VPCStatus {
+	case ccev2.VPCENIStatusInuse:
+		esm.scopeLog.Debugf("eni %s is already in use", esm.resource.Name)
+	case ccev2.VPCENIStatusDeleted:
+		esm.scopeLog.Debugf("eni %s is already deleted, ingonre it", esm.resource.Name)
+	default:
+		err = esm.handleNonFinalStateMachine()
+	}
+	return err
+}
+
+func (esm *eniStateMachine) handleNonFinalStateMachine() error {
+	// In non-final state, the final state flag is set to false
+	esm.isSync = false
+
+	// TODO: The preCreated ENI's OwnerReferences maybe can be managed by instance-group in the feature.
+	owners := esm.resource.OwnerReferences
+	managedByMe := false
+	if len(owners) != 0 {
+		for _, o := range owners {
+			if o.APIVersion == ccev2.SchemeGroupVersion.String() && o.Kind == ccev2.NRSKindDefinition {
+				managedByMe = true
+				break
 			}
 		}
-		if !managedByMe {
-			esm.scopeLog.Infof("eni object %s has not been managed by cce-cni yet (OwnerReference not initialized), skip state machine",
-				esm.resource.Name)
-			esm.isSync = true
-			return nil
-		}
+	}
+	if !managedByMe {
+		esm.scopeLog.Infof("eni object %s has not been managed by cce-cni yet (OwnerReference not initialized), skip state machine",
+			esm.resource.Name)
+		esm.isSync = true
+		return nil
+	}
 
-		// refresh status of ENI
-		esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
+	ifNeedUpdate, err := esm.handlePreOption()
+	if err != nil || ifNeedUpdate {
+		return err
+	}
+
+	switch esm.resource.Status.VPCStatus {
+	case ccev2.VPCENIStatusAvailable:
+		err = esm.attachENI()
+	case ccev2.VPCENIStatusAttaching:
+		err = esm.attachingENI()
+	case ccev2.VPCENIStatusDetaching:
+		// TODO: do nothing or try to delete ENI
+		// err = esm.deleteENI()
+	}
+
+	if err != nil {
+		log.WithField(taskLogField, eniControllerName).
+			WithContext(esm.ctx).
+			WithError(err).
+			Errorf("failed to run ENI(%s) with status %s state machine", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus)
+		return err
+	}
+	// there is no need to update eni status now, so wait for next delay event to list eni state again
+	esm.isSync = true
+
+	return cm.NewDelayEvent(
+		esm.resource.Name,
+		ENIReadyTimeToAttach,
+		fmt.Sprintf("ENI %s status is not final: %s", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus),
+	)
+}
+
+func (esm *eniStateMachine) handlePreOption() (bool, error) {
+	var err error
+	// step1: get the actual status of eni from iaas
+	esm.vpceni, err = esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name)
+	if err != nil {
 		if cloud.IsErrorReasonNoSuchObject(err) {
-			// eni not found, will delete it which not inuse
-			log.WithField("eniID", esm.resource.Name).Error("not inuse eni not found in vpc, will delete it")
-			return esm.deleteENI()
-		} else if err != nil {
-			return fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
+			// ENI not found, will delete it if not in use
+			log.WithField("eniID", esm.resource.Name).Error("not in use ENI not found in VPC, will delete it")
+			return false, esm.deleteENI()
 		}
+		return false, fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
+	}
 
-		if esm.vpceni.Status == string(ccev2.VPCENIStatusInuse) {
-			updateENISpecFromVPCENI(esm)
-			// update spec
-			var updateError error
-			esm.resource, updateError = esm.es.updater.Update(esm.resource)
-			if updateError != nil {
-				esm.scopeLog.WithError(updateError).Error("update eni spec failed")
-				return updateError
-			}
-			// add status
-			(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
-			esm.resource, err = esm.es.updater.UpdateStatus(esm.resource)
-			if err != nil {
-				return err
-			}
-			esm.isSync = true
-			esm.scopeLog.Info("Successfully update the ENI status to inuse and populate its content.")
-			return nil
-		}
-
-		switch esm.resource.Status.VPCStatus {
-		case ccev2.VPCENIStatusAvailable:
-			err = esm.attachENI()
-		case ccev2.VPCENIStatusAttaching:
-			err = esm.attachingENI()
-		case ccev2.VPCENIStatusDetaching:
-			// TODO: do nothing or try to delete eni
-			// err = esm.deleteENI()
-		}
+	// step2: If the eni current status is inuse, perform an atomic update of its spec and append the status.
+	if esm.vpceni.Status == string(ccev2.VPCENIStatusInuse) {
+		updateENISpecFromVPCENI(esm)
+		// Update spec
+		esm.resource, err = esm.es.updater.Update(esm.resource)
 		if err != nil {
-			log.WithField(taskLogField, eniControllerName).
-				WithContext(esm.ctx).
-				WithError(err).
-				Errorf("failed to run eni(%s) with status %s status machine", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus)
-			return err
+			esm.scopeLog.WithError(err).Error("update ENI spec failed")
+			return false, err
 		}
-
-		// refresh the status of ENI
-		if esm.resource.Status.VPCStatus != ccev2.VPCENIStatus(esm.vpceni.Status) {
-			(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
-			return nil
+		// Append status
+		esm.resource.Status.AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
+		esm.resource, err = esm.es.updater.UpdateStatus(esm.resource)
+		if err != nil {
+			return false, err
 		}
+		esm.scopeLog.Info("Successfully updated the ENI status to inuse and populated its content.")
+		// After atomically setting its status, the ENI reaches a final state, and the final state flag is set to true
+		esm.isSync = true
+		return true, nil
+	}
 
-		// not the final status, will retry later
-		return cm.NewDelayEvent(esm.resource.Name, ENIReadyTimeToAttach, fmt.Sprintf("eni %s status is not final: %s", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus))
+	// step3: if ENI cr status is not equal with the actual status, refresh the status of ENI
+	if esm.resource.Status.VPCStatus != ccev2.VPCENIStatus(esm.vpceni.Status) {
+		esm.resource.Status.AppendVPCStatus(ccev2.VPCENIStatus(esm.vpceni.Status))
+		return true, nil
+	}
+	return false, nil
+}
+
+// handleRdmaENI handle ENI for RDMA type
+// For ENIForHPC, if status is not inuse, directly update to inuse
+func (esm *eniStateMachine) handleRdmaENI() error {
+	if esm.resource.Status.VPCStatus != ccev2.VPCENIStatusInuse {
+		(&esm.resource.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
+		esm.isSync = false
 	}
 	return nil
 }
@@ -470,18 +519,17 @@ func updateENISpecFromVPCENI(esm *eniStateMachine) {
 // attachENI attach a  ENI to instance
 // Only accept calls whose ENI status is "available"
 func (esm *eniStateMachine) attachENI() error {
-	// status is not match
-	if esm.vpceni.Status != string(ccev2.VPCENIStatusAvailable) {
-		return nil
-	}
 
 	// eni is expired, do rollback
 	if esm.resource.CreationTimestamp.Add(ENIMaxCreateDuration).Before(time.Now()) {
 		return esm.deleteENI()
 	}
 
+	// Dynamically select client based on instance type
+	client := esm.getClientForENI()
+
 	// try to attach eni to bcc instance
-	err := esm.es.bceclient.AttachENI(esm.ctx, &enisdk.EniInstance{
+	err := client.AttachENI(esm.ctx, &enisdk.EniInstance{
 		InstanceId: esm.resource.Spec.ENI.InstanceID,
 		EniId:      esm.resource.Spec.ENI.ID,
 	})
@@ -504,7 +552,8 @@ func (esm *eniStateMachine) attachENI() error {
 
 // deleteENI roback to delete eni
 func (esm *eniStateMachine) deleteENI() error {
-	err := esm.es.bceclient.DeleteENI(esm.ctx, esm.resource.Spec.ENI.ID)
+	client := esm.getClientForENI()
+	err := client.DeleteENI(esm.ctx, esm.resource.Spec.ENI.ID)
 	if err != nil && !cloud.IsErrorReasonNoSuchObject(err) && !cloud.IsErrorENINotFound(err) {
 		esm.es.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "DeleteENIFailed", "failed to delete eni(%s): %v", esm.resource.Spec.ENI.ID, err)
 		return fmt.Errorf("failed to delete eni(%s): %s", esm.resource.Spec.ENI.ID, err.Error())
@@ -517,17 +566,14 @@ func (esm *eniStateMachine) deleteENI() error {
 	}
 
 	log.WithField("eniID", esm.resource.Name).Info("delete eni crd resource success")
+	// After successfully deleting the ENI, it reaches a final state, and the synchronization flag is set to true
+	esm.isSync = true
 	return nil
 }
 
 // attachingENI Processing ENI in the attaching state
 // ENI may be stuck in the attaching state for a long time and need to be manually deleted
 func (esm *eniStateMachine) attachingENI() error {
-	// status is not match
-	if esm.vpceni.Status != string(ccev2.VPCENIStatusAttaching) {
-		return nil
-	}
-
 	if esm.resource.CreationTimestamp.Add(ENIMaxCreateDuration).Before(time.Now()) {
 		esm.es.eventRecorder.Eventf(esm.resource, corev1.EventTypeWarning, "AttachingENIError", "eni(%s) is in attaching status more than %s, will delete it", esm.resource.Spec.ENI.ID, ENIMaxCreateDuration.String())
 		return esm.deleteENI()
@@ -575,4 +621,27 @@ func ToModelPrivateIP(ipset []enisdk.PrivateIp, vpcID, subnetID string) []*model
 		pIPSet = append(pIPSet, newPIP)
 	}
 	return pIPSet
+}
+
+// getClientForENI selects the appropriate client based on the instance type of the NetResourceSet associated with the ENI resource
+func (esm *eniStateMachine) getClientForENI() cloud.Interface {
+	// 通过ENI的InstanceID获取对应的NetResourceSet
+	nrsList, err := watchers.NetResourceSetClient.GetByInstanceID(esm.resource.Spec.ENI.InstanceID)
+	if err != nil || len(nrsList) == 0 {
+		// 如果获取失败，使用默认的bceclient
+		esm.scopeLog.WithError(err).Warnf("failed to get NetResourceSet for instanceID %s, using default client", esm.resource.Spec.ENI.InstanceID)
+		return esm.es.bceclient
+	}
+
+	// 查找匹配的NetResourceSet（非RDMA类型）
+	for _, nrs := range nrsList {
+		if nrs.Spec.ENI != nil && nrs.Spec.ENI.InstanceType == string(metadata.InstanceTypeExHPAS) {
+			// 如果是HPAS实例，使用hpasclient
+			esm.scopeLog.Infof("using HPAS client for instanceID %s (instance-type: %s)", esm.resource.Spec.ENI.InstanceID, nrs.Spec.ENI.InstanceType)
+			return esm.es.hpasclient
+		}
+	}
+
+	// 默认使用bceclient
+	return esm.es.bceclient
 }

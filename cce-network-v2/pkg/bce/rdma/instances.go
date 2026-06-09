@@ -53,8 +53,11 @@ type rdmaInstancesManager struct {
 	cepClient *watchers.CCEEndpointUpdaterImpl
 
 	// bceClient to get bce objects
-	bceClient cloud.Interface
+	bceClientd cloud.Interface
 	// tmp cache with bce
+
+	// hpasClient to get hpas objects
+	hpasClient cloud.Interface
 
 	//iaasClient client.IaaSClient
 	eriClient *client.EriClient
@@ -64,20 +67,21 @@ type rdmaInstancesManager struct {
 // newInstancesManager returns a new instances manager
 func newInstancesManager(
 	bceClient cloud.Interface,
+	hpasClient cloud.Interface,
 	eriClient *client.EriClient,
 	roceClient *client.HpcClient,
 	eniLister listv2.ENILister, sbnLister listv1.SubnetLister,
 	cepClient *watchers.CCEEndpointUpdaterImpl) *rdmaInstancesManager {
 
 	return &rdmaInstancesManager{
-		nodeMap: make(map[string]*bceRDMANetResourceSet),
-
-		eniLister: eniLister,
-		sbnLister: sbnLister,
-		bceClient: bceClient,
-		eriClient: eriClient,
-		hpcClient: roceClient,
-		cepClient: cepClient,
+		nodeMap:    make(map[string]*bceRDMANetResourceSet),
+		hpasClient: hpasClient,
+		eniLister:  eniLister,
+		sbnLister:  sbnLister,
+		bceClientd: bceClient,
+		eriClient:  eriClient,
+		hpcClient:  roceClient,
+		cepClient:  cepClient,
 	}
 }
 

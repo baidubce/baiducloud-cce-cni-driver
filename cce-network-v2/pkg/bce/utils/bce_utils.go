@@ -21,10 +21,12 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 )
 
 const (
@@ -32,6 +34,10 @@ const (
 	OverlayRDMA                 string = string(ccev2.ENIForERI) // Overlay RDMA (ERI)
 	PodResourceName             string = "rdma"
 	rdmaEndpointMiddleSeparator string = "-rdma-"
+	eriManagedSuffix            string = "-eri-managed" // ERI managed NRS suffix
+	// RDMA resource types
+	RDMAResourceTypeHCA  string = "hca"  // HPC RDMA resource type
+	RDMAResourceTypeEHCA string = "ehca" // ERI RDMA resource type
 	// a name's max length is 253 and a labelSelectorValue's max length is 63 in kubernetes
 	// nameValueMaxLength is a name's max length
 	nameValueMaxLength int = 253
@@ -47,7 +53,7 @@ var (
 		UnderlayRDMA: {},
 	}
 
-	defaultMetaClient = metadata.NewClient()
+	defaultMetaClient metadata.Interface = metadata.NewClient()
 )
 
 type RdmaIfInfo struct {
@@ -81,6 +87,22 @@ func generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeature
 	return netResourceSetName
 }
 
+func GetNrsTypeByInstanceID(instanceID string) (string, error) {
+	nrsList, err := watchers.NetResourceSetClient.GetByInstanceID(instanceID)
+	if err != nil || len(nrsList) == 0 {
+		return "", err
+	}
+
+	for _, nrs := range nrsList {
+		if nrs.Spec.ENI != nil && nrs.Spec.ENI.InstanceType != string(UnderlayRDMA) && nrs.Spec.ENI.InstanceType != string(OverlayRDMA) {
+			return nrs.Spec.ENI.InstanceType, nil
+		}
+	}
+
+	return "", nil
+
+}
+
 func generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
 	// a labelSelectorValue's max length is 63 in kubernetes, so if nodeName's length is more than the max length like this:
 	// 63 - len(string("-fa2700078302-elasticrdma")), we need to use node's InstanceID as node's identification to generate labelSelectorValue
@@ -105,6 +127,19 @@ func generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vif
 	return labelSelectorValue
 }
 
+func generateEriNrsLabelSelectorValue(nodeName, nodeInstanceID string) (labelSelectorValue string) {
+	var labelSelectorIdentification string
+	lengthLimit := labelValueMaxLength - len(eriManagedSuffix)
+
+	if len(nodeName) > lengthLimit {
+		labelSelectorIdentification = nodeInstanceID
+	} else {
+		labelSelectorIdentification = nodeName
+	}
+	labelSelectorValue = labelSelectorIdentification + eriManagedSuffix
+	return labelSelectorValue
+}
+
 func getNodeNameFromRdmaNetResourceSetName(netResourceSetName, rdmaTag string) (nodeName string) {
 	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
 	index1 := strings.Index(netResourceSetName, rdmaTag)
@@ -116,16 +151,22 @@ func getNodeNameFromRdmaNetResourceSetName(netResourceSetName, rdmaTag string) (
 
 func GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID string) (nodeName string) {
 	// 10.0.2.2-fa2700078302-rdmaroce for HPC or 10.0.2.2-fa2700078302-elasticrdma for ERI
+	// 192.168.45.2-eri-managed for ERI managed NRS
 	var nodeIdentification string
 	underlayRDMA := strings.Replace(string(ccev2.ENIForHPC), "_", "", -1)
 	overlayRDMA := strings.Replace(string(ccev2.ENIForERI), "_", "", -1)
+
 	if strings.Contains(netResourceSetName, underlayRDMA) {
 		nodeIdentification = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, underlayRDMA)
 	} else if strings.Contains(netResourceSetName, overlayRDMA) {
 		nodeIdentification = getNodeNameFromRdmaNetResourceSetName(netResourceSetName, overlayRDMA)
+	} else if strings.HasSuffix(netResourceSetName, eriManagedSuffix) {
+		// Handle ERI managed NRS: 192.168.45.2-eri-managed -> 192.168.45.2
+		nodeIdentification = strings.TrimSuffix(netResourceSetName, eriManagedSuffix)
 	} else {
 		nodeIdentification = netResourceSetName
 	}
+
 	if nodeIdentification == nodeInstanceID {
 		nodeName = ownerReferenceNodeName
 	} else {
@@ -135,8 +176,16 @@ func GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeNam
 	return nodeName
 }
 
+func GetEriMangedNrsName(nodeName string) string {
+	// Return node name with ERI managed suffix directly
+	return nodeName + eriManagedSuffix
+}
+
 func GetRdmaNrsLabelSelectorValueFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID, macAddress, vifFeatures string) (labelSelectorValue string) {
 	nodeName := GetNodeNameFromNetResourceSetName(netResourceSetName, ownerReferenceNodeName, nodeInstanceID)
+	if macAddress == "" {
+		return generateEriNrsLabelSelectorValue(nodeName, nodeInstanceID)
+	}
 	labelSelectorValue = generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
 	return labelSelectorValue
 }
@@ -158,6 +207,64 @@ func getPrimaryMacFromCCERdmaEndpointName(cepName string) (macAddress string, er
 }
 
 func GetRdmaIFsInfo(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIfInfo, error) {
+	var ris = map[string]RdmaIfInfo{}
+
+	// list network interface macs
+	macList, macErr := defaultMetaClient.ListMacs()
+	if macErr != nil {
+		if scopedLog != nil {
+			scopedLog.WithError(macErr).Errorf("list mac failed")
+		} else {
+			log.WithError(macErr).Errorf("list mac failed")
+		}
+		return ris, macErr
+	}
+
+	// check whether there is ERI
+	for _, macAddress := range macList {
+		vifFeatures, vifErr := defaultMetaClient.GetVifFeatures(macAddress)
+		if vifErr != nil {
+			if scopedLog != nil {
+				scopedLog.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
+			} else {
+				log.WithError(vifErr).Errorf("get mac %s vif features failed", macAddress)
+			}
+			continue
+		}
+		if _, ok := roceVFs[vifFeatures]; ok {
+			// Skip processing if ERI management is enabled and current is ERI interface
+			// ERI interfaces will be handled separately through ERI management mechanism
+			if option.Config.EnableERIManagement && vifFeatures == string(ccev2.ENIForERI) {
+				if scopedLog != nil {
+					scopedLog.WithField("macAddress", macAddress).Info("Skipping ERI interface due to ERI management enabled")
+				}
+				continue
+			}
+
+			var rdmaIfInfo RdmaIfInfo
+			nodeInstanceID, metaAPIErr := defaultMetaClient.GetInstanceID()
+			if metaAPIErr != nil {
+				if scopedLog != nil {
+					scopedLog.WithError(metaAPIErr).Errorf("get node InstanceID from meta-data api failed")
+				} else {
+					log.WithError(macErr).Errorf("get node InstanceID from meta-data api failed")
+				}
+				return ris, metaAPIErr
+			}
+			netResourceSetName := generateNetResourceSetName(nodeName, nodeInstanceID, macAddress, vifFeatures)
+			labelSelectorValue := generateRdmaNrsLabelSelectorValue(nodeName, nodeInstanceID, macAddress, vifFeatures)
+			rdmaIfInfo.MacAddress = macAddress
+			rdmaIfInfo.NetResourceSetName = netResourceSetName
+			rdmaIfInfo.LabelSelectorValue = labelSelectorValue
+			rdmaIfInfo.VifFeatures = vifFeatures
+			ris[macAddress] = rdmaIfInfo
+		}
+	}
+
+	return ris, nil
+}
+
+func GetRdmaIFsInfoAll(nodeName string, scopedLog *logrus.Entry) (map[string]RdmaIfInfo, error) {
 	var ris = map[string]RdmaIfInfo{}
 
 	// list network interface macs

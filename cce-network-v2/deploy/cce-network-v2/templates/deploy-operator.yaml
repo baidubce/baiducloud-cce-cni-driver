@@ -1,3 +1,4 @@
+{{- if or (eq .Values.DeploymentMod "standalone") (eq .Values.DeploymentMod "pro-meta") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,11 +20,14 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
+        cce-app: "true"
         app.cce.baidubce.com: cce-network-operator
         cce.baidubce.com/cniwebhook: disabled
         {{- include "helm.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if or (eq .Values.DeploymentMod "standalone") (eq .Values.DeploymentMod "incluster") }}
       serviceAccountName: cce-cni-v2
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -34,9 +38,20 @@ spec:
             - /bin/cce-network-operator
           args:
             - --config=/etc/cce/network-v2-config.yaml
+            {{- if eq .Values.DeploymentMod "pro-meta" }}
+            - --k8s-namespace=kube-system
+            - --k8s-kubeconfig-path=/etc/kubeconfig/kubeconfig
+            {{- else }}
             - --k8s-namespace={{ .Release.Namespace }}
+            {{- end }}
             - --debug={{ .Values.ccedConfig.debug }}
           env:
+            {{- if (.Values.apiserverServiceEnv.enable | default false) }}
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ .Values.apiserverServiceEnv.kubernetesServiceHost  | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.apiserverServiceEnv.kubernetesServicePort  | quote }}
+            {{- end }}
             - name: CCE_POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -66,7 +81,10 @@ spec:
             - name: EIP_ENDPOINT
               value: "{{ .Values.ccedConfig.eipEndpoint }}"
             {{- end }} 
-
+            {{- if .Values.network.operator.disableHttp2 }}
+            - name: DISABLE_HTTP2
+              value: "true"
+            {{- end }}
           ports:
             - name: prometheus
               containerPort: 19962
@@ -85,6 +103,10 @@ spec:
               name: log
             - mountPath: /etc/cce
               name: cce-network-v2-config
+            {{- if eq .Values.DeploymentMod "pro-meta" }}
+            - mountPath: /etc/kubeconfig
+              name: cce-cni-v2
+            {{- end }}
 
         {{- if .Values.network.operator.rdma.enable }}
 
@@ -102,6 +124,11 @@ spec:
             - --webhook-service-name=cce-network-v2
             - --webhook-secret-name=cce-network-v2
             - --namespace={{ .Release.Namespace }}
+            {{- if eq .Values.DeploymentMod "pro-meta" }}
+            - --enable-initialize=false
+            - --kubeconfig=/etc/kubeconfig/kubeconfig
+            - --webhook-certs=/etc/webhook/certs
+            {{- end }}
             {{- range $key, $value := .Values.ccedConfig }}
             {{- if eq $key "eni-use-mode"}}
             - --eni-use-mode={{- $value }}
@@ -112,8 +139,16 @@ spec:
             - name: webhook
               containerPort: 18921
               protocol: TCP
+          volumeMounts:
+            {{- if eq .Values.DeploymentMod "pro-meta" }}
+            - mountPath: /etc/kubeconfig
+              name: cce-cni-v2
+            - mountPath: /etc/webhook/certs
+              name: webhook-certs
+              readOnly: true
+            {{- end }}
           resources:
-            {{- toYaml .Values.network.operator.resources | nindent 12 }}
+            {{- toYaml .Values.network.operator.webhook.resources | nindent 12 }}
         {{- end }}
 
       volumes:
@@ -127,13 +162,53 @@ spec:
                 path: network-v2-config.yaml
             name: cce-network-v2-config
           name: cce-network-v2-config
+        {{- if eq .Values.DeploymentMod "pro-meta" }}
+        - configMap:
+            defaultMode: 420
+            items:
+              - key: config
+                path: kubeconfig
+            name: kube-config-admin
+          name: cce-cni-v2
+        {{- end }}
+        {{- if .Values.network.operator.webhook.enable }}
+        {{- if eq .Values.DeploymentMod "pro-meta" }}
+        - secret:
+            defaultMode: 420
+            secretName: cce-network-v2-webhook-certs
+          name: webhook-certs
+        {{- end }}
+        {{- end }}
+      {{- if eq .Values.DeploymentMod "standalone" }}
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      priorityClassName: system-cluster-critical
-      hostNetwork: true
-      {{- with .Values.network.operator.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
       {{- end }}
+      priorityClassName: system-cluster-critical
+      {{- if or (eq .Values.DeploymentMod "standalone") (eq .Values.DeploymentMod "incluster") }}
+      hostNetwork: true
+      {{- end }}
+      affinity:
+        nodeAffinity:
+          {{- if eq .Values.DeploymentMod "standalone" }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: cluster-role
+                operator: In
+                values: ["master"]
+          {{- end }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: type
+                operator: NotIn
+                values:
+                  - virtual-kubelet
+        {{- with .Values.network.operator.podAntiAffinity }}
+        podAntiAffinity:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+{{- end }}

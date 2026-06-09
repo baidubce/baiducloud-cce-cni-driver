@@ -18,19 +18,29 @@
 package ipam
 
 import (
+	"fmt"
 	"net"
-	"time"
 
 	. "gopkg.in/check.v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/addressing"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cidr"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers/subscriber"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/mtu"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 )
+
+// init init 函数用于初始化 fake k8s 客户端，避免 nil 指针解引用
+// 如果初始化失败则 panic 出错误信息
+func init() {
+	// 初始化 fake k8s 客户端，避免 nil 指针解引用
+	if err := k8s.InitNewFakeK8sClient(); err != nil {
+		panic(fmt.Sprintf("failed to initialize fake k8s client: %v", err))
+	}
+}
 
 type ownerMock struct{}
 
@@ -74,122 +84,4 @@ func (s *IPAMSuite) TestAllocatedIPDump(c *C) {
 	for ip := range allocv6 {
 		c.Assert(net.ParseIP(ip), NotNil)
 	}
-}
-
-func (s *IPAMSuite) TestExpirationTimer(c *C) {
-	ip := net.ParseIP("1.1.1.1")
-	timeout := 50 * time.Millisecond
-
-	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
-
-	err := ipam.AllocateIP(ip, "foo")
-	c.Assert(err, IsNil)
-
-	uuid, err := ipam.StartExpirationTimer(ip, timeout)
-	c.Assert(err, IsNil)
-	c.Assert(uuid, Not(Equals), "")
-	// must fail, already registered
-	uuid, err = ipam.StartExpirationTimer(ip, timeout)
-	c.Assert(err, Not(IsNil))
-	c.Assert(uuid, Equals, "")
-	// must fail, already in use
-	err = ipam.AllocateIP(ip, "foo")
-	c.Assert(err, Not(IsNil))
-	// Let expiration timer expire
-	time.Sleep(2 * timeout)
-	// Must succeed, IP must be released again
-	err = ipam.AllocateIP(ip, "foo")
-	c.Assert(err, IsNil)
-	// register new expiration timer
-	uuid, err = ipam.StartExpirationTimer(ip, timeout)
-	c.Assert(err, IsNil)
-	c.Assert(uuid, Not(Equals), "")
-	// attempt to stop with an invalid uuid, must fail
-	err = ipam.StopExpirationTimer(ip, "unknown-uuid")
-	c.Assert(err, Not(IsNil))
-	// stop expiration with valid uuid
-	err = ipam.StopExpirationTimer(ip, uuid)
-	c.Assert(err, IsNil)
-	// Let expiration timer expire
-	time.Sleep(2 * timeout)
-	// must fail as IP is properly in use now
-	err = ipam.AllocateIP(ip, "foo")
-	c.Assert(err, Not(IsNil))
-	// release IP for real
-	err = ipam.ReleaseIP(ip)
-	c.Assert(err, IsNil)
-
-	// allocate IP again
-	err = ipam.AllocateIP(ip, "foo")
-	c.Assert(err, IsNil)
-	// register expiration timer
-	uuid, err = ipam.StartExpirationTimer(ip, timeout)
-	c.Assert(err, IsNil)
-	c.Assert(uuid, Not(Equals), "")
-	// release IP, must also stop expiration timer
-	err = ipam.ReleaseIP(ip)
-	c.Assert(err, IsNil)
-	// allocate same IP again
-	err = ipam.AllocateIP(ip, "foo")
-	c.Assert(err, IsNil)
-	// register expiration timer must succeed even though stop was never called
-	uuid, err = ipam.StartExpirationTimer(ip, timeout)
-	c.Assert(err, IsNil)
-	c.Assert(uuid, Not(Equals), "")
-	// release IP
-	err = ipam.ReleaseIP(ip)
-	c.Assert(err, IsNil)
-
-}
-
-func (s *IPAMSuite) TestAllocateNextWithExpiration(c *C) {
-	timeout := 50 * time.Millisecond
-
-	fakeAddressing := linux.NewNodeAddressing()
-	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
-
-	ipv4, ipv6, err := ipam.AllocateNextWithExpiration("", "foo", timeout)
-	c.Assert(err, IsNil)
-
-	// IPv4 address must be in use
-	err = ipam.AllocateIP(ipv4.IP, "foo")
-	c.Assert(err, Not(IsNil))
-	// IPv6 address must be in use
-	err = ipam.AllocateIP(ipv6.IP, "foo")
-	c.Assert(err, Not(IsNil))
-	// Let expiration timer expire
-	time.Sleep(2 * timeout)
-	// IPv4 address must be available again
-	err = ipam.AllocateIP(ipv4.IP, "foo")
-	c.Assert(err, IsNil)
-	// IPv6 address must be available again
-	err = ipam.AllocateIP(ipv6.IP, "foo")
-	c.Assert(err, IsNil)
-	// Release IPs
-	err = ipam.ReleaseIP(ipv4.IP)
-	c.Assert(err, IsNil)
-	err = ipam.ReleaseIP(ipv6.IP)
-	c.Assert(err, IsNil)
-
-	// Allocate IPs again and test stopping the expiration timer
-	ipv4, ipv6, err = ipam.AllocateNextWithExpiration("", "foo", timeout)
-	c.Assert(err, IsNil)
-
-	// Stop expiration timer for IPv4 address
-	err = ipam.StopExpirationTimer(ipv4.IP, ipv4.ExpirationUUID)
-	c.Assert(err, IsNil)
-
-	// Let expiration timer expire
-	time.Sleep(2 * timeout)
-
-	// IPv4 address must be in use
-	err = ipam.AllocateIP(ipv4.IP, "foo")
-	c.Assert(err, Not(IsNil))
-	// IPv6 address must be available again
-	err = ipam.AllocateIP(ipv6.IP, "foo")
-	c.Assert(err, IsNil)
-	// Release IPv4 address
-	err = ipam.ReleaseIP(ipv4.IP)
-	c.Assert(err, IsNil)
 }

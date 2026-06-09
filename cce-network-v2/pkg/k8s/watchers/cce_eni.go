@@ -60,13 +60,20 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 	// Select only the ENI of the local node,
 	// contains Ethernet NetResourceSet and RDMA NetResourceSet objects
 	values := []string{nodeTypes.GetName()}
-	rii, err := bceutils.GetRdmaIFsInfo(nodeTypes.GetName(), nil)
+	rii, err := bceutils.GetRdmaIFsInfoAll(nodeTypes.GetName(), nil)
 	if err != nil {
 		panic(fmt.Errorf("failed to get rdma ifs info: %v", err))
 	}
 	for _, v := range rii {
 		values = append(values, v.LabelSelectorValue)
 	}
+
+	// Add ERI management related labelSelector
+	eriManagedLabelValue := bceutils.GetERIManagedLabelSelector()
+	if eriManagedLabelValue != "" {
+		values = append(values, eriManagedLabelValue)
+	}
+
 	requirement := metav1.LabelSelectorRequirement{
 		Key:      k8s.LabelNodeName,
 		Operator: metav1.LabelSelectorOpIn,
@@ -87,16 +94,16 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 	updateFunc := func(oldObj, newObj interface{}) {
 		var valid, equal bool
 		defer func() { k.K8sEventReceived(apiGroup, metricENI, resources.MetricUpdate, valid, equal) }()
-		oldEndpoint, ok := oldObj.(*ccev2.ENI)
-		if ok {
-			errs := k.ENIChain.OnUpdateENI(nil, oldEndpoint)
-			k.K8sEventProcessed(metricENI, resources.MetricUpdate, errs == nil)
-		}
+
 		newEndpoint, ok := newObj.(*ccev2.ENI)
 		if ok {
 			valid = true
 			errs := k.ENIChain.OnUpdateENI(nil, newEndpoint)
-			k.K8sEventProcessed(metricENI, resources.MetricCreate, errs == nil)
+			if oldObj == nil {
+				k.K8sEventProcessed(metricENI, resources.MetricCreate, errs == nil)
+			} else {
+				k.K8sEventProcessed(metricENI, resources.MetricUpdate, errs == nil)
+			}
 		}
 	}
 
@@ -104,7 +111,7 @@ func (k *K8sWatcher) eniInit(cceClient *k8s.K8sCCEClient, asyncControllers *sync
 		cache.NewFilteredListWatchFromClient(cceClient.CceV2().RESTClient(),
 			"enis", metav1.NamespaceAll, optionsModifier),
 		&ccev2.ENI{},
-		option.Config.ResourceResyncInterval,
+		option.Config.AgentResourceResyncInterval,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				updateFunc(nil, obj)

@@ -245,6 +245,9 @@ func SetIPv4Loopback(ip net.IP) {
 func GetIPv4AllocRange() *cidr.CIDR {
 	addrsMu.RLock()
 	defer addrsMu.RUnlock()
+	if addrs.ipv4AllocRange == nil {
+		return nil
+	}
 	return addrs.ipv4AllocRange.DeepCopy()
 }
 
@@ -252,6 +255,9 @@ func GetIPv4AllocRange() *cidr.CIDR {
 func GetIPv6AllocRange() *cidr.CIDR {
 	addrsMu.RLock()
 	defer addrsMu.RUnlock()
+	if addrs.ipv6AllocRange == nil {
+		return nil
+	}
 	return addrs.ipv6AllocRange.DeepCopy()
 }
 

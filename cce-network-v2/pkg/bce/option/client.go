@@ -15,6 +15,7 @@
 package option
 
 import (
+	"context"
 	"os"
 	"sync"
 
@@ -29,6 +30,7 @@ import (
 var (
 	mutex         sync.Mutex
 	defaultClient cloud.Interface
+	hpasClient    cloud.Interface
 	log           = logging.NewSubysLogger("bce-client")
 )
 
@@ -77,4 +79,51 @@ func BCEClient() cloud.Interface {
 	defaultClient = c
 	mutex.Unlock()
 	return defaultClient
+}
+
+func BCEHPASClient() cloud.Interface {
+	mutex.Lock()
+	if hpasClient != nil {
+		mutex.Unlock()
+		return hpasClient
+	}
+	mutex.Unlock()
+
+	if endpoint := operatorOption.Config.BCECloudBaseHost; endpoint != "" {
+		os.Setenv(ccegateway.EndpointOverrideEnv, endpoint)
+	}
+
+	if operatorOption.Config.BCECloudRegion == "" {
+		log.Fatal("[InitBCEClient] Region is nil")
+	}
+
+	if operatorOption.Config.BCECloudAccessKey == "" && operatorOption.Config.BCECloudSecureKey == "" {
+		if operatorOption.Config.CCEClusterID == "" {
+			log.Fatalf("[InitBCEClient] ClusterID is required when ak/sk are not set")
+		}
+	}
+
+	c, err := cloud.New(operatorOption.Config.BCECloudRegion,
+		operatorOption.Config.CCEClusterID,
+		operatorOption.Config.BCECloudAccessKey,
+		operatorOption.Config.BCECloudSecureKey,
+		operatorOption.Config.BCEForceViaCCEGateway,
+		k8s.Client(),
+		option.Config.Debug, operatorOption.Config.DefaultAPITimeoutLimit)
+	if err != nil {
+		log.Fatalf("[InitBCEClient] failed to init bce client %v", err)
+	}
+	c, err = cloud.NewFlowControlClient(c,
+		operatorOption.Config.DefaultAPIQPSLimit,
+		operatorOption.Config.DefaultAPIBurst,
+		operatorOption.Config.DefaultAPITimeoutLimit)
+	if err != nil {
+		log.Fatalf("[InitBCEClient] failed to init bce client with flow control %v", err)
+	}
+
+	mutex.Lock()
+	c.HPASWrapper(context.Background())
+	hpasClient = c
+	mutex.Unlock()
+	return hpasClient
 }

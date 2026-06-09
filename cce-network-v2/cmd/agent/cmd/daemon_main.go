@@ -219,6 +219,9 @@ func initializeFlags() {
 	flags.Bool(option.EnableRDMAName, defaults.EnableRDMA, "Enable RDMA support")
 	option.BindEnv(option.EnableRDMAName)
 
+	flags.Bool(option.EnableERIManagementName, defaults.EnableERIManagement, "Enable ERI management support")
+	option.BindEnv(option.EnableERIManagementName)
+
 	flags.String(option.IPv6MCastDevice, "", "Device that joins a Solicited-Node multicast group for IPv6")
 	option.BindEnv(option.IPv6MCastDevice)
 
@@ -485,6 +488,9 @@ func initializeFlags() {
 
 	flags.Duration(option.ResourceResyncInterval, defaults.CCEEndpointGCInterval, "resync interval for cloud resource, eg. subnets, ENIs.")
 	option.BindEnv(option.ResourceResyncInterval)
+
+	flags.Duration(option.AgentResourceResyncInterval, 2*defaults.CCEEndpointGCInterval, "resync interval for agent resource, eg. ENIs. ")
+	option.BindEnv(option.AgentResourceResyncInterval)
 	// eni configuration this flags only use for CCE VPC ENI
 	// this flags only use for vpc-eni mode
 	flags.String(option.ENIUseMode, string(ccev2.ENIUseModeSecondaryIP), "eni use mode")
@@ -507,6 +513,12 @@ func initializeFlags() {
 
 	flags.Int(option.ENIRouteTableOffset, 127, "route table offset")
 	option.BindEnv(option.ENIRouteTableOffset)
+
+	flags.String(option.RDMAResourceTypeForERI, defaults.RDMAResourceTypeForERI, "rdma resource type for ERI")
+	option.BindEnv(option.RDMAResourceTypeForERI)
+
+	flags.String(option.RDMAResourceTypeForHPC, defaults.RDMAResourceTypeForHPC, "rdma resource type for HPC")
+	option.BindEnv(option.RDMAResourceTypeForHPC)
 
 	flags.StringSlice(option.ENISecurityGroupIDs, []string{}, "security group ids")
 	option.BindEnv(option.ENISecurityGroupIDs)

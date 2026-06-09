@@ -241,6 +241,9 @@ const (
 	// EnableRDMAName is the name of the option to enable RDMA support
 	EnableRDMAName = "enable-rdma"
 
+	// EnableERIManagementName is the name of the option to enable ERI management
+	EnableERIManagementName = "enable-eri-management"
+
 	// EnableIPv6NDPName is the name of the option to enable IPv6 NDP support
 	EnableIPv6NDPName = "enable-ipv6-ndp"
 
@@ -363,8 +366,9 @@ const (
 	// BCECloudVPCID allows user to specific vpc
 	BCECloudVPCID = "bce-cloud-vpc-id"
 	// ClusterID is the cluster ID of the CCE cluster
-	ClusterID              = "cce-cluster-id"
-	ResourceResyncInterval = "resource-resync-interval"
+	ClusterID                   = "cce-cluster-id"
+	ResourceResyncInterval      = "resource-resync-interval"
+	AgentResourceResyncInterval = "resource-eni-resync-interval"
 	// eni configuration
 
 	// this flags only use for vpc-eni mode
@@ -392,6 +396,10 @@ const (
 	RDMAIPPoolMinAllocateIPs    = "rdma-ippool-min-allocate-ips"
 	RDMAIPPoolPreAllocate       = "rdma-ippool-pre-allocate"
 	RDMAIPPoolMaxAboveWatermark = "rdma-ippool-max-above-watermark"
+
+	// RDMA resource type mapping configuration
+	RDMAResourceTypeForHPC = "rdma-resource-type-for-hpc" // Resource type for HPC (UnderlayRDMA)
+	RDMAResourceTypeForERI = "rdma-resource-type-for-eri" // Resource type for ERI (OverlayRDMA)
 
 	ExtCNIPluginsList = "ext-cni-plugins"
 )
@@ -610,6 +618,9 @@ type DaemonConfig struct {
 	// EnableRDMA is true when RDMA is enabled
 	EnableRDMA bool
 
+	// EnableERIManagement is true when ERI management is enabled
+	EnableERIManagement bool
+
 	// IPv6MCastDevice is the name of device that joins IPv6's solicitation multicast group
 	IPv6MCastDevice string
 	// MonitorQueueSize is the size of the monitor event queue
@@ -742,6 +753,10 @@ type DaemonConfig struct {
 	RDMAIPPoolPreAllocate       int
 	RDMAIPPoolMaxAboveWatermark int
 
+	// RDMA resource type mapping configuration
+	RDMAResourceTypeForHPC string // Resource type for HPC (UnderlayRDMA), default: "hca"
+	RDMAResourceTypeForERI string // Resource type for ERI (OverlayRDMA), default: "ehca"
+
 	// AutoCreateNetResourceSetResource enables automatic creation of a
 	// NetResourceSet resource for the local node
 	AutoCreateNetResourceSetResource bool
@@ -789,6 +804,11 @@ type DaemonConfig struct {
 	// like ENIs,Subnets
 	ResourceResyncInterval time.Duration
 
+	// AgentResourceResyncInterval is the interval between attempts of the sync between Cloud and k8s
+	// This is used on cce-network-agent to sync ENI information
+	// If not set, the default is 1 minute
+	AgentResourceResyncInterval time.Duration
+
 	// ClusterID is the unique identifier of the cluster
 	ClusterID string
 	// only use for vpc-eni mode
@@ -818,6 +838,9 @@ var (
 		EnableIPv6:                       defaults.EnableIPv6,
 		EnableIPv6NDP:                    defaults.EnableIPv6NDP,
 		EnableRDMA:                       defaults.EnableRDMA,
+		EnableERIManagement:              defaults.EnableERIManagement,
+		RDMAResourceTypeForHPC:           defaults.RDMAResourceTypeForHPC,
+		RDMAResourceTypeForERI:           defaults.RDMAResourceTypeForERI,
 		LogOpt:                           make(map[string]string),
 		LoopbackIPv4:                     defaults.LoopbackIPv4,
 		ForceLocalPolicyEvalAtSource:     defaults.ForceLocalPolicyEvalAtSource,
@@ -921,9 +944,14 @@ func (c *DaemonConfig) IPv6NDPEnabled() bool {
 	return c.EnableIPv6NDP
 }
 
-// IPv6Enabled returns true if IPv6 is enabled
+// RDMAEnabled returns true if RDMA is enabled
 func (c *DaemonConfig) RDMAEnabled() bool {
 	return c.EnableRDMA
+}
+
+// ERIManagementEnabled returns true if ERI management is enabled
+func (c *DaemonConfig) ERIManagementEnabled() bool {
+	return c.EnableERIManagement
 }
 
 // HealthCheckingEnabled returns true if health checking is enabled
@@ -1136,6 +1164,7 @@ func (c *DaemonConfig) Populate() {
 	c.EnableIPv6 = viper.GetBool(EnableIPv6Name)
 	c.EnableIPv6NDP = viper.GetBool(EnableIPv6NDPName)
 	c.EnableRDMA = viper.GetBool(EnableRDMAName)
+	c.EnableERIManagement = viper.GetBool(EnableERIManagementName)
 	c.IPv6MCastDevice = viper.GetString(IPv6MCastDevice)
 	c.DisableCCEEndpointCRD = viper.GetBool(DisableCCEEndpointCRDName)
 	c.DisableENICRD = viper.GetBool(DisableENICRDName)
@@ -1152,6 +1181,8 @@ func (c *DaemonConfig) Populate() {
 	c.RDMAIPPoolMaxAboveWatermark = viper.GetInt(RDMAIPPoolMaxAboveWatermark)
 	c.RDMAIPPoolMinAllocateIPs = viper.GetInt(RDMAIPPoolMinAllocateIPs)
 	c.RDMAIPPoolPreAllocate = viper.GetInt(RDMAIPPoolPreAllocate)
+	c.RDMAResourceTypeForHPC = viper.GetString(RDMAResourceTypeForHPC)
+	c.RDMAResourceTypeForERI = viper.GetString(RDMAResourceTypeForERI)
 
 	c.IPv4Range = viper.GetString(IPv4Range)
 	c.IPv6ClusterAllocCIDR = viper.GetString(IPv6ClusterAllocCIDRName)
@@ -1352,6 +1383,7 @@ func (c *DaemonConfig) Populate() {
 	c.MaxControllerInterval = viper.GetInt(MaxCtrlIntervalName)
 	c.EndpointGCInterval = viper.GetDuration(EndpointGCInterval)
 	c.ResourceResyncInterval = viper.GetDuration(ResourceResyncInterval)
+	c.AgentResourceResyncInterval = viper.GetDuration(AgentResourceResyncInterval)
 	c.ExtCNIPluginsList = viper.GetStringSlice(ExtCNIPluginsList)
 }
 

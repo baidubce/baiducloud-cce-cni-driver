@@ -209,6 +209,7 @@ func createConfig(apiServerURL, kubeCfgPath string, qps float32, burst int) (*re
 		config *rest.Config
 		err    error
 	)
+
 	cmdName := "cce"
 	if len(os.Args[0]) != 0 {
 		cmdName = filepath.Base(os.Args[0])

@@ -143,11 +143,17 @@ func NewIPAM(networkResourceSetName string, nodeAddressing types.NodeAddressing,
 		}).Infof("Initializing %s IPAM", c.IPAMMode())
 
 		if c.IPv6Enabled() {
-			ipam.IPv6Allocator = newHostScopeAllocator(nodeAddressing.IPv6().AllocationCIDR().IPNet)
+			ipv6AllocCIDR := nodeAddressing.IPv6().AllocationCIDR()
+			if ipv6AllocCIDR != nil {
+				ipam.IPv6Allocator = newHostScopeAllocator(ipv6AllocCIDR.IPNet)
+			}
 		}
 
 		if c.IPv4Enabled() {
-			ipam.IPv4Allocator = newHostScopeAllocator(nodeAddressing.IPv4().AllocationCIDR().IPNet)
+			ipv4AllocCIDR := nodeAddressing.IPv4().AllocationCIDR()
+			if ipv4AllocCIDR != nil {
+				ipam.IPv4Allocator = newHostScopeAllocator(ipv4AllocCIDR.IPNet)
+			}
 		}
 	case ipamOption.IPAMClusterPoolV2, ipamOption.IPAMVpcRoute:
 		log.Info("Initializing ClusterPool v2 IPAM")

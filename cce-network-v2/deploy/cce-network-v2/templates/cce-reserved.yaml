@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cce-network-v2-reserved
+  {{- if or (eq .Values.DeploymentMod "standalone") (eq .Values.DeploymentMod "incluster") }}
+  namespace: kube-system
+  {{- end }}
+  labels:
+    heritage: {{ .Release.Name }}
+    release: {{ .Release.Name }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app: cce-network-v2
+data:
+  hash: "d72c34c0076b951a37bf6810bab98c3a21aaec96efb70ed5deffac6d585757b2"

@@ -1,3 +1,4 @@
+{{- if or (eq .Values.DeploymentMod "standalone") (eq .Values.DeploymentMod "incluster") }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -25,6 +26,12 @@ spec:
             - --config=/etc/cce/network-v2-config.yaml
             - --debug={{ .Values.ccedConfig.debug }}
           env:
+            {{- if (.Values.apiserverServiceEnv.enable | default false) }}
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ .Values.apiserverServiceEnv.kubernetesServiceHost  | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.apiserverServiceEnv.kubernetesServicePort  | quote }}
+            {{- end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -76,6 +83,9 @@ spec:
             - mountPath: /sys
               readOnly: true 
               name: sys
+            - mountPath: /sys/bus/pci/drivers/virtio-pci
+              readOnly:  false
+              name: virtio-pci-dir
             - mountPath: /usr-host
               name: usr-host
             - mountPath: /etc-host
@@ -84,7 +94,7 @@ spec:
               name: lib-modules
           ports:
             - name: healthz
-              containerPort: 19879
+              containerPort: {{ index .Values.ccedConfig "health-port" | default 19879 }}
               protocol: TCP
           readinessProbe:
             httpGet:
@@ -137,7 +147,11 @@ spec:
         - hostPath:
             path: /sys
             type: ""
-          name: sys     
+          name: sys
+        - hostPath:
+            path: /sys/bus/pci/drivers/virtio-pci
+            type: ""
+          name: virtio-pci-dir
         - hostPath:
             path: /etc
             type: ""
@@ -158,8 +172,13 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-
+  {{- with .Values.network.agent.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
   updateStrategy:
     rollingUpdate:
       maxUnavailable: 10
     type: RollingUpdate
+  {{- end }}
+{{- end }}

@@ -23,6 +23,7 @@ import (
 	"runtime"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	bceutils "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 	cnitypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/cni/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/controller"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/linux"
@@ -50,6 +51,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"
 	grate "golang.org/x/time/rate"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -292,6 +295,18 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 		bootstrapStats.k8sInit.End(true)
 	}
 
+	// Check if ERI management should be enabled, disable configuration if conditions are not met
+	if d.shouldEnableERIManagement() {
+		option.Config.EnableERIManagement = true
+		log.Info("ERI management enabled")
+	} else {
+		// Conditions not met, disable ERI management
+		option.Config.EnableERIManagement = false
+		log.Info("ERI management conditions not met, disabling ERI management")
+	}
+
+	d.cleanupLegacyERIManagedResources()
+
 	// confugure and start ENIM
 	d.configureENIM()
 	d.startENIM()
@@ -414,5 +429,70 @@ func (d *Daemon) K8sCacheIsSynced() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// shouldEnableERIManagement checks if ERI management should be enabled
+// ERI management is only supported for VPC ENI IPAM mode
+func (d *Daemon) shouldEnableERIManagement() bool {
+	// Check if RDMA is enabled
+	if !option.Config.EnableRDMA {
+		log.Info("RDMA is not enabled, ERI management disabled")
+		return false
+	}
+
+	// Check if IPAM mode is VPC ENI
+	if option.Config.IPAM != ipamOption.IPAMVpcEni {
+		log.Info("IPAM mode is not VPC ENI, ERI management disabled")
+		return false
+	}
+
+	// Get node information
+	nodeName := nodeTypes.GetName()
+	k8sNode, err := d.k8sWatcher.GetK8sNode(context.TODO(), nodeName)
+	if err != nil {
+		log.WithError(err).Error("Failed to get K8s node for ERI management check")
+		return false
+	}
+
+	// Check if node has ERI management label
+	hasLabel, isEnabled := bceutils.HasERIManagementLabel(k8sNode)
+	if !hasLabel {
+		log.Info("Node does not have ERI management label")
+		return false
+	}
+
+	if !isEnabled {
+		log.Info("ERI management label is set but not enabled")
+		return false
+	}
+
+	// Check if there is available ERI quota
+	if !bceutils.HasAvailableERIQuota() {
+		log.Info("No available ERI quota")
+		return false
+	}
+
+	log.Info("ERI management should be enabled")
+	return true
+}
+
+// cleanupLegacyERIManagedResources cleans up legacy ERI managed NetResourceSet
+func (d *Daemon) cleanupLegacyERIManagedResources() {
+	if !k8s.IsEnabled() || option.Config.EnableERIManagement {
+		return
+	}
+
+	log.Info("Cleaning up legacy ERI managed NetResourceSet")
+
+	nodeName := nodeTypes.GetName()
+	eriManagedNRSName := bceutils.GetEriMangedNrsName(nodeName)
+
+	// Directly delete the ERI managed NRS
+	err := k8s.CCEClient().CceV2().NetResourceSets().Delete(context.TODO(), eriManagedNRSName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		log.WithError(err).WithField("nrsName", eriManagedNRSName).Fatal("Failed to delete legacy ERI managed NetResourceSet")
+	} else {
+		log.WithField("nrsName", eriManagedNRSName).Info("Successfully deleted legacy ERI managed NetResourceSet")
 	}
 }

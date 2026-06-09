@@ -57,11 +57,11 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 		return eniManager.Update(obj)
 	}
 
-	resyncPeriod := eniManager.ResyncENI(ctx)
+	eniManager.ResyncENI(ctx)
 	controller := cm.NewResyncController("cce-eni-controller", int(operatorOption.Config.EniResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(),
 		eniSyncHandler)
-	controller.RunWithResync(resyncPeriod)
+	controller.RunWithResync(operatorOption.Config.ResourceENIResyncInterval)
 	return nil
 }
 

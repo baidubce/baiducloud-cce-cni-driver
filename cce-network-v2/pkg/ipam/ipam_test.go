@@ -18,6 +18,7 @@
 package ipam
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/types"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 )
@@ -43,20 +45,44 @@ type IPAMSuite struct{}
 
 var _ = Suite(&IPAMSuite{})
 
-func fakeIPv4AllocCIDRIP(fakeAddressing types.NodeAddressing) net.IP {
-	// force copy so net.IP can be modified
-	return net.ParseIP(fakeAddressing.IPv4().AllocationCIDR().IP.String())
+// init init 函数用于初始化 fake k8s 客户端，避免 nil 指针解引用
+// 如果初始化失败则 panic 出错误信息
+func init() {
+	// 初始化 fake k8s 客户端，避免 nil 指针解引用
+	if err := k8s.InitNewFakeK8sClient(); err != nil {
+		panic(fmt.Sprintf("failed to initialize fake k8s client: %v", err))
+	}
 }
 
+// fakeIPv4AllocCIDRIP 返回值net.IP类型，表示分配的CIDR IP地址
+func fakeIPv4AllocCIDRIP(fakeAddressing types.NodeAddressing) net.IP {
+	// force copy so net.IP can be modified
+	cidr := fakeAddressing.IPv4().AllocationCIDR()
+	if cidr == nil {
+		return net.ParseIP("10.0.0.1")
+	}
+	return net.ParseIP(cidr.IP.String())
+}
+
+// fakeIPv6AllocCIDRIP 返回一个net.IP，该IP是fakeAddressing的IPv6分配CIDR的第一个IP地址。如果fakeAddressing没有设置IPv6分配CIDR，则返回"f00d::1"。
 func fakeIPv6AllocCIDRIP(fakeAddressing types.NodeAddressing) net.IP {
 	// force copy so net.IP can be modified
-	return net.ParseIP(fakeAddressing.IPv6().AllocationCIDR().IP.String())
+	cidr := fakeAddressing.IPv6().AllocationCIDR()
+	if cidr == nil {
+		return net.ParseIP("f00d::1")
+	}
+	return net.ParseIP(cidr.IP.String())
 }
 
 type testConfiguration struct{}
 
-func (t *testConfiguration) IPv4Enabled() bool                        { return true }
-func (t *testConfiguration) IPv6Enabled() bool                        { return false }
+// IPv4Enabled 函数名: IPv4Enabled
+// 功能：判断当前系统是否支持IPv4协议，返回一个bool值，表示是否支持。
+func (t *testConfiguration) IPv4Enabled() bool { return true }
+
+// IPv6Enabled 返回值bool类型，表示是否启用了IPv6。
+// 如果启用了IPv6，则返回true；否则返回false。
+func (t *testConfiguration) IPv6Enabled() bool                        { return true }
 func (t *testConfiguration) HealthCheckingEnabled() bool              { return true }
 func (t *testConfiguration) UnreachableRoutesEnabled() bool           { return false }
 func (t *testConfiguration) IPAMMode() string                         { return ipamOption.IPAMClusterPool }
@@ -65,7 +91,19 @@ func (t *testConfiguration) GetIPv4NativeRoutingCIDR() *cidr.CIDR     { return n
 func (t *testConfiguration) GetCCEEndpointGC() time.Duration          { return 0 }
 func (t *testConfiguration) GetFixedIPTimeout() time.Duration         { return 0 }
 
+// TestLock 测试锁定功能
+//
+// 参数c：*C，C代表go-check框架的一个对象，用于断言和错误处理
+//
+// 返回值：无
 func (s *IPAMSuite) TestLock(c *C) {
+	// 设置 IPv4 和 IPv6 分配范围
+	_, ipv4Net, _ := net.ParseCIDR("10.244.0.0/16")
+	node.SetIPv4AllocRange(&cidr.CIDR{IPNet: ipv4Net})
+
+	_, ipv6Net, _ := net.ParseCIDR("f00d::/104")
+	node.SetIPv6NodeRange(&cidr.CIDR{IPNet: ipv6Net})
+
 	fakeAddressing := linux.NewNodeAddressing()
 	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
@@ -77,16 +115,24 @@ func (s *IPAMSuite) TestLock(c *C) {
 	epipv4, err := addressing.NewCCEIPv4(ipv4.String())
 	c.Assert(err, IsNil)
 
-	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
-	epipv6, err := addressing.NewCCEIPv6(ipv6.String())
-	c.Assert(err, IsNil)
+	// Only test IPv6 if it's enabled
+	var epipv6 addressing.CCEIPv6
+	var hasIPv6 bool
+	if ipam.IPv6Allocator != nil {
+		ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
+		nextIP(ipv6)
+		epipv6, err = addressing.NewCCEIPv6(ipv6.String())
+		c.Assert(err, IsNil)
+		hasIPv6 = true
+	}
 
 	// Forcefully release possible allocated IPs
 	err = ipam.IPv4Allocator.Release(epipv4.IP())
 	c.Assert(err, IsNil)
-	err = ipam.IPv6Allocator.Release(epipv6.IP())
-	c.Assert(err, IsNil)
+	if ipam.IPv6Allocator != nil && hasIPv6 {
+		err = ipam.IPv6Allocator.Release(epipv6.IP())
+		c.Assert(err, IsNil)
+	}
 
 	// Let's allocate the IP first so we can see the tests failing
 	result, err := ipam.IPv4Allocator.Allocate(epipv4.IP(), "test")
@@ -118,6 +164,10 @@ func BenchmarkIPAMRun(b *testing.B) {
 	}
 }
 
+// TestBlackList 测试黑名单功能
+//
+// 参数c：*C，C测试框架指针
+// 返回值：无返回值
 func (s *IPAMSuite) TestBlackList(c *C) {
 	fakeAddressing := linux.NewNodeAddressing()
 	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
@@ -130,13 +180,16 @@ func (s *IPAMSuite) TestBlackList(c *C) {
 	c.Assert(err, Not(IsNil))
 	ipam.ReleaseIP(ipv4)
 
-	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
+	// Only test IPv6 if it's enabled
+	if ipam.IPv6Allocator != nil {
+		ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
+		nextIP(ipv6)
 
-	ipam.BlacklistIP(ipv6, "test")
-	err = ipam.AllocateIP(ipv6, "test")
-	c.Assert(err, Not(IsNil))
-	ipam.ReleaseIP(ipv6)
+		ipam.BlacklistIP(ipv6, "test")
+		err = ipam.AllocateIP(ipv6, "test")
+		c.Assert(err, Not(IsNil))
+		ipam.ReleaseIP(ipv6)
+	}
 }
 
 func (s *IPAMSuite) TestDeriveFamily(c *C) {
@@ -144,7 +197,23 @@ func (s *IPAMSuite) TestDeriveFamily(c *C) {
 	c.Assert(DeriveFamily(net.ParseIP("f00d::1")), Equals, IPv6)
 }
 
+// TestOwnerRelease 测试 OwnerRelease 函数，释放 IP 地址的所有权。
+//
+// 参数：
+//
+//	c (*C) - go-check 库中的一个测试对象，用于断言和记录错误信息。
+//
+// 返回值：
+//
+//	none - 无返回值，所有操作都是通过断言来确保结果正确。
 func (s *IPAMSuite) TestOwnerRelease(c *C) {
+	// 设置 IPv4 和 IPv6 分配范围
+	_, ipv4Net, _ := net.ParseCIDR("10.244.0.0/16")
+	node.SetIPv4AllocRange(&cidr.CIDR{IPNet: ipv4Net})
+
+	_, ipv6Net, _ := net.ParseCIDR("f00d::/104")
+	node.SetIPv6NodeRange(&cidr.CIDR{IPNet: ipv6Net})
+
 	fakeAddressing := linux.NewNodeAddressing()
 	ipam := NewIPAM(nodeTypes.GetName(), fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
 
@@ -153,10 +222,13 @@ func (s *IPAMSuite) TestOwnerRelease(c *C) {
 	err := ipam.AllocateIP(ipv4, "default/test")
 	c.Assert(err, IsNil)
 
-	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
-	err = ipam.AllocateIP(ipv6, "default/test")
-	c.Assert(err, IsNil)
+	// Only test IPv6 if it's enabled
+	if ipam.IPv6Allocator != nil {
+		ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
+		nextIP(ipv6)
+		err = ipam.AllocateIP(ipv6, "default/test")
+		c.Assert(err, IsNil)
+	}
 
 	// unknown owner, must fail
 	err = ipam.ReleaseIPString("default/test2")

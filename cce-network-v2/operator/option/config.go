@@ -45,8 +45,13 @@ const (
 	// FixedIPTTLDefault is the default time for the fixed endpoint
 	FixedIPTTLDefault = 7 * 24 * time.Hour
 
+	DefaultEniResysnInterval = 30 * 24 * time.Hour
+
 	// DefaultResourceResyncInterval is the default time for the resource resync
 	DefaultResourceResyncInterval = 30 * time.Second
+
+	// DefaultResourceCepResyncInterval is the default time for the cep resource resync
+	DefaultResourceCepResyncInterval = 60 * time.Second
 )
 
 const (
@@ -167,13 +172,16 @@ const (
 	BCECloudSecureKey          = "bce-cloud-secure-key"
 	BCECloudForceViaCCEGateway = "bce-cloud-force-via-cce-gateway"
 
-	ResourceENIResyncInterval   = "resource-eni-resync-interval"
-	ResourceHPCResyncInterval   = "resource-hpc-resync-interval"
-	ResourceResyncWorkers       = "resource-resync-workers"
-	NrsResourceResyncWorkers    = "nrs-resource-resync-workers"
-	RdmaResourceResyncWorkers   = "rdma-resource-resync-workers"
-	SubnetResourceResyncWorkers = "subnet-resource-resync-workers"
-	EniResourceResyncWorkers    = "eni-resource-resync-workers"
+	AgentResourceResyncInterval     = "agent-resource-resync-interval"
+	ResourceENIResyncInterval       = "resource-eni-resync-interval"
+	ResourceRemoteENIResyncInterval = "resource-remote-eni-resync-interval"
+	ResourceHPCResyncInterval       = "resource-hpc-resync-interval"
+	ResourceResyncWorkers           = "resource-resync-workers"
+	NrsResourceResyncWorkers        = "nrs-resource-resync-workers"
+	RdmaResourceResyncWorkers       = "rdma-resource-resync-workers"
+	SubnetResourceResyncWorkers     = "subnet-resource-resync-workers"
+	EniResourceResyncWorkers        = "eni-resource-resync-workers"
+	ResourceCepResyncInterval       = "resource-cep-resync-interval"
 
 	// BCECustomerMaxIP is the max ip number of customer
 	BCECustomerMaxIP = "bce-customer-max-ip"
@@ -345,10 +353,13 @@ type OperatorConfig struct {
 
 	// ResourceResyncInterval is the interval between attempts of the sync between Cloud and k8s
 	// like ENIs,Subnets
-	ResourceResyncInterval    time.Duration
-	ResourceENIResyncInterval time.Duration
-	ResourceHPCResyncInterval time.Duration
-	ResourceBBCResyncInterval time.Duration
+	ResourceResyncInterval          time.Duration
+	AgentResourceResyncInterval     time.Duration
+	ResourceENIResyncInterval       time.Duration
+	ResourceRemoteENIResyncInterval time.Duration
+	ResourceHPCResyncInterval       time.Duration
+	ResourceBBCResyncInterval       time.Duration
+	ResourceCepResyncInterval       time.Duration
 
 	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
 	ResourceResyncWorkers       int64
@@ -416,6 +427,9 @@ type OperatorConfig struct {
 	// EnableRDMA enables RDMA support
 	EnableRDMA bool
 
+	// EnableERIManagement enables ERI management support
+	EnableERIManagement bool
+
 	// SecurityGroupSynerDuration is the duration of security group syner send alter event
 	SecurityGroupSynerDuration time.Duration
 }
@@ -454,6 +468,7 @@ func (c *OperatorConfig) Populate() {
 	c.EnableIPv4 = viper.GetBool(option.EnableIPv4Name)
 	c.EnableIPv6 = viper.GetBool(option.EnableIPv6Name)
 	c.EnableRDMA = viper.GetBool(option.EnableRDMAName)
+	c.EnableERIManagement = viper.GetBool(option.EnableERIManagementName)
 	c.CCEK8sNamespace = viper.GetString(CCEK8sNamespace)
 	if c.CCEK8sNamespace == "" {
 		if option.Config.K8sNamespace == "" {
@@ -483,7 +498,10 @@ func (c *OperatorConfig) Populate() {
 	c.BCECloudSecureKey = viper.GetString(BCECloudSecureKey)
 	c.BCEForceViaCCEGateway = viper.GetBool(BCECloudForceViaCCEGateway)
 	c.ResourceResyncInterval = viper.GetDuration(option.ResourceResyncInterval)
+	c.AgentResourceResyncInterval = viper.GetDuration(AgentResourceResyncInterval)
+	c.ResourceRemoteENIResyncInterval = viper.GetDuration(ResourceRemoteENIResyncInterval)
 	c.ResourceENIResyncInterval = viper.GetDuration(ResourceENIResyncInterval)
+	c.ResourceCepResyncInterval = viper.GetDuration(ResourceCepResyncInterval)
 	c.ResourceHPCResyncInterval = viper.GetDuration(ResourceHPCResyncInterval)
 	c.ResourceResyncWorkers = viper.GetInt64(ResourceResyncWorkers)
 	c.NrsResourceResyncWorkers = viper.GetInt64(NrsResourceResyncWorkers)

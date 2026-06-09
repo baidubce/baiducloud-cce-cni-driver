@@ -1,3 +1,4 @@
+{{- if eq .Values.DeploymentMod "standalone" }}
 {{- if .Values.network.operator.webhook.enable }}
 
 {{- if not (empty .Values.network.operator.webhook.mutating) }}
@@ -6,13 +7,14 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: {{ .Values.network.operator.webhook.mutating }}
 webhooks:
-  - clientConfig:
-      caBundle: Cg==
+  - name: mutating.cce.baidubce.com
+    clientConfig:
       service:
         name: cce-network-v2
         namespace: kube-system
         path: /mutating-pod
         port: 443
+      caBundle: Cg==
     failurePolicy: Ignore
     name: mutating.pod.cce.baidubce.com
     sideEffects: None
@@ -34,12 +36,12 @@ webhooks:
           - pods
     timeoutSeconds: 30
   - clientConfig:
-      caBundle: Cg==
       service:
         name: cce-network-v2
         namespace: kube-system
         path: /mutating-psts
         port: 443
+      caBundle: Cg==
     failurePolicy: Fail
     name: mutating.psts.cce.baidubce.com
     sideEffects: None
@@ -56,12 +58,12 @@ webhooks:
           - podsubnettopologyspreads
     timeoutSeconds: 30
   - clientConfig:
-      caBundle: Cg==
       service:
         name: cce-network-v2
         namespace: kube-system
         path: /mutating-cluster-psts
         port: 443
+      caBundle: Cg==
     failurePolicy: Fail
     name: mutating.cpsts.cce.baidubce.com
     sideEffects: None
@@ -77,5 +79,6 @@ webhooks:
         resources:
           - clusterpodsubnettopologyspreads
     timeoutSeconds: 30    
+{{- end }}
 {{- end }}
 {{- end }}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhook"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhook/podmutating"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/cmd/webhook/webhookcontroller"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -29,6 +30,7 @@ func NewRootCommand() *cobra.Command {
 			cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 				klog.Infof("FLAG: --%s=%q", flag.Name, flag.Value)
 			})
+			k8s.Configure(webhookcontroller.APIServerURL, webhookcontroller.Kubeconfig, float32(webhookcontroller.Qps), webhookcontroller.Burst)
 			_, _, err := k8s.InitNewK8sClient()
 			if err != nil {
 				klog.Fatalf("create k8s client failed: %v", err)

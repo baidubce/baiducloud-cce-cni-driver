@@ -50,6 +50,7 @@ func newHandler(handler func(w http.ResponseWriter, r *http.Request)) http.Handl
 	r.HandleFunc(metadataBasePath+"instance-type-ex", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"network/interfaces/macs/test-mac/vif_features", handler).Methods("GET")
 	r.HandleFunc(metadataBasePath+"network/interfaces/macs", handler).Methods("GET")
+	r.HandleFunc(metadataBasePath+"feature_list", handler).Methods("GET")
 
 	return r
 }
@@ -73,6 +74,18 @@ func handleMetaDataError(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusInternalServerError)
 	w.Write([]byte("internal server error"))
+}
+
+func handleFeatureListOK(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"eni_quota":"15","eri_quota":"1"}`))
+}
+
+func handleFeatureListInvalidJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"eni_quota":"15","eri_quota":"1"`))
 }
 
 func TestMetaDataOK(t *testing.T) {
@@ -273,5 +286,77 @@ func TestMetaDataError(t *testing.T) {
 	_, err = c.GetInstanceTypeEx()
 	if err == nil {
 		t.Errorf("TestMetaData wants error")
+	}
+}
+
+func TestGetFeatureList(t *testing.T) {
+	// Test successful response
+	setupTestEnv(newHandler(handleFeatureListOK))
+	defer tearDownTestEnv()
+
+	url, _ := url.Parse(testHTTPServer.URL)
+	c := NewClient()
+	c.host = url.Host
+	c.scheme = url.Scheme
+
+	featureList, err := c.GetFeatureList()
+	if err != nil {
+		t.Errorf("GetFeatureList got error: %v", err)
+	}
+
+	if featureList.ENIQuota != "15" {
+		t.Errorf("GetFeatureList ENIQuota want: %v, got: %v", "15", featureList.ENIQuota)
+	}
+
+	if featureList.ERIQuota != "1" {
+		t.Errorf("GetFeatureList ERIQuota want: %v, got: %v", "1", featureList.ERIQuota)
+	}
+}
+
+func TestGetFeatureListInvalidJSON(t *testing.T) {
+	// Test invalid JSON response
+	setupTestEnv(newHandler(handleFeatureListInvalidJSON))
+	defer tearDownTestEnv()
+
+	url, _ := url.Parse(testHTTPServer.URL)
+	c := NewClient()
+	c.host = url.Host
+	c.scheme = url.Scheme
+
+	_, err := c.GetFeatureList()
+	if err == nil {
+		t.Error("GetFeatureList should return error for invalid JSON")
+	}
+}
+
+func TestGetFeatureListNotImplemented(t *testing.T) {
+	// Test not implemented response
+	setupTestEnv(newHandler(handleMetaDataNotImplemented))
+	defer tearDownTestEnv()
+
+	url, _ := url.Parse(testHTTPServer.URL)
+	c := NewClient()
+	c.host = url.Host
+	c.scheme = url.Scheme
+
+	_, err := c.GetFeatureList()
+	if err != ErrorNotImplemented {
+		t.Errorf("GetFeatureList should return ErrorNotImplemented, got: %v", err)
+	}
+}
+
+func TestGetFeatureListError(t *testing.T) {
+	// Test error response
+	setupTestEnv(newHandler(handleMetaDataError))
+	defer tearDownTestEnv()
+
+	url, _ := url.Parse(testHTTPServer.URL)
+	c := NewClient()
+	c.host = url.Host
+	c.scheme = url.Scheme
+
+	_, err := c.GetFeatureList()
+	if err == nil {
+		t.Error("GetFeatureList should return error for server error")
 	}
 }

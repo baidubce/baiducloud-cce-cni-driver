@@ -172,3 +172,10 @@ func (o *OSRelease) isGreaterThanOrEqual(Standard string) bool {
 	}
 	return false
 }
+
+// EnsureNetworkManagerUnmanaged ensures NetworkManager stops managing the specified interface
+func (u *ubuntuOS) EnsureNetworkManagerUnmanaged(ifName string) error {
+	// Ubuntu systems don't need NetworkManager configuration for ENI interfaces
+	log.Debugf("Skipping NetworkManager configuration for %s on Ubuntu", ifName)
+	return nil
+}

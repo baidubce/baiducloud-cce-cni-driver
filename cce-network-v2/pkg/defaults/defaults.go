@@ -164,6 +164,12 @@ const (
 	// EnableRDMA is the default value for RDMA enablement
 	EnableRDMA = false
 
+	// EnableERIManagement is the default value for ERI management enablement
+	EnableERIManagement = false
+	// RDMA resource type defaults
+	RDMAResourceTypeForHPC = "hca"  // Default resource type for HPC (UnderlayRDMA)
+	RDMAResourceTypeForERI = "ehca" // Default resource type for ERI (OverlayRDMA)
+
 	// EnableL7Proxy is the default value for L7 proxy enablement
 	EnableL7Proxy = true
 
@@ -425,6 +431,9 @@ const (
 
 	// DefaultENIDescription specifies the default ENI description
 	DefaultENIDescription = "auto created by cce-cni, do not modify"
+
+	// EmptyMACAddress represents an empty or invalid MAC address
+	EmptyMACAddress = "00:00:00:00:00:00"
 
 	// DefaultResourceResyncWorkers specifies the default number of workers for k8s resources handler
 	DefaultResourceResyncWorkers = 8

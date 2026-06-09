@@ -15,15 +15,16 @@
 package eni
 
 type CreateEniArgs struct {
-	ClientToken                string      `json:"-"`
-	Name                       string      `json:"name"`
-	SubnetId                   string      `json:"subnetId"`
-	InstanceId                 string      `json:"instanceId,omitempty"`
-	SecurityGroupIds           []string    `json:"securityGroupIds"`
-	EnterpriseSecurityGroupIds []string    `json:"enterpriseSecurityGroupIds"`
-	PrivateIpSet               []PrivateIp `json:"privateIpSet"`
-	Ipv6PrivateIpSet           []PrivateIp `json:"ipv6PrivateIpSet,omitempty"`
-	Description                string      `json:"description,omitempty"`
+	ClientToken                 string      `json:"-"`
+	Name                        string      `json:"name"`
+	SubnetId                    string      `json:"subnetId"`
+	InstanceId                  string      `json:"instanceId,omitempty"`
+	SecurityGroupIds            []string    `json:"securityGroupIds"`
+	EnterpriseSecurityGroupIds  []string    `json:"enterpriseSecurityGroupIds"`
+	PrivateIpSet                []PrivateIp `json:"privateIpSet"`
+	Ipv6PrivateIpSet            []PrivateIp `json:"ipv6PrivateIpSet,omitempty"`
+	Description                 string      `json:"description,omitempty"`
+	NetworkInterfaceTrafficMode string      `json:"networkInterfaceTrafficMode,omitempty"` // Specifies the traffic mode for the network interface
 }
 
 type CreateEniResult struct {

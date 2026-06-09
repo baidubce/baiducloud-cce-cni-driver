@@ -47,6 +47,8 @@ type BCEAllocatorProvider struct {
 	// bceClient to get bce objects
 	bceclient cloud.Interface
 
+	hpasClient cloud.Interface
+
 	// manager all of instances
 	manager *InstancesManager
 }
@@ -61,7 +63,8 @@ func (provider *BCEAllocatorProvider) Init(ctx context.Context) error {
 	provider.enilister = k8s.CCEClient().Informers.Cce().V2().ENIs().Lister()
 	provider.sbnlister = k8s.CCEClient().Informers.Cce().V1().Subnets().Lister()
 	provider.bceclient = bceoption.BCEClient()
-	provider.manager = newInstancesManager(provider.bceclient, provider.enilister, provider.sbnlister, watchers.CCEEndpointClient)
+	provider.hpasClient = bceoption.BCEHPASClient()
+	provider.manager = newInstancesManager(provider.bceclient, provider.hpasClient, provider.enilister, provider.sbnlister, watchers.CCEEndpointClient)
 	return nil
 }
 

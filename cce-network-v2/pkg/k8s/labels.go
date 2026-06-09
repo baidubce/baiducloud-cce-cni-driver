@@ -87,6 +87,10 @@ const (
 	// LabelOwnerByReference this label is used to mark the owner of the resource.
 	// for example, if a psts is created by a cpsts, the label will be set to
 	LabelOwnerByReference = CCEPrefix + "owner-by-reference"
+
+	// LabelERIManagement enables or disables ERI management functionality on the node
+	// When set to "true", ERI management is enabled; when set to "false", ERI management is disabled
+	LabelERIManagement = CCEPrefix + "eri-management"
 )
 
 var (
@@ -119,6 +123,8 @@ var (
 	// cce defined net resource set annotations in k8s
 	AnnotationRDMAInfoMacAddress  = CCEPrefix + "rdma-mac-address"
 	AnnotationRDMAInfoVifFeatures = CCEPrefix + "rdma-vif-features"
+	AnnotationERIManaged          = CCEPrefix + "eri-managed"     // Indicates whether the resource is managed by ERI
+	AnnotationERIMacAddress       = CCEPrefix + "eri-mac-address" // ENI MAC address corresponding to ERI managed NRS
 )
 
 // crossvpc labels

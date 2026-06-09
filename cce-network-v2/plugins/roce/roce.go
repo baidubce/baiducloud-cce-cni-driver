@@ -22,8 +22,6 @@ import (
 	"net"
 	"os"
 	osexec "os/exec"
-	"path"
-	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -31,6 +29,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/100"
@@ -117,31 +116,17 @@ func newRocePlugin() *rocePlugin {
 }
 
 func setupLogging(method string) (*logrus.Entry, error) {
-	logrus.SetReportCaller(true)
-	logrus.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat: "2006-01-02 15:03:04",
-		CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
-			fileName := path.Base(frame.File)
-			return frame.Function, fmt.Sprintf("%s:%d", fileName, frame.Line)
-		},
+	// Use unified CNI logging system, consistent with cptp plugin
+	// Output to syslog for unified management and viewing
+	logging.SetupCNILogging("cni-roce", false)
+
+	loggerEntry := logging.DefaultLogger.WithFields(logrus.Fields{
+		"reqID":  uuid.NewV4().String(),
+		"method": method,
+		"plugin": "roce",
 	})
 
-	logDir := filepath.Dir(logFile)
-	if err := os.Mkdir(logDir, 0755); err != nil && !os.IsExist(err) {
-		return nil, err
-	}
-
-	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err == nil {
-		logrus.SetOutput(file)
-		loggerEntry := logrus.WithFields(logrus.Fields{
-			"reqID":  uuid.NewV4().String(),
-			"method": method,
-		})
-
-		return loggerEntry, nil
-	}
-	return nil, err
+	return loggerEntry, nil
 }
 
 func (p *rocePlugin) cmdAdd(args *skel.CmdArgs) error {

@@ -107,6 +107,8 @@ func (c *Client) IPAMCNIRDMAAllocate(family, owner, containerID, netns string) (
 func (c *Client) IPAMCNIRDMAReleaseIP(owner, containerID, netns string) error {
 	params := rdmaipam.NewDeleteRdmaipamRdmaipsParams().WithTimeout(api.ClientTimeout)
 
+	params.SetRdmaips(owner)
+
 	if owner != "" {
 		params.SetOwner(&owner)
 	}

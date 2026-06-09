@@ -216,89 +216,134 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 	}
 
 	nodeName := nodeTypes.GetName()
-	rdmaIFs, err := bceutils.GetRdmaIFsInfo(nodeName, rdLog)
+	rdmaIFs, err := bceutils.GetRdmaIFsInfoAll(nodeName, rdLog)
 	if err != nil {
 		rdLog.WithError(err).WithField("nodeAddressing", nodeName).Warning("Failed to get rdma IFs info")
 		return
 	}
+
+	// // Check whether ERI management is enabled (based on config or node label)
+	// if option.Config.EnableERIManagement {
+	// 	rd.createOrUpdateERIManagedNRS()
+	// }
+
 	rdmaIfNum := len(rdmaIFs)
-	if rdmaIfNum == 0 {
+	if rdmaIfNum == 0 && !option.Config.EnableERIManagement {
 		option.Config.EnableRDMA = false
 		return
 	}
+
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).WithField("rdmaIFs", rdmaIFs).Infof("Discovery %d RDMA interface for this node", rdmaIfNum)
 
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).Info("Creating or updating RDMA NetResourceSet resource")
 
-	cceClient := k8s.CCEClient()
-
 	canReturn := false
+	hasNonERIManagedInterfaces := false
 	for macAddress, rii := range rdmaIFs {
-		performGet := true
-		var rdmaNetResourceSet *ccev2.NetResourceSet
-		for retryCount := 0; retryCount < maxRetryCount; retryCount++ {
-			performUpdate := true
-			if performGet {
-				var err error
-				rdmaNetResourceSet, err = cceClient.CceV2().NetResourceSets().Get(context.TODO(), rii.NetResourceSetName, metav1.GetOptions{})
-				if err != nil {
-					performUpdate = false
-					annotations := map[string]string{
-						k8s.AnnotationRDMAInfoMacAddress:  macAddress,
-						k8s.AnnotationRDMAInfoVifFeatures: rii.VifFeatures,
-					}
+		// Check if it is an ERI interface and ERI management is enabled, if so, agent should exit
+		if rd.shouldExitOnRegularERINRS(rii) {
+			rd.exitOnRegularERINRS(rii, macAddress)
+			// This function will call Fatal, so execution won't continue past this point
+			continue
+		}
+		hasNonERIManagedInterfaces = true
 
-					rdmaNetResourceSet = &ccev2.NetResourceSet{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:        rii.NetResourceSetName,
-							Labels:      map[string]string{},
-							Annotations: annotations,
-						},
-					}
-				} else {
-					performGet = false
-				}
-			}
+		annotations := map[string]string{
+			k8s.AnnotationRDMAInfoMacAddress:  macAddress,
+			k8s.AnnotationRDMAInfoVifFeatures: rii.VifFeatures,
+		}
 
-			if err := rd.mutateNodeResource(rdmaNetResourceSet, rii.LabelSelectorValue, rii.VifFeatures, rii.MacAddress); err != nil {
-				rdLog.WithError(err).WithField("retryCount", retryCount).Warning("Unable to mutate nodeResource")
-				continue
-			}
-
-			// if we retry after this point, is due to a conflict. We will do
-			// a new GET  to ensure we have the latest information before
-			// updating.
-			performGet = true
-			if performUpdate {
-				if _, err := cceClient.CceV2().NetResourceSets().Update(context.TODO(), rdmaNetResourceSet, metav1.UpdateOptions{}); err != nil {
-					if k8serrors.IsConflict(err) {
-						rdLog.WithError(err).Warn("Unable to update NetResourceSet resource, will retry")
-						continue
-					}
-					rdLog.WithError(err).Fatal("Unable to update NetResourceSet resource")
-				} else {
-					canReturn = true
-					break
-				}
-			} else {
-				if _, err := cceClient.CceV2().NetResourceSets().Create(context.TODO(), rdmaNetResourceSet, metav1.CreateOptions{}); err != nil {
-					if k8serrors.IsConflict(err) {
-						rdLog.WithError(err).Warn("Unable to create NetResourceSet resource, will retry")
-						continue
-					}
-					rdLog.WithError(err).Fatal("Unable to create NetResourceSet resource")
-				} else {
-					rdLog.Info("Successfully created NetResourceSet resource")
-					canReturn = true
-					break
-				}
-			}
+		if rd.createOrUpdateNetResourceSet(rii.NetResourceSetName, annotations, rii.LabelSelectorValue, rii.VifFeatures, rii.MacAddress, "RDMA") {
+			canReturn = true
 		}
 	}
-	if canReturn {
+	// If all interfaces are ERI managed (agent exits on conflict), or any interface is processed successfully, return normally
+	if canReturn || !hasNonERIManagedInterfaces {
 		return
 	}
 	rdLog.Fatal("Could not create or update NetResourceSet resource, despite retries")
+}
+
+// createOrUpdateNetResourceSet handles the common logic for creating or updating NetResourceSet resources
+func (rd *RdmaDiscovery) createOrUpdateNetResourceSet(nrsName string, annotations map[string]string, labelSelectorValue, vifFeatures, macAddress, resourceType string) bool {
+	cceClient := k8s.CCEClient()
+
+	performGet := true
+	var netResourceSet *ccev2.NetResourceSet
+	for retryCount := 0; retryCount < maxRetryCount; retryCount++ {
+		performUpdate := true
+		if performGet {
+			var err error
+			netResourceSet, err = cceClient.CceV2().NetResourceSets().Get(context.TODO(), nrsName, metav1.GetOptions{})
+			if err != nil {
+				performUpdate = false
+				netResourceSet = &ccev2.NetResourceSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        nrsName,
+						Labels:      map[string]string{},
+						Annotations: annotations,
+					},
+				}
+			} else {
+				performGet = false
+			}
+		}
+
+		// Fill in basic configuration
+		if err := rd.mutateNodeResource(netResourceSet, labelSelectorValue, vifFeatures, macAddress); err != nil {
+			rdLog.WithError(err).WithField("retryCount", retryCount).WithField("resourceType", resourceType).Warning("Unable to mutate nodeResource")
+			continue
+		}
+
+		performGet = true
+		if performUpdate {
+			if _, err := cceClient.CceV2().NetResourceSets().Update(context.TODO(), netResourceSet, metav1.UpdateOptions{}); err != nil {
+				if k8serrors.IsConflict(err) {
+					rdLog.WithError(err).WithField("resourceType", resourceType).Warn("Unable to update NetResourceSet resource, will retry")
+					continue
+				}
+				rdLog.WithError(err).WithField("resourceType", resourceType).Fatal("Unable to update NetResourceSet resource")
+			} else {
+				rdLog.WithField("resourceType", resourceType).Info("Successfully updated NetResourceSet resource")
+				return true
+			}
+		} else {
+			if _, err := cceClient.CceV2().NetResourceSets().Create(context.TODO(), netResourceSet, metav1.CreateOptions{}); err != nil {
+				if k8serrors.IsConflict(err) {
+					rdLog.WithError(err).WithField("resourceType", resourceType).Warn("Unable to create NetResourceSet resource, will retry")
+					continue
+				}
+				rdLog.WithError(err).WithField("resourceType", resourceType).Fatal("Unable to create NetResourceSet resource")
+			} else {
+				rdLog.WithField("resourceType", resourceType).Info("Successfully created NetResourceSet resource")
+				return true
+			}
+		}
+	}
+
+	rdLog.WithField("resourceType", resourceType).Fatal("Could not create or update NetResourceSet resource, despite retries")
+	return false
+}
+
+func (rd *RdmaDiscovery) createOrUpdateERIManagedNRS() {
+	nodeName := nodeTypes.GetName()
+	instanceID, err := agent.GetInstanceID()
+	if err != nil {
+		rdLog.WithError(err).Fatal("get instance id fail")
+	}
+	eriManagedNRSName := bceutils.GetEriMangedNrsName(nodeName)
+
+	rdLog.WithField("nrsName", eriManagedNRSName).Info("Creating ERI managed NetResourceSet")
+
+	eriLabelSelectorValue := bceutils.GetRdmaNrsLabelSelectorValueFromNetResourceSetName(eriManagedNRSName, nodeName, instanceID, "", string(ccev2.ENIForERI))
+
+	// Create a dedicated NRS for ERI management
+	annotations := map[string]string{
+		k8s.AnnotationRDMAInfoVifFeatures: string(ccev2.ENIForERI),
+		k8s.AnnotationERIManaged:          "true", // Mark as ERI managed
+	}
+
+	rd.createOrUpdateNetResourceSet(eriManagedNRSName, annotations, eriLabelSelectorValue, string(ccev2.ENIForERI), "", "ERI managed")
 }
 
 func generateRdmaENISpec(vifFeatures string) (eni *api.ENISpec, err error) {
@@ -487,4 +532,69 @@ func (rd *RdmaDiscovery) LocalAllocCIDRsUpdated(ipv4AllocCIDRs, ipv6AllocCIDRs [
 
 func (rd *RdmaDiscovery) ResourceType() string {
 	return ccev2.NetResourceSetEventHandlerTypeRDMA
+}
+
+// shouldExitOnRegularERINRS checks whether agent should exit when finding regular ERI RDMA NRS
+func (rd *RdmaDiscovery) shouldExitOnRegularERINRS(rii bceutils.RdmaIfInfo) bool {
+	return option.Config.EnableERIManagement && rii.VifFeatures == string(ccev2.ENIForERI)
+}
+
+// exitOnRegularERINRS exits the agent when finding regular ERI RDMA NRS
+func (rd *RdmaDiscovery) exitOnRegularERINRS(rii bceutils.RdmaIfInfo, macAddress string) {
+	regularNRSName := rii.NetResourceSetName
+
+	rdLog.WithFields(logrus.Fields{
+		"regularNRSName": regularNRSName,
+		"macAddress":     macAddress,
+	}).Error("Found regular ERI RDMA NRS while ERI management is enabled")
+
+	cceClient := k8s.CCEClient()
+
+	// Check if the regular ERI NRS exists
+	_, err := cceClient.CceV2().NetResourceSets().Get(context.TODO(), regularNRSName, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// NRS doesn't exist, this is normal, no need to exit
+			rdLog.WithField("regularNRSName", regularNRSName).Debug("Regular ERI NRS not found, continuing normally")
+			return
+		}
+		rdLog.WithError(err).WithFields(logrus.Fields{
+			"regularNRSName": regularNRSName,
+			"macAddress":     macAddress,
+		}).Warning("Failed to check regular ERI RDMA NRS existence, continuing normally")
+		return
+	}
+
+	// If we reach here, the regular ERI NRS exists and ERI management is enabled
+	// This is a conflict situation, agent should exit
+	rdLog.WithFields(logrus.Fields{
+		"regularNRSName": regularNRSName,
+		"macAddress":     macAddress,
+	}).Fatal("Regular ERI RDMA NRS exists while ERI management is enabled. " +
+		"This indicates a configuration conflict. Please clean up the regular ERI NRS manually " +
+		"or disable ERI management before restarting the agent.")
+}
+
+// ERIOwnerWrapper is a simple ERI management owner wrapper
+// Only overrides UpdateNetResourceSetResource method, other methods are directly proxied to RdmaDiscovery
+type ERIOwnerWrapper struct {
+	*RdmaDiscovery
+}
+
+// NewERIOwnerWrapper creates a simple ERI management owner wrapper
+func NewERIOwnerWrapper(rdmaDiscovery *RdmaDiscovery) *ERIOwnerWrapper {
+	return &ERIOwnerWrapper{
+		RdmaDiscovery: rdmaDiscovery,
+	}
+}
+
+// UpdateNetResourceSetResource overrides the method, only handles ERI managed NRS
+func (ew *ERIOwnerWrapper) UpdateNetResourceSetResource() {
+	if !option.Config.AutoCreateNetResourceSetResource {
+		return
+	}
+
+	// Only create/update ERI managed NRS, not handle regular RDMA NRS
+	rdLog.Info("Updating ERI managed NetResourceSet resource only")
+	ew.createOrUpdateERIManagedNRS()
 }

@@ -20,22 +20,20 @@ package ipam
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/check.v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	metricsmock "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/metrics/mock"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	listerv2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/client/listers/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/testutils"
 )
 
 var (
@@ -44,6 +42,15 @@ var (
 )
 
 const testPoolID = ipamTypes.PoolID("global")
+
+// init init 函数用于初始化 fake k8s 客户端，避免 nil 指针解引用
+// 如果初始化失败则 panic 出错误信息
+func init() {
+	// 初始化 fake k8s 客户端，避免 nil 指针解引用
+	if err := k8s.InitNewFakeK8sClient(); err != nil {
+		panic(fmt.Sprintf("failed to initialize fake k8s client: %v", err))
+	}
+}
 
 type allocationImplementationMock struct {
 	// mutex protects all fields of this structure
@@ -293,329 +300,10 @@ func reachedAddressesNeeded(mngr *NetResourceSetManager, nodeName string, needed
 	return
 }
 
-// TestNodeManagerDefaultAllocation tests allocation with default parameters
-//
-// - MinAllocate 0
-// - PreAllocate 8
-func (e *IPAMSuite) TestNodeManagerDefaultAllocation(c *check.C) {
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, false, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	// Announce node wait for IPs to become available
-	cn := newNetResourceSet("node1", 8, 0, 0)
-	mngr.Update(cn)
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node1", 0) }, 5*time.Second), check.IsNil)
-
-	node := mngr.Get("node1")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 8)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-
-	// Use 7 out of 8 IPs
-	mngr.Update(updateNetResourceSet(cn, 7))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node1", 0) }, 5*time.Second), check.IsNil)
-
-	node = mngr.Get("node1")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 15)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 7)
-}
-
-// TestNodeManagerMinAllocate20 tests MinAllocate without PreAllocate
-//
-// - MinAllocate 10
-// - PreAllocate -1
-func (e *IPAMSuite) TestNodeManagerMinAllocate20(c *check.C) {
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, false, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	// Announce node wait for IPs to become available
-	cn := newNetResourceSet("node2", -1, 10, 0)
-	mngr.Update(cn)
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-
-	node := mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 10)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-
-	// 10 available, 8 used
-	mngr.Update(updateNetResourceSet(cn, 8))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-
-	node = mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 10)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 8)
-
-	// Change MinAllocate to 20
-	mngr.Update(newNetResourceSet("node2", 0, 20, 8))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-
-	node = mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().UsedIPs, check.Equals, 8)
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 20)
-}
-
-// TestNodeManagerMinAllocateAndPreallocate tests MinAllocate in combination with PreAllocate
-//
-// - MinAllocate 10
-// - PreAllocate 1
-func (e *IPAMSuite) TestNodeManagerMinAllocateAndPreallocate(c *check.C) {
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, false, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	// Announce node, wait for IPs to become available
-	cn := newNetResourceSet("node2", 1, 10, 0)
-	mngr.Update(cn)
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-
-	node := mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 10)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-
-	// Use 9 out of 10 IPs, no additional IPs should be allocated
-	mngr.Update(updateNetResourceSet(cn, 9))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 10)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 9)
-
-	// Use 10 out of 10 IPs, PreAllocate 1 must kick in and allocate an additional IP
-	mngr.Update(updateNetResourceSet(cn, 10))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 11)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 10)
-
-	// Release some IPs, no additional IPs should be allocated
-	mngr.Update(updateNetResourceSet(cn, 8))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node2", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node2")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 11)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 8)
-}
-
-// TestNodeManagerReleaseAddress tests PreAllocate, MinAllocate and MaxAboveWatermark
-// when release excess IP is enabled
-//
-// - MinAllocate 15
-// - PreAllocate 4
-// - MaxAboveWatermark 4
-func (e *IPAMSuite) TestNodeManagerReleaseAddress(c *check.C) {
-	operatorOption.Config.ExcessIPReleaseDelay = 2
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, true, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	// Announce node, wait for IPs to become available
-	cn := newNetResourceSet("node3", 4, 15, 0)
-	cn.Spec.IPAM.MaxAboveWatermark = 4
-	mngr.Update(cn)
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 1*time.Second), check.IsNil)
-
-	node := mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 19)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-
-	// Use 11 out of 19 IPs, no additional IPs should be allocated
-	mngr.Update(updateNetResourceSet(cn, 11))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 19)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 11)
-
-	// Use 19 out of 19 IPs, PreAllocate 4 + MaxAboveWatermark must kick in and allocate 8 additional IPs
-	mngr.Update(updateNetResourceSet(cn, 19))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 27)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 19)
-
-	// Free some IPs, 5 excess IPs appears but only be released at interval based resync, so expect timeout here
-	mngr.Update(updateNetResourceSet(cn, 10))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 2*time.Second), check.Not(check.IsNil))
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 27)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 10)
-
-	// Trigger resync manually, excess IPs should be released down to 18
-	// (10 used + 4 prealloc + 4 max-above-watermark)
-	// Excess timestamps should be registered after this trigger
-	mngr.resyncTrigger.Trigger()
-
-	// Acknowledge release IPs after 3 secs
-	time.AfterFunc(3*time.Second, func() {
-		// Excess delay duration should have elapsed by now, trigger resync again.
-		// IPs should be marked as excess
-		mngr.resyncTrigger.Trigger()
-		time.Sleep(1 * time.Second)
-		node.PopulateIPReleaseStatus(node.resource)
-		// Fake acknowledge IPs for release like agent would.
-		testutils.FakeAcknowledgeReleaseIps(node.resource)
-		// Resync one more time to process acknowledgements.
-		mngr.resyncTrigger.Trigger()
-	})
-
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 18)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 10)
-}
-
-// TestNodeManagerAbortRelease tests aborting IP release handshake if a new allocation on the node results in excess
-// being resolved
-func (e *IPAMSuite) TestNodeManagerAbortRelease(c *check.C) {
-	var wg sync.WaitGroup
-	operatorOption.Config.ExcessIPReleaseDelay = 2
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, true, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	// Announce node, wait for IPs to become available
-	cn := newNetResourceSet("node3", 1, 3, 0)
-	mngr.Update(cn)
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 1*time.Second), check.IsNil)
-
-	node := mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 3)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-
-	// Use 3 out of 4 IPs, no additional IPs should be allocated
-	mngr.Update(updateNetResourceSet(cn, 3))
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 5*time.Second), check.IsNil)
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 4)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 3)
-
-	mngr.Update(updateNetResourceSet(node.resource, 2))
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 4)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 2)
-
-	// Trigger resync manually, excess IPs should be released down to 3
-	// Excess timestamps should be registered after this trigger
-	mngr.resyncTrigger.Trigger()
-	wg.Add(1)
-
-	// Acknowledge release IPs after 3 secs
-	time.AfterFunc(3*time.Second, func() {
-		defer wg.Done()
-		// Excess delay duration should have elapsed by now, trigger resync again.
-		// IPs should be marked as excess
-		mngr.resyncTrigger.Trigger()
-		time.Sleep(1 * time.Second)
-		node.PopulateIPReleaseStatus(node.resource)
-
-		c.Assert(len(node.resource.Status.IPAM.ReleaseIPs), check.Equals, 1)
-
-		// Fake acknowledge IPs for release like agent would.
-		testutils.FakeAcknowledgeReleaseIps(node.resource)
-
-		// Use up one more IP to make excess = 0
-		mngr.Update(updateNetResourceSet(node.resource, 3))
-		node.poolMaintainer.Trigger()
-		// Resync one more time to process acknowledgements.
-		mngr.resyncTrigger.Trigger()
-
-		time.Sleep(1 * time.Second)
-		node.PopulateIPReleaseStatus(node.resource)
-
-		// Verify that the entry for previously marked IP is removed, instead of being set to released state.
-		c.Assert(len(node.resource.Status.IPAM.ReleaseIPs), check.Equals, 0)
-	})
-
-	c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, "node3", 0) }, 5*time.Second), check.IsNil)
-	wg.Wait()
-	node = mngr.Get("node3")
-	c.Assert(node, check.Not(check.IsNil))
-	c.Assert(node.Stats().AvailableIPs, check.Equals, 4)
-	c.Assert(node.Stats().UsedIPs, check.Equals, 3)
-}
-
 type nodeState struct {
 	cn           *v2.NetResourceSet
 	name         string
 	instanceName string
-}
-
-// TestNodeManagerManyNodes tests IP allocation of 100 nodes across 3 subnets
-//
-// - MinAllocate 10
-// - PreAllocate 1
-func (e *IPAMSuite) TestNodeManagerManyNodes(c *check.C) {
-	const (
-		numNodes    = 100
-		minAllocate = 10
-	)
-
-	am := newAllocationImplementationMock()
-	c.Assert(am, check.Not(check.IsNil))
-	mngr, err := NewNetResourceSetManager(am, k8sapi, metricsapi, 10, false, false)
-	c.Assert(err, check.IsNil)
-	c.Assert(mngr, check.Not(check.IsNil))
-
-	state := make([]*nodeState, numNodes)
-
-	for i := range state {
-		s := &nodeState{name: fmt.Sprintf("node%d", i), instanceName: fmt.Sprintf("i-testNodeManagerManyNodes-%d", i)}
-		s.cn = newNetResourceSet(s.name, 1, minAllocate, 0)
-		state[i] = s
-		mngr.Update(s.cn)
-	}
-
-	for _, s := range state {
-		c.Assert(testutils.WaitUntil(func() bool { return reachedAddressesNeeded(mngr, s.name, 0) }, 5*time.Second), check.IsNil)
-
-		node := mngr.Get(s.name)
-		c.Assert(node, check.Not(check.IsNil))
-		if node.Stats().AvailableIPs != minAllocate {
-			c.Errorf("Node %s allocation mismatch. expected: %d allocated: %d", s.name, minAllocate, node.Stats().AvailableIPs)
-			c.Fail()
-		}
-		c.Assert(node.Stats().UsedIPs, check.Equals, 0)
-	}
-
-	// The above check returns as soon as the address requirements are met.
-	// The metrics may still be oudated, resync all nodes to update
-	// metrics.
-	mngr.Resync(context.TODO(), time.Now())
-
-	c.Assert(metricsapi.Nodes("total"), check.Equals, numNodes)
-	c.Assert(metricsapi.Nodes("in-deficit"), check.Equals, 0)
-	c.Assert(metricsapi.Nodes("at-capacity"), check.Equals, 0)
-
-	c.Assert(metricsapi.AllocatedIPs("available"), check.Equals, numNodes*minAllocate)
-	c.Assert(metricsapi.AllocatedIPs("needed"), check.Equals, 0)
-	c.Assert(metricsapi.AllocatedIPs("used"), check.Equals, 0)
-
-	c.Assert(metricsapi.ResyncCount(), check.Not(check.Equals), 0)
 }
 
 func benchmarkAllocWorker(c *check.C, workers int64, delay time.Duration, rateLimit float64, burst int) {

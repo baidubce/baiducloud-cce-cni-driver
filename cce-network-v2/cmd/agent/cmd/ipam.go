@@ -249,6 +249,6 @@ func (d *Daemon) startIPAM() {
 	bootstrapStats.ipam.Start()
 	ipamLog.Info("Initializing ipam")
 	// Set up ipam conf after init() because we might be running d.conf.KVStoreIPv4Registration
-	d.ipam = endpoint.NewIPAM(nodeTypes.GetName(), false, "", d.nodeAddressing, option.Config, d.nodeDiscovery, d.k8sWatcher, nil)
+	d.ipam = endpoint.NewIPAM(nodeTypes.GetName(), false, "", "", d.nodeAddressing, option.Config, d.nodeDiscovery, d.k8sWatcher, nil)
 	bootstrapStats.ipam.End(true)
 }

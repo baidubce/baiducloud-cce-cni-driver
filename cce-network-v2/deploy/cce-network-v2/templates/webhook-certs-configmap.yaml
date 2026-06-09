@@ -1,0 +1,13 @@
+{{- if and (eq .Values.DeploymentMod "pro-meta") (.Values.network.operator.webhook.enable) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cce-network-v2-webhook-certs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+type: Opaque
+data:
+  tls.crt: {{ .Values.network.operator.webhook.cert | b64enc }}
+  tls.key: {{ .Values.network.operator.webhook.key | b64enc }}
+{{- end }}

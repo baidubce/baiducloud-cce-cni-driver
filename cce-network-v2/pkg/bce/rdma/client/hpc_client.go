@@ -19,7 +19,9 @@ func NewHpcClient(cloud bceclound.Interface) *HpcClient {
 }
 
 func (c *HpcClient) ListEnis(ctx context.Context, _, instanceID string) ([]EniResult, error) {
+
 	hpcEniList, err := c.cloud.GetHPCEniID(ctx, instanceID)
+
 	if err != nil {
 		return nil, err
 	}

@@ -72,6 +72,10 @@ func (ipam *IPAM) lookupIPsByOwner(owner string) (ips []net.IP) {
 	ipam.allocatorMutex.RLock()
 	defer ipam.allocatorMutex.RUnlock()
 
+	// helps understand the owner map content in this ipam/rdmaipam cache
+	log.WithFields(logrus.Fields{
+		"owner get from func args": owner,
+	}).Debugf("now owner map in this ipam/rdmaipam cache contains: %+v", ipam.owner)
 	for ip, o := range ipam.owner {
 		if o == owner {
 			if parsedIP := net.ParseIP(ip); parsedIP != nil {

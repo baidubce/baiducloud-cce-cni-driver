@@ -46,6 +46,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node"
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/pststrategy"
 )
 
@@ -57,6 +58,7 @@ var (
 type rdmaEndpointAllocatorAttr struct {
 	isRdmaEndpointAllocator bool
 	primaryMacAddress       string
+	ipamType                string // IPAM type: empty for normal, UnderlayRDMA for HPC, OverlayRDMA for ERI
 }
 
 // EndpointAllocator It proxies the basic operation methods of ipam.
@@ -74,12 +76,12 @@ type EndpointAllocator struct {
 	eventRecorder     record.EventRecorder
 }
 
-func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primaryMacAddress string, nodeAddressing types.NodeAddressing, c ipam.Configuration, owner ipam.Owner, watcher *watchers.K8sWatcher, mtuConfig ipam.MtuConfiguration) ipam.CNIIPAMServer {
+func NewIPAM(networkResourceSetName string, isRdmaEndpointAllocator bool, primaryMacAddress string, ipamType string, nodeAddressing types.NodeAddressing, c ipam.Configuration, owner ipam.Owner, watcher *watchers.K8sWatcher, mtuConfig ipam.MtuConfiguration) ipam.CNIIPAMServer {
 	dynamicIPAM := ipam.NewIPAM(networkResourceSetName, nodeAddressing, c, owner, watcher, mtuConfig)
 	allocatorLog.Infof("init dynamicIPAM for %s %s", networkResourceSetName, primaryMacAddress)
 	e := &EndpointAllocator{
 		dynamicIPAM:       dynamicIPAM,
-		rdmaAttr:          rdmaEndpointAllocatorAttr{isRdmaEndpointAllocator, primaryMacAddress},
+		rdmaAttr:          rdmaEndpointAllocatorAttr{isRdmaEndpointAllocator, primaryMacAddress, ipamType},
 		cceEndpointClient: watcher.NewCCEEndpointClient(),
 		podClient:         watcher.NewPodClient(),
 		nrsName:           networkResourceSetName,
@@ -120,6 +122,31 @@ func (e *EndpointAllocator) DebugStatus() string {
 
 func (e *EndpointAllocator) RestoreFinished() {
 	e.dynamicIPAM.RestoreFinished()
+}
+
+// UpdatePrimaryMacAddress updates the primary MAC address for RDMA Endpoint Allocator
+func (e *EndpointAllocator) UpdatePrimaryMacAddress(newMacAddress string) {
+	if e.rdmaAttr.isRdmaEndpointAllocator {
+		allocatorLog.WithFields(logrus.Fields{
+			"nrsName": e.nrsName,
+			"oldMac":  e.rdmaAttr.primaryMacAddress,
+			"newMac":  newMacAddress,
+		}).Info("Updating primary MAC address for RDMA endpoint allocator")
+
+		e.rdmaAttr.primaryMacAddress = newMacAddress
+
+		allocatorLog.WithFields(logrus.Fields{
+			"nrsName": e.nrsName,
+			"newMac":  newMacAddress,
+		}).Info("Primary MAC address updated successfully")
+	} else {
+		allocatorLog.WithField("nrsName", e.nrsName).Warning("Attempted to update MAC address on non-RDMA endpoint allocator")
+	}
+}
+
+// GetPrimaryMacAddress returns the primary MAC address for RDMA Endpoint Allocator
+func (e *EndpointAllocator) GetPrimaryMacAddress() string {
+	return e.rdmaAttr.primaryMacAddress
 }
 
 func (e *EndpointAllocator) DEL(owner, containerID string) (err error) {
@@ -188,6 +215,99 @@ func hasRDMAResource(rl corev1.ResourceList) bool {
 	return false
 }
 
+// getRDMAResourceType returns the specific RDMA resource type (e.g., RDMAResourceTypeHCA, RDMAResourceTypeEHCA) from pod resources
+func getRDMAResourceType(rl corev1.ResourceList) string {
+	for key, _ := range rl {
+		arr := strings.Split(string(key), "/")
+		if len(arr) != 2 {
+			continue
+		}
+		if arr[0] == bceutils.PodResourceName {
+			return arr[1] // return the resource type part (e.g., RDMAResourceTypeHCA, RDMAResourceTypeEHCA)
+		}
+	}
+	return ""
+}
+
+// getRDMAResourceTypes returns all RDMA resource types from a resource list
+func getRDMAResourceTypes(rl corev1.ResourceList) []string {
+	var resourceTypes []string
+	for key, _ := range rl {
+		arr := strings.Split(string(key), "/")
+		if len(arr) != 2 {
+			continue
+		}
+		if arr[0] == bceutils.PodResourceName {
+			resourceTypes = append(resourceTypes, arr[1])
+		}
+	}
+	return resourceTypes
+}
+
+// getPodRDMAResourceType returns the RDMA resource type requested by the pod
+func getPodRDMAResourceType(pod *corev1.Pod) string {
+	for _, container := range pod.Spec.Containers {
+		if resourceType := getRDMAResourceType(container.Resources.Limits); resourceType != "" {
+			return resourceType
+		}
+		if resourceType := getRDMAResourceType(container.Resources.Requests); resourceType != "" {
+			return resourceType
+		}
+	}
+	return ""
+}
+
+// isRDMAResourceMatched checks if the pod's RDMA resource type matches the IPAM type
+func isRDMAResourceMatched(podRDMAResourceType, ipamType string) bool {
+	return (podRDMAResourceType == option.Config.RDMAResourceTypeForHPC && ipamType == bceutils.UnderlayRDMA) ||
+		(podRDMAResourceType == option.Config.RDMAResourceTypeForERI && ipamType == bceutils.OverlayRDMA)
+}
+
+// getPodRDMAResourceTypes returns all RDMA resource types requested by the pod
+func getPodRDMAResourceTypes(pod *corev1.Pod) []string {
+	resourceTypes := make(map[string]bool)
+
+	for _, container := range pod.Spec.Containers {
+		// Check Limits
+		for _, resourceType := range getRDMAResourceTypes(container.Resources.Limits) {
+			resourceTypes[resourceType] = true
+		}
+		// Check Requests
+		for _, resourceType := range getRDMAResourceTypes(container.Resources.Requests) {
+			resourceTypes[resourceType] = true
+		}
+	}
+
+	// Convert map to slice
+	var result []string
+	for resourceType := range resourceTypes {
+		result = append(result, resourceType)
+	}
+
+	return result
+}
+
+// isRDMAResourceMatchedMulti checks if any of the pod's RDMA resource types match the IPAM type
+func isRDMAResourceMatchedMulti(podRDMAResourceTypes []string, ipamType string) bool {
+	for _, resourceType := range podRDMAResourceTypes {
+		if isRDMAResourceMatched(resourceType, ipamType) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetIPAMType returns the current IPAM type
+// Returns empty string for normal IPAM, UnderlayRDMA for HPC, OverlayRDMA for ERI
+func (e *EndpointAllocator) GetIPAMType() string {
+	return e.rdmaAttr.ipamType
+}
+
+// isRDMAIPAM returns true if current IPAM is RDMA type
+func (e *EndpointAllocator) isRDMAIPAM() bool {
+	return e.rdmaAttr.ipamType != ""
+}
+
 func wantRoce(pod *corev1.Pod) bool {
 	for _, container := range pod.Spec.Containers {
 		if hasRDMAResource(container.Resources.Limits) || hasRDMAResource(container.Resources.Requests) {
@@ -246,9 +366,29 @@ func (e *EndpointAllocator) ADD(family, owner, containerID, netns string) (ipv4R
 		return nil, nil, fmt.Errorf("get pod (%s/%s) error %w", namespace, podName, err)
 	}
 
-	// if it is RdmaEndpointAllocator, do not allocate IP for pods without RDMA resource
-	if e.isRDMAMode() && !wantRoce(pod) {
+	// RDMA resource type and IPAM type matching logic
+	podRDMAResourceTypes := getPodRDMAResourceTypes(pod)
+	ipamType := e.GetIPAMType()
+	hasRDMAResource := wantRoce(pod)
+
+	// Early return for RDMA mode with non-RDMA pods
+	if e.isRDMAMode() && !hasRDMAResource {
 		return nil, nil, nil
+	}
+
+	// Handle RDMA resource matching
+	if hasRDMAResource {
+		if !e.isRDMAIPAM() {
+			// Normal IPAM: continue to allocate normal IP for RDMA pods
+			allocatorLog.Debugf("Normal IPAM allocation for RDMA pod: pod=%s/%s, resourceTypes=%v, ipamType=%s", namespace, podName, podRDMAResourceTypes, ipamType)
+		} else {
+			// RDMA IPAM: check resource type matching
+			if !isRDMAResourceMatchedMulti(podRDMAResourceTypes, ipamType) {
+				allocatorLog.Debugf("RDMA resource not match, return empty: pod=%s/%s, resourceTypes=%v, ipamType=%s", namespace, podName, podRDMAResourceTypes, ipamType)
+				return nil, nil, nil
+			}
+			allocatorLog.Infof("RDMA resource match successful: pod=%s/%s, resourceTypes=%v, ipamType=%s", namespace, podName, podRDMAResourceTypes, ipamType)
+		}
 	}
 
 	isFixedPod := k8s.HaveFixedIPLabel(&pod.ObjectMeta)

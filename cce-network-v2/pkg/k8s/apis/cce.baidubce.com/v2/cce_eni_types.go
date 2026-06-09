@@ -209,7 +209,15 @@ const (
 	ENIStatusNone        CCEENIStatus = ""
 	ENIStatusPending     CCEENIStatus = "Pending"
 	ENIStatusReadyOnNode CCEENIStatus = "ReadyOnNode"
+	ENIStatusErrorOnNode CCEENIStatus = "ErrorOnNode"
 	ENIStatusUsingInPod  CCEENIStatus = "UsingInPod"
+
+	ENIMSGMissingInumber        CCEENIStatus = "MissingInumberOnNode"
+	ENIMSGMissingMac            CCEENIStatus = "MissingMacOnNode"
+	ENIMSGPCIERROR              CCEENIStatus = "PCIError"
+	ENIMSGReNameFailed          CCEENIStatus = "ReNameFailed"
+	ENIMSGInstallRuleFailed     CCEENIStatus = "InstallRuleFailed"
+	ENIMSGInstallNeighborFailed CCEENIStatus = "InstallNeighborFailed"
 )
 
 type ENIUseMode string

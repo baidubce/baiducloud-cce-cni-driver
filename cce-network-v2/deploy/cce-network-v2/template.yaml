@@ -1,0 +1,144 @@
+# Default values for helm.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# cce守护进程配置
+ccedConfig:
+  # ipam 模式. privatecloudbase: 私有云底座;vpc-eni: BCE VPC ENI
+  ipam: {{ .IPAM }}
+  # 启动ipv4
+  enable-ipv4: true
+  enable-ipv6: {{ .EnableIPv6 }}
+  enable-rdma: {{ .EnableRDMA }}
+
+  # cni 配置，从指定文件读取，写入到另一个路径
+  read-cni-conf: {{ .ReadCNIConf }}
+  write-cni-conf-when-ready: "/etc/cni/net.d/00-cce-cni.conflist"
+
+  # cce专用配置
+  cce-cluster-id: {{ .ClusterID }}
+
+  # operator BCE VPC 配置
+  # vpc id
+  bce-cloud-vpc-id: {{ .VPCID }} 
+  # 云的可用区，用于选择Cloud API的地址
+  bce-cloud-region: {{ .Region }}
+  bce-cloud-host: {{ .CCEGatewayEndpoint }}
+  {{- if .BCCEndpoint }}
+  bccEndpoint: {{ .BCCEndpoint }}
+  {{- end }}
+  {{- if .BBCEndpoint }}
+  bbcEndpoint: {{ .BBCEndpoint }}
+  {{- end }}
+  {{- if .EIPOpenAPIEndpoint }}
+  eipEndpoint: {{ .EIPOpenAPIEndpoint }}
+  {{- end }}
+
+  net-device-driver: "{{ .NetDeviceDriver }}"
+
+  # agent vpc-eni 配置
+  # ENI使用模式：Secondary：辅助IP；Primary：主IP（独占ENI）
+  eni-use-mode: "{{ .ENIUseMode }}"
+  eni-install-source-based-routing: {{ .ENIInstallSourceBasedRouting }}
+  {{- if .ENISubnetList }}
+  eni-subnet-ids:
+  {{- range .ENISubnetList }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- if .SecurityGroupList }}
+  eni-security-group-ids:
+  {{- range .SecurityGroupList }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- if .EnterpriseSecurityGroupList }}
+  eni-enterprise-security-group-ids:
+  {{- range .EnterpriseSecurityGroupList }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+
+  k8s-client-burst: 300
+  k8s-client-qps: 200
+
+  resource-resync-workers: 64
+  nrs-resource-resync-workers: 1000
+  rdma-resource-resync-workers: 1000
+  eni-resource-resync-workers: 1000
+  subnet-resource-resync-workers: 10
+
+  burstable-mehrfach-eni: 0
+  # ippool 优化配置
+  ippool-min-allocate-ips: 10
+  ippool-pre-allocate: 2
+  ippool-max-above-watermark: 2
+  # 自动释放超限的IP，默认不开启释放（开启 burstable ENI 的节点默认默认不会开启 IP 释放）
+  release-excess-ips: true
+
+  # vpc 路由配置
+  # ipv4
+  {{- if  .ClusterPoolIPv4CIDR }}
+  cluster-pool-ipv4-cidr: 
+  {{- range .ClusterPoolIPv4CIDR }}
+  - {{ . }}
+  {{- end }}
+  cluster-pool-ipv4-mask-size: {{ .ClusterPoolIPv4MaskSize }}
+  {{- end }}
+  # ipv6
+  {{- if .EnableIPv6 }}
+  {{- if .ClusterPoolIPv6CIDR }}
+  cluster-pool-ipv6-cidr:
+  {{- range .ClusterPoolIPv6CIDR }}
+  - {{. }}
+  {{- end }}
+  cluster-pool-ipv6-mask-size: {{ .ClusterPoolIPv6MaskSize }}
+  {{- end }}
+  {{- end }}
+
+  # 通用配置
+  annotate-k8s-node: {{ .AnnotateK8sNode }}
+
+  # 外部服务配置
+  {{- if .ClusterIPIPv4CIDRs }}
+  clusterip-ipv4-cidrs:
+  {{- range .ClusterIPIPv4CIDRs }}
+  - {{. }}
+  {{- end }}
+  {{- end }}
+  {{- if .ClusterIPIPv6CIDRs }}
+  clusterip-ipv6-cidrs:
+  {{- range .ClusterIPIPv6CIDRs }}
+  - {{. }}
+  {{- end }}
+  {{- end }}
+
+  {{- if .VPCIPv4CIDRs }}
+  vpc-cidrs:
+  {{- range .VPCIPv4CIDRs }}
+  - {{. }}
+  {{- end }}
+  {{- end }}
+  {{- if .VPCIPv6CIDRs }}
+  vpc-ipv6-cidrs:
+  {{- range .VPCIPv6CIDRs }}
+  - {{. }}
+  {{- end }}
+  {{- end }}
+  # 扩展插件配置
+  {{- if gt (len .ExtPlugins) 0 }}
+  ext-cni-plugins:
+  {{- range .ExtPlugins }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+
+network:
+  imageSuffix: {{ .ImageSuffix }}
+  operator:  
+    webhook: 
+      enable: {{ .EnableWebhook}}
+
+# 大规格集群Apiserver做网络组件拆分才会用到的配置
+apiServerBLBVPCIP: {{ .ApiServerBLBVPCIP }}
+apiServerBLBVPCPort: {{ .ApiServerBLBVPCPort }}

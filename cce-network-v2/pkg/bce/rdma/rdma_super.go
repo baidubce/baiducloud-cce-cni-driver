@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -32,7 +31,6 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
@@ -44,6 +42,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nodeutils"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
 
@@ -932,25 +931,6 @@ func (n *bceRDMANetResourceSet) GetUsedIPWithPrefixes() int {
 	return 0
 }
 
-// FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (n *bceRDMANetResourceSet) FilterAvailableSubnet(subnets []*bcesync.BorrowedSubnet, minAllocateIPs int) []*bcesync.BorrowedSubnet {
-	contry := operatorOption.Config.BCECloudContry
-	region := operatorOption.Config.BCECloudRegion
-	zone := n.k8sObj.Spec.ENI.AvailabilityZone
-
-	var filtedSubnets []*bcesync.BorrowedSubnet
-	for _, subnet := range subnets {
-		if !strings.Contains(subnet.Spec.AvailabilityZone, api.TransAvailableZoneToZoneName(contry, region, zone)) {
-			continue
-		}
-		if !subnet.CanBorrow(minAllocateIPs) {
-			continue
-		}
-		filtedSubnets = append(filtedSubnets, subnet)
-	}
-	return filtedSubnets
-}
-
 // FilterAvailableSubnetIds filter subnets by subnet ids
 func (n *bceRDMANetResourceSet) FilterAvailableSubnetIds(subnetIDs []string, minAllocateIPs int) []*bcesync.BorrowedSubnet {
 	var filtedSubnets []*bcesync.BorrowedSubnet
@@ -961,7 +941,14 @@ func (n *bceRDMANetResourceSet) FilterAvailableSubnetIds(subnetIDs []string, min
 		}
 		filtedSubnets = append(filtedSubnets, sbn)
 	}
-	return n.FilterAvailableSubnet(filtedSubnets, minAllocateIPs)
+	result, _ := nodeutils.FilterAvailableSubnet(
+		filtedSubnets,
+		minAllocateIPs,
+		operatorOption.Config.BCECloudContry,
+		operatorOption.Config.BCECloudRegion,
+		n.k8sObj.Spec.ENI.AvailabilityZone,
+	)
+	return result
 }
 
 func (n *bceRDMANetResourceSet) GetMaximumBurstableAllocatableIPv4() int {

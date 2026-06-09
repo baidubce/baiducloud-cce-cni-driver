@@ -65,7 +65,7 @@ func TestStrArrContains(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := StrArrContains(tt.arr, tt.str)
 			if result != tt.expected {
-				t.Errorf("StrArrContains(%v, %q) = %v, want %v", 
+				t.Errorf("StrArrContains(%v, %q) = %v, want %v",
 					tt.arr, tt.str, result, tt.expected)
 			}
 		})

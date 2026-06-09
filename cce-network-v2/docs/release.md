@@ -8,6 +8,12 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
+#### 2.13.2 [暂未发布]
+1. [Feature] VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
+2. [Feature] VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
+3. [Optimize] 为节点设置 ccesubnetUnavailable 的状态以描述当前节点子网资源状态
+4. [Feature] 容器网络支持海外账号
+5. [Optimize] 支持 RDMA 场景下，节点 eva 后，cce-network-agent 会自动清理相关的过期 NRS 和过期 ENI 对象，以解决新 NRS 持续无法就绪而 cce-network-agent 无法启动的问题
 
 #### 2.13.2 [20250826]
 1. [Bug] 修复 webhook 托管模式下 psts 无法创建的问题
@@ -50,6 +56,8 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 20. [Bug] 修复 eni-pre-allocate-num 参数不生效问题
 21. [Bug] 增加RDMA 类型 ENI状态容错，在发现有该类型的 CR 时直接为其加上 inuse 状态
 22. [Optimize] 优化nrs status 接口调用次数
+23. [Bug] 修复 HPAS 机型存在时，bcc 也使用 hpas header 进行请求 iaas 的问题
+24. [Bug] 修复 HPAS 类型的 HPC 机器， ENI 和 ERI 网卡无法 resync 的问题
 
 #### 2.12.17 [20250317]
 1. [Optimize] NRS Manager Resync 同步逻辑由串行执行修改为并发执行

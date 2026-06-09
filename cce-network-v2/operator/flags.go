@@ -302,6 +302,9 @@ func init() {
 	flags.Int(operatorOption.ExcessIPReleaseDelay, 180, "controls how long operator would wait before an IP previously marked as excess is released. default is 180 seconds")
 	option.BindEnv(operatorOption.ExcessIPReleaseDelay)
 
+	flags.Bool(operatorOption.ReleaseENIs, false, "release ENIs when node is deleted")
+	option.BindEnv(operatorOption.ReleaseENIs)
+
 	flags.String(operatorOption.BCECloudAccessKey, "", "BCE OpenApi AccessKeyID.")
 	option.BindEnv(operatorOption.BCECloudAccessKey)
 

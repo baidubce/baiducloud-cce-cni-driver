@@ -55,7 +55,6 @@ const (
 )
 
 const (
-
 	// SkipCRDCreation specifies whether the CustomResourceDefinition will be
 	// disabled for the operator
 	SkipCRDCreation = "skip-crd-creation"
@@ -164,6 +163,7 @@ const (
 
 	// BCECloudVPCID allows user to specific vpc
 	BCECloudVPCID = "bce-cloud-vpc-id"
+
 	// BCECloudHost host of iaas api
 	BCECloudHost               = "bce-cloud-host"
 	BCECloudRegion             = "bce-cloud-region"
@@ -209,6 +209,7 @@ const (
 
 	// FixedIPTTL ttl for fixed endpoint
 	FixedIPTTL = "fixed-ip-ttl-duration"
+
 	// gc remote fixed ip when endpoint have been deleted
 	EnableRemoteFixedIPGC = "enable-remote-fixed-ip-gc"
 
@@ -224,6 +225,9 @@ const (
 
 	// ReleaseExcessIPs release excess IP when pods is deleted, defaule is false
 	ReleaseExcessIPs = "release-excess-ips"
+
+	// ReleaseENIs release eni when node is deleted, default is false
+	ReleaseENIs = "release-enis"
 
 	// EnableSecurityGroupSyner enable security group syner, default is true"
 	EnableSecurityGroupSyner = "enable-securitygroup-syner"
@@ -346,14 +350,16 @@ type OperatorConfig struct {
 	// BCE options
 
 	// BceCloudVPCID allow user to specific vpc
-	BCECloudVPCID         string
+	BCECloudVPCID string
+
 	BCECloudAccessKey     string
 	BCECloudSecureKey     string
 	BCEForceViaCCEGateway bool
 
 	// ResourceResyncInterval is the interval between attempts of the sync between Cloud and k8s
 	// like ENIs,Subnets
-	ResourceResyncInterval          time.Duration
+	ResourceResyncInterval time.Duration
+
 	AgentResourceResyncInterval     time.Duration
 	ResourceENIResyncInterval       time.Duration
 	ResourceRemoteENIResyncInterval time.Duration
@@ -362,7 +368,8 @@ type OperatorConfig struct {
 	ResourceCepResyncInterval       time.Duration
 
 	// ResourceResyncWorkers specifies the number of parallel workers to be used in resource handler.
-	ResourceResyncWorkers       int64
+	ResourceResyncWorkers int64
+
 	NrsResourceResyncWorkers    int64
 	RdmaResourceResyncWorkers   int64
 	SubnetResourceResyncWorkers int64
@@ -376,6 +383,9 @@ type OperatorConfig struct {
 
 	// ReleaseExcessIPs release excess IP when pods is deleted, defaule is false
 	ReleaseExcessIPs bool
+
+	// ReleaseENIs release ENIs when node is deleted, defaule is false
+	ReleaseENIs bool
 
 	// CCEK8sNamespace is the namespace where CCE pods are running.
 	CCEK8sNamespace string
@@ -512,6 +522,7 @@ func (c *OperatorConfig) Populate() {
 	c.BCECustomerMaxRdmaIP = viper.GetInt(BCECustomerMaxRdmaIP)
 	c.ReleaseExcessIPs = viper.GetBool(ReleaseExcessIPs)
 	c.ExcessIPReleaseDelay = viper.GetInt(ExcessIPReleaseDelay)
+	c.ReleaseENIs = viper.GetBool(ReleaseENIs)
 
 	c.FixedIPTTL = viper.GetDuration(FixedIPTTL)
 	c.FixedIPTimeout = viper.GetDuration(option.FixedIPTimeout)
@@ -540,7 +551,6 @@ func (c *OperatorConfig) Populate() {
 	} else {
 		c.IPAMInstanceTags = m
 	}
-
 }
 
 // Config represents the operator configuration.

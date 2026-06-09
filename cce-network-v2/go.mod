@@ -3,6 +3,7 @@ module github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2
 go 1.20
 
 require (
+	github.com/agiledragon/gomonkey/v2 v2.7.0
 	github.com/blang/semver/v4 v4.0.0
 	github.com/cilium/deepequal-gen v0.0.0-20200406125435-ad6a9003139e
 	github.com/cilium/ebpf v0.12.3
@@ -60,7 +61,6 @@ require (
 )
 
 require (
-	github.com/agiledragon/gomonkey/v2 v2.7.0 // indirect
 	github.com/coreos/go-iptables v0.6.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect

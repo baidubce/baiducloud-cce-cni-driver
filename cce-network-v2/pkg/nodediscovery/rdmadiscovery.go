@@ -18,6 +18,7 @@ package nodediscovery
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -50,6 +51,10 @@ var rdLog = logging.DefaultLogger.WithField(logfields.LogSubsys, rdmaDiscoverySu
 const (
 	ipvlanRequiredKernelVersion = "4.9"
 	ipvlanKernelModuleName      = "ipvlan"
+
+	// ENI deletion verification constants
+	eniDeletionCheckTimeout  = 1 * time.Minute // Maximum time to wait for ENI deletion
+	eniDeletionCheckInterval = 1 * time.Second // Check interval for ENI deletion
 )
 
 func canUseIPVlan(kernelVersion *version.Version, kernelModules []string) bool {
@@ -208,6 +213,10 @@ func (rd *RdmaDiscovery) Close() {
 	rd.Manager.Close()
 }
 
+// cleanupExecuted tracks whether cleanup has been performed to avoid duplicate execution
+var cleanupExecuted bool
+var cleanupMutex sync.Mutex
+
 // UpdateNetResourceSetResource updates the NetResourceSet resource representing the
 // local node
 func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
@@ -234,6 +243,21 @@ func (rd *RdmaDiscovery) UpdateNetResourceSetResource() {
 	}
 
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).WithField("rdmaIFs", rdmaIFs).Infof("Discovery %d RDMA interface for this node", rdmaIfNum)
+
+	// Ensure cleanup only runs once per agent startup to avoid duplicate operations
+	cleanupMutex.Lock()
+	if !cleanupExecuted {
+		rdLog.Info("Performing one-time cleanup of stale RDMA NRS during agent startup")
+		if err := rd.cleanupStaleRdmaNRS(rdmaIFs); err != nil {
+			cleanupMutex.Unlock()
+			rdLog.WithError(err).Fatal("Critical failure: unable to cleanup stale RDMA NRS, agent will restart")
+		}
+		cleanupExecuted = true
+		rdLog.Info("One-time cleanup of stale RDMA NRS completed successfully")
+	} else {
+		rdLog.Debug("Skipping cleanup as it has already been performed during this agent startup")
+	}
+	cleanupMutex.Unlock()
 
 	rdLog.WithField(logfields.Node, nodeTypes.GetName()).Info("Creating or updating RDMA NetResourceSet resource")
 
@@ -534,6 +558,222 @@ func (rd *RdmaDiscovery) ResourceType() string {
 	return ccev2.NetResourceSetEventHandlerTypeRDMA
 }
 
+// cleanupStaleRdmaNRS removes outdated RDMA NetResourceSets that no longer match current physical RDMA interfaces
+// this function is espacially designed for EVA cases(which leave residual NRSs)
+func (rd *RdmaDiscovery) cleanupStaleRdmaNRS(currentRdmaIfs map[string]bceutils.RdmaIfInfo) error {
+	rdLog.Info("Starting cleanup of stale RDMA NRS")
+
+	// Get current instance ID from metadata API
+	nodeInstanceID, err := agent.GetInstanceID()
+	if err != nil {
+		rdLog.WithError(err).Error("Failed to get instance ID during cleanup")
+		return fmt.Errorf("failed to get instance ID: %w", err)
+	}
+	rdLog.WithField("instanceID", nodeInstanceID).Info("Got instance ID for cleanup")
+
+	// Protection: if no current RDMA interfaces found, skip cleanup to avoid accidental deletion
+	if len(currentRdmaIfs) == 0 {
+		rdLog.Info("No current RDMA interfaces found, skipping cleanup")
+		return nil
+	}
+
+	// Log current RDMA interfaces for debugging
+	currentMacs := make([]string, 0, len(currentRdmaIfs))
+	for mac := range currentRdmaIfs {
+		currentMacs = append(currentMacs, mac)
+	}
+	rdLog.WithField("currentRdmaMACs", currentMacs).WithField("count", len(currentRdmaIfs)).Info("Current RDMA interfaces for cleanup comparison")
+
+	// Get all NetResourceSets for this instance to check for stale RDMA NRS
+	instanceNRSList, err := rd.getInstanceNetResourceSets(nodeInstanceID)
+	if err != nil {
+		rdLog.WithError(err).Error("Failed to get instance NetResourceSets during cleanup")
+		return fmt.Errorf("failed to get instance NetResourceSets: %w", err)
+	}
+	rdLog.WithField("totalNRSCount", len(instanceNRSList)).Info("Retrieved instance NetResourceSets for cleanup")
+
+	// Find and delete stale RDMA NRS
+	staleNRSNames := rd.findStaleRDMANRS(instanceNRSList, currentRdmaIfs)
+	rdLog.WithField("staleNRSCount", len(staleNRSNames)).WithField("staleNRSNames", staleNRSNames).Info("Found stale RDMA NRS during cleanup")
+
+	if len(staleNRSNames) > 0 {
+		rdLog.WithField("staleNRSCount", len(staleNRSNames)).
+			Warning("Found stale RDMA NRS that must be deleted for agent to function properly")
+
+		if err := rd.deleteStaleNRSWithRetry(staleNRSNames); err != nil {
+			rdLog.WithError(err).Error("Failed to delete stale RDMA NRS during cleanup")
+			return fmt.Errorf("critical error: failed to delete stale RDMA NRS after retries, agent cannot continue: %w", err)
+		}
+
+		rdLog.WithField("deletedNRSCount", len(staleNRSNames)).
+			Info("Successfully deleted all stale RDMA NRS")
+
+		// Check ENI deletion status after NRS deletion
+		if err := rd.checkENIDeletionAfterNRS(instanceNRSList, staleNRSNames); err != nil {
+			rdLog.WithError(err).Error("ENI deletion verification failed during cleanup")
+			return fmt.Errorf("critical error: ENI deletion verification failed, agent cannot continue: %w", err)
+		}
+	} else {
+		rdLog.Info("No stale RDMA NRS found, cleanup completed")
+	}
+
+	rdLog.Info("Cleanup of stale RDMA NRS completed successfully")
+	return nil
+}
+
+// getInstanceNetResourceSets retrieves all NetResourceSets for a specific instance ID
+// Queries API server directly to avoid informer cache filtering issues
+func (rd *RdmaDiscovery) getInstanceNetResourceSets(instanceID string) ([]*ccev2.NetResourceSet, error) {
+	hostname := nodeTypes.GetName()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Only list nrs for this node
+	allNRSList, err := k8s.CCEClient().CceV2().NetResourceSets().List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kubernetes.io/hostname=%s", hostname),
+	})
+	if err != nil {
+		rdLog.WithError(err).Error("Failed to query NRS from API server")
+		return nil, fmt.Errorf("failed to get instance NetResourceSets from API server: %w", err)
+	}
+
+	instanceNRSList := make([]*ccev2.NetResourceSet, len(allNRSList.Items))
+	for i := range allNRSList.Items {
+		instanceNRSList[i] = &allNRSList.Items[i]
+	}
+
+	nrsNames := make([]string, len(instanceNRSList))
+	for i, nrs := range instanceNRSList {
+		nrsNames[i] = nrs.Name
+	}
+
+	rdLog.WithFields(logrus.Fields{
+		"instanceID": instanceID,
+		"hostname":   hostname,
+		"nrsCount":   len(instanceNRSList),
+		"nrsNames":   nrsNames,
+	}).Info("Retrieved NetResourceSets from API server for cleanup using hostname")
+
+	return instanceNRSList, nil
+}
+
+// findStaleRDMANRS finds RDMA NetResourceSets with MAC addresses not present in current physical interfaces
+func (rd *RdmaDiscovery) findStaleRDMANRS(instanceNRSList []*ccev2.NetResourceSet, currentRdmaIfs map[string]bceutils.RdmaIfInfo) []string {
+	var staleNRSNames []string
+	rdmaNRSCount := 0
+
+	rdLog.WithField("totalNRSToCheck", len(instanceNRSList)).Info("Starting to find stale RDMA NRS")
+
+	for _, nrs := range instanceNRSList {
+		// Skip non-RDMA NetResourceSets
+		if !bceutils.IsCCERdmaNetRourceSetName(nrs.Name) {
+			rdLog.WithField("nrsName", nrs.Name).Info("Skipping non-RDMA NRS")
+			continue
+		}
+
+		rdmaNRSCount++
+		rdLog.WithField("nrsName", nrs.Name).Info("Checking RDMA NRS for staleness")
+
+		nrsMac := nrs.Annotations[k8s.AnnotationRDMAInfoMacAddress]
+		if nrsMac == "" {
+			rdLog.WithField("nrsName", nrs.Name).Warning("RDMA NRS missing MAC address annotation")
+			continue
+		}
+
+		rdLog.WithFields(logrus.Fields{
+			"nrsName": nrs.Name,
+			"nrsMac":  nrsMac,
+		}).Info("Checking if RDMA NRS MAC exists in current interfaces")
+
+		// Check if this MAC address exists in current physical interfaces
+		if _, exists := currentRdmaIfs[nrsMac]; !exists {
+			staleNRSNames = append(staleNRSNames, nrs.Name)
+			rdLog.WithFields(logrus.Fields{
+				"nrsName":  nrs.Name,
+				"staleMac": nrsMac,
+			}).Info("Found stale RDMA NRS with outdated MAC address")
+		} else {
+			rdLog.WithFields(logrus.Fields{
+				"nrsName":    nrs.Name,
+				"currentMac": nrsMac,
+			}).Info("RDMA NRS MAC found in current interfaces, keeping")
+		}
+	}
+
+	rdLog.WithFields(logrus.Fields{
+		"totalNRSChecked": len(instanceNRSList),
+		"rdmaNRSChecked":  rdmaNRSCount,
+		"staleNRSFound":   len(staleNRSNames),
+		"staleNRSNames":   staleNRSNames,
+	}).Info("Completed finding stale RDMA NRS")
+
+	return staleNRSNames
+}
+
+// deleteStaleNRSWithRetry deletes stale NetResourceSets with retry mechanism
+// Returns error if any deletion fails after all retries
+func (rd *RdmaDiscovery) deleteStaleNRSWithRetry(staleNRSNames []string) error {
+	const maxRetries = 3
+	const retryDelay = 5 * time.Second
+
+	var failedDeletions []string
+
+	for _, nrsName := range staleNRSNames {
+		rdLog.WithField("nrsName", nrsName).Info("Deleting stale RDMA NRS")
+
+		var lastErr error
+		deleted := false
+
+		// Retry deletion up to maxRetries times
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			// Create a new context for each deletion attempt
+			deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+			err := k8s.CCEClient().CceV2().NetResourceSets().Delete(
+				deleteCtx,
+				nrsName,
+				metav1.DeleteOptions{},
+			)
+			deleteCancel()
+
+			if err == nil {
+				rdLog.WithField("nrsName", nrsName).Info("Successfully deleted stale RDMA NRS")
+				deleted = true
+				break
+			}
+
+			if k8serrors.IsNotFound(err) {
+				rdLog.WithField("nrsName", nrsName).Info("Stale RDMA NRS already deleted (not found)")
+				deleted = true
+				break
+			}
+
+			lastErr = err
+			rdLog.WithError(err).WithFields(logrus.Fields{
+				"nrsName":    nrsName,
+				"attempt":    attempt,
+				"maxRetries": maxRetries,
+			}).Warning("Failed to delete stale RDMA NRS, will retry")
+
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+			}
+		}
+
+		if !deleted {
+			failedDeletions = append(failedDeletions, nrsName)
+			rdLog.WithError(lastErr).WithField("nrsName", nrsName).
+				Error("Failed to delete stale RDMA NRS after all retries")
+		}
+	}
+
+	if len(failedDeletions) > 0 {
+		return fmt.Errorf("failed to delete %d stale RDMA NRS: %v", len(failedDeletions), failedDeletions)
+	}
+
+	return nil
+}
+
 // shouldExitOnRegularERINRS checks whether agent should exit when finding regular ERI RDMA NRS
 func (rd *RdmaDiscovery) shouldExitOnRegularERINRS(rii bceutils.RdmaIfInfo) bool {
 	return option.Config.EnableERIManagement && rii.VifFeatures == string(ccev2.ENIForERI)
@@ -597,4 +837,137 @@ func (ew *ERIOwnerWrapper) UpdateNetResourceSetResource() {
 	// Only create/update ERI managed NRS, not handle regular RDMA NRS
 	rdLog.Info("Updating ERI managed NetResourceSet resource only")
 	ew.createOrUpdateERIManagedNRS()
+}
+
+// checkENIDeletionAfterNRS checks if ENIs associated with deleted NRS are properly cleaned up
+// This function extracts ENI IDs from deleted NRS status and monitors their deletion
+// using informer cache to avoid API server pressure during large scale operations
+// Returns error if ENI deletion verification fails, which will block agent startup
+func (rd *RdmaDiscovery) checkENIDeletionAfterNRS(instanceNRSList []*ccev2.NetResourceSet, deletedNRSNames []string) error {
+	if len(deletedNRSNames) == 0 {
+		return nil
+	}
+
+	// Collect ENI IDs from deleted NRS status
+	var eniIDsToCheck []string
+	var nrsENIMapping = make(map[string][]string) // Track which ENIs belong to which NRS for logging
+
+	for _, nrs := range instanceNRSList {
+		// Check if this NRS is in the deleted list
+		for _, deletedName := range deletedNRSNames {
+			if nrs.Name == deletedName && nrs.Status.ENIs != nil {
+				// Collect ENI IDs from NRS status
+				var nrsENIs []string
+				for eniID := range nrs.Status.ENIs {
+					eniIDsToCheck = append(eniIDsToCheck, eniID)
+					nrsENIs = append(nrsENIs, eniID)
+				}
+				nrsENIMapping[deletedName] = nrsENIs
+				rdLog.WithFields(logrus.Fields{
+					"nrsName": deletedName,
+					"eniIDs":  nrsENIs,
+				}).Info("Found ENIs in deleted NRS status")
+				break
+			}
+		}
+	}
+
+	if len(eniIDsToCheck) == 0 {
+		rdLog.WithField("deletedNRSNames", deletedNRSNames).
+			Info("No ENIs found in deleted NRS status to check")
+		return nil
+	}
+
+	rdLog.WithFields(logrus.Fields{
+		"eniCount":        len(eniIDsToCheck),
+		"deletedNRSCount": len(deletedNRSNames),
+		"nrsENIMapping":   nrsENIMapping,
+	}).Info("Starting ENI deletion verification after NRS deletion")
+
+	// Check ENI deletion with timeout using informer cache
+	return rd.waitForENIDeletion(eniIDsToCheck)
+}
+
+// waitForENIDeletion waits for ENIs to be deleted with timeout
+// Uses informer cache to avoid API server pressure during large scale operations
+// Returns error if timeout is reached with remaining ENIs, which will block agent startup
+func (rd *RdmaDiscovery) waitForENIDeletion(eniIDs []string) error {
+	if len(eniIDs) == 0 {
+		return nil
+	}
+
+	startTime := time.Now()
+	ticker := time.NewTicker(eniDeletionCheckInterval)
+	defer ticker.Stop()
+
+	remainingENIs := make(map[string]bool)
+	for _, eniID := range eniIDs {
+		remainingENIs[eniID] = true
+	}
+
+	rdLog.WithField("eniIDs", eniIDs).Info("Starting to wait for ENI deletion using informer cache")
+
+	for range ticker.C {
+		// Check remaining ENIs against current synced cache snapshot
+		// Use the same pattern as NRS to ensure we get properly synced cache
+		for eniID := range remainingENIs {
+			exists, err := rd.checkENIExists(eniID)
+			if err != nil {
+				rdLog.WithError(err).WithField("eniID", eniID).Warning("Failed to check ENI existence from synced cache")
+				continue
+			}
+
+			if !exists {
+				rdLog.WithField("eniID", eniID).Info("ENI successfully deleted by cascade deletion")
+				delete(remainingENIs, eniID)
+			} else {
+				rdLog.WithField("eniID", eniID).Debug("ENI still exists in synced cache, continuing to wait")
+			}
+		}
+
+		// Check if all ENIs are deleted
+		if len(remainingENIs) == 0 {
+			rdLog.Info("All ENIs successfully deleted")
+			return nil
+		}
+
+		// Check timeout
+		if time.Since(startTime) > eniDeletionCheckTimeout {
+			remainingENIList := make([]string, 0, len(remainingENIs))
+			for eniID := range remainingENIs {
+				remainingENIList = append(remainingENIList, eniID)
+			}
+			rdLog.WithFields(logrus.Fields{
+				"remainingENIs": remainingENIList,
+				"timeout":       eniDeletionCheckTimeout,
+				"elapsed":       time.Since(startTime),
+			}).Error("Critical error: ENI deletion timeout reached, agent cannot continue with remaining ENIs")
+			return fmt.Errorf("ENI deletion timeout: %d ENIs still exist after %v, agent startup blocked", len(remainingENIs), eniDeletionCheckTimeout)
+		}
+
+		rdLog.WithFields(logrus.Fields{
+			"remainingCount": len(remainingENIs),
+			"elapsed":        time.Since(startTime),
+		}).Debug("Still waiting for ENI deletion")
+	}
+
+	// This should never be reached due to timeout check above
+	return fmt.Errorf("unexpected end of ENI deletion wait loop")
+}
+
+// checkENIExists checks if an ENI still exists using synced informer cache
+func (rd *RdmaDiscovery) checkENIExists(eniID string) (bool, error) {
+	// Use synced informer cache instead of direct API call to avoid pressure on apiserver
+	if rd.NodeDiscovery.eniClient == nil {
+		return false, fmt.Errorf("ENI client is not initialized")
+	}
+
+	_, err := rd.NodeDiscovery.eniClient.Get(eniID)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

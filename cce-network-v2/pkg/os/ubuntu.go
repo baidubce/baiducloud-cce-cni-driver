@@ -154,7 +154,7 @@ func (o *ubuntuOS) checkAndDealMACAddressPolicy(filePath, template string) {
 	if err != nil {
 		log.Fatalf("update default link file %s failed: %v", filePath, err)
 	}
-	log.Infof("update default link file success，now option %s is set correctly to %s", macAddressPolicyKey, macAddressPolicyValueNone)
+	log.Infof("update default link file success, now option %s is set correctly to %s", macAddressPolicyKey, macAddressPolicyValueNone)
 }
 
 // check if system version in os-release is higher than ubuntu 22.04

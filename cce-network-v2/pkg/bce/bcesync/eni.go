@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/baidubce/bce-sdk-go/services/bbc"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,13 +27,14 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/syncer"
-	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
+	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 )
 
 const (
 	eniControllerName = "eni-sync-manager"
 
 	ENIReadyTimeToAttach = 1 * time.Second
+	ENIReadyTimeToDelete = 1 * time.Second
 	ENIMaxCreateDuration = 5 * time.Minute
 
 	FinalizerENI = "eni-syncer"
@@ -154,7 +157,7 @@ func (es *eniSyncher) StartENISyncer(ctx context.Context, updater syncer.ENIUpda
 	es.remoteSyncer.setENIUpdater(updater)
 	es.updater = updater
 	es.syncManager.Run()
-	log.WithField(taskLogField, eniControllerName).Infof("ENISyncher is running")
+	eniLog.WithField(taskLogField, eniControllerName).Infof("ENISyncher is running")
 	return es
 }
 
@@ -162,7 +165,7 @@ func (es *eniSyncher) StartENISyncer(ctx context.Context, updater syncer.ENIUpda
 // For a new eni, we should generally query the details of the eni directly
 // and synchronously
 func (es *eniSyncher) Create(resource *ccev2.ENI) error {
-	log.WithField(taskLogField, eniControllerName).
+	eniLog.WithField(taskLogField, eniControllerName).
 		Infof("create a new eni(%s) crd", resource.Name)
 	return es.Update(resource)
 }
@@ -188,7 +191,6 @@ func (es *eniSyncher) Update(resource *ccev2.ENI) error {
 				scopeLog.WithError(err).Error("get eni failed")
 				return err
 			}
-
 		}
 		scopeLog = scopeLog.WithField("retry", retry)
 		err := es.handleENIUpdate(resource, scopeLog)
@@ -222,14 +224,19 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 
 	isNeedSkipUpdate := false
 
-	isNeedRemoveFinalizer := es.mangeFinalizer(newObj)
-	if isNeedRemoveFinalizer {
-		scopeLog.WithContext(ctx).WithField("eni", newObj.Name).Info("eni should remove finalizers")
-		_, err = es.updater.Update(newObj)
+	isNeedUpdateFinalizer := es.mangeFinalizer(newObj)
+	if isNeedUpdateFinalizer {
+		if newObj.Spec.Type == ccev2.ENIForBBC ||
+			newObj.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP {
+			scopeLog.WithContext(ctx).WithField("eni", newObj.Name).Info("eni use mode is primary with secondary ip need update finalizer")
+		} else {
+			scopeLog.WithContext(ctx).WithField("eni", newObj.Name).Info("eni should remove finalizers")
+		}
+		newObj, err = es.updater.Update(newObj)
 		if err != nil {
 			scopeLog.WithError(err).Errorf("patch eni %s failed", newObj.Name)
+			return err
 		}
-		return err
 	}
 
 	if es.remoteSyncer.useENIMachine() {
@@ -288,24 +295,93 @@ func (es *eniSyncher) handleENIUpdate(resource *ccev2.ENI, scopeLog *logrus.Entr
 	return err
 }
 
+func removeENI(es *eniSyncher, eni *ccev2.ENI) error {
+	ctx := logfields.NewContext()
+
+	eniGet, err := es.bceclient.StatENI(ctx, eni.Name)
+	if err != nil {
+		eniLog.WithError(err).Errorf("stat eni %s failed", eni.Name)
+		return err
+	}
+
+	if eniGet.Status == string(ccev2.VPCENIStatusInuse) {
+		eniLog.WithField("eni", eni.Name).Info("eni status is in-use, will be detached first")
+		args := &enisdk.EniInstance{
+			EniId:      eni.Name,
+			InstanceId: eni.Spec.InstanceID,
+		}
+		err = es.bceclient.DetachENI(ctx, args)
+		if err != nil {
+			eniLog.WithError(err).Errorf("detach eni %s failed", eni.Name)
+			return err
+		}
+		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusDetaching)
+		_, err = es.updater.UpdateStatus(eni)
+		if err != nil {
+			eniLog.WithError(err).Errorf("patch eni %s failed", eni.Name)
+		}
+		return err
+	}
+
+	if eniGet.Status == string(ccev2.VPCENIStatusDetaching) {
+		eniLog.WithField("eni", eni.Name).Info("eni is detaching, will be deleted after detached")
+		return cm.NewDelayEvent(
+			eni.Name,
+			ENIReadyTimeToDelete,
+			fmt.Sprintf("ENI %s status is not can be deleted, status: %s", eni.Name, eniGet.Status),
+		)
+	}
+
+	if eniGet.Status == string(ccev2.VPCENIStatusAvailable) {
+		eniLog.WithField("eni", eni.Name).Info("eni is available, will be deleted")
+		err = es.bceclient.DeleteENI(ctx, eni.Name)
+		if err != nil && !cloud.IsErrorReasonNoSuchObject(err) && !cloud.IsErrorENINotFound(err) {
+			eniLog.WithError(err).Errorf("delete eni %s failed", eni.Name)
+			return err
+		}
+		// remove interface index for eni
+		eni.Status.InterfaceIndex = -1
+		_, err = es.updater.UpdateStatus(eni)
+		if err != nil {
+			eniLog.WithError(err).Errorf("patch eni %s failed", eni.Name)
+		}
+		return err
+	}
+
+	return nil
+}
+
+// If ENI type is not ENIForHPC(underlay-RDMA), when ReleaseENIs is true, we need release ENIs when node is deleted.
+// We need infomation from ENI object to determine when to remove the ENI from IaaS.
+// We should remove finalizer from ENI object after ENI interface is deleted successfully.
+// So we can not remove finalizer from ENI object before it is realy deleted.
+func isCanRemoveENIFinalizer(eniType ccev2.ENIType, eniInterfaceIndex int) bool {
+	// if ENI type is not ENIForHPC(underlay-RDMA), when release ENIs when node is deleted, we should remove finalizer after eni is deleted.
+	// if ENI is detached, we should set InterfaceIndex to -1, then we can deleted ENI object by remove finalizer.
+	return eniType == ccev2.ENIForHPC || !operatorOption.Config.ReleaseENIs || eniInterfaceIndex == -1
+}
+
 // When the Finalizer is null, only patching is allowed, updates will ignore changes.
 // mangeFinalizer except for node deletion, direct deletion of ENI objects is prohibited
 // Only when the ENI is not in use, the finalizer will be removed. Then, return true.
 // return true: should patch this object (*ccev2.ENI)
-func (*eniSyncher) mangeFinalizer(newObj *ccev2.ENI) (isNeedRemoveFinalizer bool) {
-	isNeedRemoveFinalizer = false
+func (es *eniSyncher) mangeFinalizer(newObj *ccev2.ENI) (isNeedUpdateFinalizer bool) {
+	isNeedUpdateFinalizer = false
 	if newObj.DeletionTimestamp == nil && len(newObj.Finalizers) == 0 {
 		newObj.Finalizers = append(newObj.Finalizers, FinalizerENI)
-		isNeedRemoveFinalizer = false
+		isNeedUpdateFinalizer = (newObj.Spec.Type == ccev2.ENIForBBC ||
+			newObj.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP)
 	}
 	var finalizers []string
 
 	if newObj.DeletionTimestamp != nil && len(newObj.Finalizers) != 0 {
 		node, err := k8s.CCEClient().Informers.Cce().V2().NetResourceSets().Lister().Get(newObj.Spec.NodeName)
-		if kerrors.IsNotFound(err) {
+		// if release ENIs when node is deleted, we should remove finalizer after eni is deleted
+		if kerrors.IsNotFound(err) && isCanRemoveENIFinalizer(newObj.Spec.Type, newObj.Status.InterfaceIndex) {
 			goto removeFinalizer
 		}
-		if node != nil && node.DeletionTimestamp != nil {
+		// if release ENIs when node is deleted, we should remove finalizer after eni is deleted
+		if node != nil && node.DeletionTimestamp != nil && isCanRemoveENIFinalizer(newObj.Spec.Type, newObj.Status.InterfaceIndex) {
 			goto removeFinalizer
 		}
 		if node != nil && len(newObj.GetOwnerReferences()) != 0 && node.GetUID() != newObj.GetOwnerReferences()[0].UID {
@@ -328,36 +404,102 @@ removeFinalizer:
 		finalizers = append(finalizers, f)
 	}
 	newObj.Finalizers = finalizers
-	log.Infof("remove finalizer from deletable ENI %s on NetResourceSet %s ", newObj.Name, newObj.Spec.NodeName)
+	eniLog.Infof("remove finalizer from deletable ENI %s on NetResourceSet %s ", newObj.Name, newObj.Spec.NodeName)
 	if len(newObj.Finalizers) == 0 {
 		newObj.Finalizers = nil
-		isNeedRemoveFinalizer = true
+		isNeedUpdateFinalizer = true
 	}
 	return
 }
 
 func (es *eniSyncher) Delete(name string) error {
-	log.WithField(taskLogField, eniControllerName).
+	eniLog.WithField(taskLogField, eniControllerName).
 		Infof("eni(%s) have been deleted", name)
 	eni, _ := es.updater.Lister().Get(name)
 	if eni == nil {
+		eniLog.WithField(taskLogField, eniControllerName).
+			Infof("eni(%s) not found", name)
 		return nil
 	}
 
+	// If the corresponding Kubernetes Node still exists, skip the IP release
+	// to avoid releasing IPs while the node is still present.
+	if nodeObj, nodeErr := watchers.NodeClient.Lister().Get(eni.Spec.NodeName); nodeErr == nil && nodeObj != nil {
+		eniLog.WithField("nodeName", eni.Spec.NodeName).Info("Node still exists, ",
+			"skip DetachENI and secondary IP release for ENI ", eni.Name)
+	} else if nodeErr != nil && kerrors.IsNotFound(nodeErr) {
+		// If the node does not exist, we need to release the secondary IP and delete the ENI.
+		if operatorOption.Config.ReleaseENIs && eni.Spec.UseMode != ccev2.ENIUseModePrimaryWithSecondaryIP && eni.Spec.Type != ccev2.ENIForHPC {
+			err := removeENI(es, eni)
+			if err != nil && !cloud.IsErrorReasonNoSuchObject(err) && !cloud.IsErrorENINotFound(err) {
+				eniLog.WithError(err).Errorf("delete eni %s failed", name)
+				return err
+			}
+		}
+
+		if err := es.releaseSecondaryIPsFromPrimaryENI(eni); err != nil {
+			return err
+		}
+
+	} else {
+		// The reason for not directly returning nodeErr is to prevent a situation where node is nil and nodeErr is also nil,
+		// which could cause the result to be mistakenly interpreted as a success.
+		// Therefore, a new error is constructed.
+		return fmt.Errorf("get node with error %v", nodeErr)
+	}
+
 	if es.mangeFinalizer(eni) {
-		log.WithField("eni", eni.Name).Info("eni should remove finalizers")
+		eniLog.WithField("eni", eni.Name).Info("eni should remove finalizers")
 		_, err := es.updater.Update(eni)
 		if err != nil {
-			log.WithError(err).Errorf("patch eni %s failed", eni.Name)
+			eniLog.WithError(err).Errorf("patch eni %s failed", eni.Name)
 		}
 		return err
 	}
 	return nil
 }
 
+// releaseSecondaryIPsFromPrimaryENI releases secondary IPs from primary ENI with secondary IP mode
+func (es *eniSyncher) releaseSecondaryIPsFromPrimaryENI(eni *ccev2.ENI) error {
+	if eni.Spec.UseMode != ccev2.ENIUseModePrimaryWithSecondaryIP {
+		return nil
+	}
+
+	var secondaryIPs []string
+	for _, ip := range eni.Spec.ENI.PrivateIPSet {
+		if !ip.Primary {
+			secondaryIPs = append(secondaryIPs, ip.PrivateIPAddress)
+		}
+	}
+
+	if len(secondaryIPs) == 0 {
+		return nil
+	}
+	var err error
+	if eni.Spec.Type == ccev2.ENIForBBC {
+		err = es.bceclient.BBCBatchDelIP(logfields.NewContext(), &bbc.BatchDelIpArgs{
+			InstanceId: eni.Spec.InstanceID,
+			PrivateIps: secondaryIPs,
+		})
+	} else {
+		// EBC is supported yet
+		err = es.bceclient.BCCBatchDelIP(logfields.NewContext(), &bccapi.BatchDelIpArgs{
+			InstanceId: eni.Spec.InstanceID,
+			PrivateIps: secondaryIPs,
+		})
+	}
+	if err != nil {
+		eniLog.WithError(err).Errorf("delete secondary ips %v from eni %s failed", secondaryIPs, eni.Name)
+		return err
+	}
+	return nil
+}
+
 func (es *eniSyncher) ResyncENI(context.Context) time.Duration {
-	log.WithField(taskLogField, eniControllerName).Infof("start to resync eni")
-	es.syncManager.RunImmediately()
+	eniLog.WithField(taskLogField, eniControllerName).Infof("start to resync eni")
+	if es.syncManager != nil {
+		es.syncManager.RunImmediately()
+	}
 	return es.resyncPeriod
 }
 
@@ -373,7 +515,7 @@ type eniStateMachine struct {
 
 // Start state machine flow
 func (esm *eniStateMachine) start() error {
-	//set the sync flag to true, indicating that the status needs to be updated only in non-final states.
+	// set the sync flag to true, indicating that the status needs to be updated only in non-final states.
 	esm.isSync = true
 	// ENI for RDMA (ccev2.ENIForHPC or ccev2.ENIForERI) need do nothing, so return nil directly.
 	// esm.es.remoteSyncer.statENI(esm.ctx, esm.resource.Name) can not stat ENI for RDMA, it will return
@@ -432,7 +574,7 @@ func (esm *eniStateMachine) handleNonFinalStateMachine() error {
 	}
 
 	if err != nil {
-		log.WithField(taskLogField, eniControllerName).
+		eniLog.WithField(taskLogField, eniControllerName).
 			WithContext(esm.ctx).
 			WithError(err).
 			Errorf("failed to run ENI(%s) with status %s state machine", esm.resource.Spec.ENI.ID, esm.resource.Status.VPCStatus)
@@ -455,7 +597,7 @@ func (esm *eniStateMachine) handlePreOption() (bool, error) {
 	if err != nil {
 		if cloud.IsErrorReasonNoSuchObject(err) {
 			// ENI not found, will delete it if not in use
-			log.WithField("eniID", esm.resource.Name).Error("not in use ENI not found in VPC, will delete it")
+			eniLog.WithField("eniID", esm.resource.Name).Error("not in use ENI not found in VPC, will delete it")
 			return false, esm.deleteENI()
 		}
 		return false, fmt.Errorf("eni state machine failed to refresh eni(%s) status: %v", esm.resource.Name, err)
@@ -519,7 +661,6 @@ func updateENISpecFromVPCENI(esm *eniStateMachine) {
 // attachENI attach a  ENI to instance
 // Only accept calls whose ENI status is "available"
 func (esm *eniStateMachine) attachENI() error {
-
 	// eni is expired, do rollback
 	if esm.resource.CreationTimestamp.Add(ENIMaxCreateDuration).Before(time.Now()) {
 		return esm.deleteENI()
@@ -539,12 +680,12 @@ func (esm *eniStateMachine) attachENI() error {
 		err2 := esm.deleteENI()
 		err = fmt.Errorf("failed to attach eni(%s) to instance(%s): %s, will delete eni crd", esm.resource.Spec.ENI.ID, esm.resource.Spec.ENI.InstanceID, err.Error())
 		if err2 != nil {
-			log.WithField("eniID", esm.resource.Name).Errorf("failed to delete eni crd: %v", err2)
+			eniLog.WithField("eniID", esm.resource.Name).Errorf("failed to delete eni crd: %v", err2)
 		}
 		return err
 	}
 
-	log.WithField(taskLogField, eniControllerName).
+	eniLog.WithField(taskLogField, eniControllerName).
 		WithContext(esm.ctx).
 		Infof("attach eni(%s) to instance(%s) success", esm.resource.Spec.ENI.InstanceID, esm.resource.Spec.ENI.ID)
 	return nil
@@ -565,7 +706,7 @@ func (esm *eniStateMachine) deleteENI() error {
 		return fmt.Errorf("failed to delete eni(%s) crd resource: %s", esm.resource.Name, err.Error())
 	}
 
-	log.WithField("eniID", esm.resource.Name).Info("delete eni crd resource success")
+	eniLog.WithField("eniID", esm.resource.Name).Info("delete eni crd resource success")
 	// After successfully deleting the ENI, it reaches a final state, and the synchronization flag is set to true
 	esm.isSync = true
 	return nil

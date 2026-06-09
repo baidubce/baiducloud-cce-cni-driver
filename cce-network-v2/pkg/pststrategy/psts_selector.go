@@ -37,7 +37,7 @@ func SelectPSTS(logEntry *logrus.Entry, pstsLister listerv2.PodSubnetTopologySpr
 
 	psts := SelectPriorityPSTS(pstsList, labels.Set(pod.Labels))
 	if psts != nil {
-		logEntry.Infof("select pod （%s/%s) matched psts %s", pod.GetNamespace(), pod.GetName(), psts.GetName())
+		logEntry.Infof("select pod (%s/%s) matched psts %s", pod.GetNamespace(), pod.GetName(), psts.GetName())
 	}
 	return psts, nil
 }

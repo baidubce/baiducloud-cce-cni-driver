@@ -152,3 +152,29 @@ func (k *K8sWatcher) netResourceSetInit(cceNPClient *k8s.K8sCCEClient, asyncCont
 	k.k8sAPIGroups.AddAPI(apiGroup)
 	netResourceSetInformer.Run(k.stop)
 }
+
+// GetInstanceNetResourceSets returns all NetResourceSets for a specific instance ID from the local informer cache
+func (k *K8sWatcher) GetInstanceNetResourceSets(instanceID string) ([]*cce_v2.NetResourceSet, error) {
+	var instanceNRSList []*cce_v2.NetResourceSet
+
+	k.netResourceSetStoreMU.RLock()
+	defer k.netResourceSetStoreMU.RUnlock()
+
+	if k.netResourceSetStore == nil {
+		return nil, fmt.Errorf("netResourceSet store is not initialized")
+	}
+
+	// List all objects from the local store
+	allObjects := k.netResourceSetStore.List()
+
+	// Filter NRS by instance ID from local store
+	for _, obj := range allObjects {
+		if nrs := k8s.ObjToNetResourceSet(obj); nrs != nil {
+			if nrs.Spec.InstanceID == instanceID {
+				instanceNRSList = append(instanceNRSList, nrs)
+			}
+		}
+	}
+
+	return instanceNRSList, nil
+}

@@ -12,6 +12,17 @@
  * and limitations under the License.
  *
  */
+
+// Package vpceni provides VPC ENI functionality for CCE network driver.
+//
+// This package includes functionality to set node conditions when errors occur,
+// allowing Kubernetes to track the health status of nodes. The following node
+// conditions are supported:
+//
+// - CCESubnetUnavailable: Indicates that subnets are not available for IP allocation
+//
+// When an error occurs, both an event and a node condition are set to provide
+// comprehensive error tracking and monitoring capabilities.
 package vpceni
 
 import (
@@ -53,6 +64,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nodeutils"
 )
 
 const (
@@ -527,6 +539,14 @@ func (n *bceNetworkResourceSet) forceUpdateEniToInuse(ctx context.Context, scope
 			"eniID":     eniID,
 			"oldStatus": eni.Status.VPCStatus,
 		})
+		if eni.DeletionTimestamp == nil && len(eni.Finalizers) == 0 {
+			eni.Finalizers = append(eni.Finalizers, bcesync.FinalizerENI)
+		}
+		eni, err = k8s.CCEClient().CceV2().ENIs().Update(ctx, eni, metav1.UpdateOptions{})
+		if err != nil {
+			scopedLog.WithError(err).Error("failed to update primary ENI finalizers")
+			return fmt.Errorf("failed to update primary ENI finalizers: %w", err)
+		}
 		(&eni.Status).AppendVPCStatus(ccev2.VPCENIStatusInuse)
 		_, err = k8s.CCEClient().CceV2().ENIs().UpdateStatus(ctx, eni, metav1.UpdateOptions{})
 		if err != nil {
@@ -915,13 +935,31 @@ func (n *bceNetworkResourceSet) refreshAvailableSubnets() error {
 			}
 		}
 	}
-	subnets := n.FilterAvailableSubnetIds(n.k8sObj.Spec.ENI.SubnetIDs, n.GetMinimumAllocatableIPv4())
+	// Ensure all configured subnets
+	allSubnets := n.ensureConfiguredSubnets()
+
+	// Filter subnets with detailed error information
+	subnets, filterErr := nodeutils.FilterAvailableSubnet(
+		allSubnets,
+		n.GetMinimumAllocatableIPv4(),
+		operatorOption.Config.BCECloudContry,
+		operatorOption.Config.BCECloudRegion,
+		n.k8sObj.Spec.ENI.AvailabilityZone,
+	)
+
 	if len(subnets) == 0 {
-		errStr := fmt.Sprintf("subnets [%v] are not available for node %s", n.k8sObj.Spec.ENI.SubnetIDs, n.k8sObj.Name)
-		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, ccev2.ErrorCodeNoAvailableSubnet, errStr)
-		metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnet, "NetResourceSet", n.k8sObj.Name).Inc()
+		errorCode, reason, errStr := nodeutils.CategorizeSubnetError(filterErr, n.k8sObj.Spec.ENI.SubnetIDs, n.k8sObj.Name)
+		n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, errorCode, errStr)
+		metrics.IPAMErrorCounter.WithLabelValues(errorCode, "NetResourceSet", n.k8sObj.Name).Inc()
+		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
 		return goerrors.New(errStr)
 	}
+
+	// Set node condition to False when subnets are available
+	subnetIDs := nodeutils.ExtractSubnetIDs(subnets)
+	successMsg := fmt.Sprintf("subnets [%v] are available for node %s, total %d subnets ready", subnetIDs, n.k8sObj.Name, len(subnets))
+	nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetsAvailable, successMsg, n.log)
+
 	n.availableSubnets = subnets
 	return nil
 }
@@ -1434,23 +1472,17 @@ func (n *bceNetworkResourceSet) GetUsedIPWithPrefixes() int {
 	return 0
 }
 
-// FilterAvailableSubnet implements endpoint.DirectEndpointOperation
-func (n *bceNetworkResourceSet) FilterAvailableSubnet(subnets []*bcesync.BorrowedSubnet, minAllocateIPs int) []*bcesync.BorrowedSubnet {
-	contry := operatorOption.Config.BCECloudContry
-	region := operatorOption.Config.BCECloudRegion
-	zone := n.k8sObj.Spec.ENI.AvailabilityZone
-
-	var filtedSubnets []*bcesync.BorrowedSubnet
-	for _, subnet := range subnets {
-		if !strings.Contains(subnet.Spec.AvailabilityZone, api.TransAvailableZoneToZoneName(contry, region, zone)) {
+// ensureConfiguredSubnets ensures all configured subnets and returns available ones
+func (n *bceNetworkResourceSet) ensureConfiguredSubnets() []*bcesync.BorrowedSubnet {
+	var allSubnets []*bcesync.BorrowedSubnet
+	for _, subnetID := range n.k8sObj.Spec.ENI.SubnetIDs {
+		sbn, err := bcesync.GlobalBSM().EnsureSubnet(n.k8sObj.Spec.ENI.VpcID, subnetID)
+		if err != nil {
 			continue
 		}
-		if !subnet.CanBorrow(minAllocateIPs) {
-			continue
-		}
-		filtedSubnets = append(filtedSubnets, subnet)
+		allSubnets = append(allSubnets, sbn)
 	}
-	return filtedSubnets
+	return allSubnets
 }
 
 // FilterAvailableSubnetIds filter subnets by subnet ids
@@ -1463,7 +1495,14 @@ func (n *bceNetworkResourceSet) FilterAvailableSubnetIds(subnetIDs []string, min
 		}
 		filtedSubnets = append(filtedSubnets, sbn)
 	}
-	return n.FilterAvailableSubnet(filtedSubnets, minAllocateIPs)
+	result, _ := nodeutils.FilterAvailableSubnet(
+		filtedSubnets,
+		minAllocateIPs,
+		operatorOption.Config.BCECloudContry,
+		operatorOption.Config.BCECloudRegion,
+		n.k8sObj.Spec.ENI.AvailabilityZone,
+	)
+	return result
 }
 
 // searchMaxAvailableSubnet search subnet with max available ip
@@ -1635,10 +1674,16 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 	if n.k8sObj.Spec.ENI.BurstableMehrfachENI > 0 {
 		subnet, err := bcesync.GlobalBSM().EnsureSubnet(newENI.Spec.VpcID, newENI.Spec.SubnetID)
 		if err != nil {
-			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowSubnet",
-				"Failed to get borrow subnet %s: %v", newENI.Spec.SubnetID, err)
+			errMsg := fmt.Sprintf("Failed to get borrow subnet %s: %v", newENI.Spec.SubnetID, err)
+			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowSubnet", errMsg)
+			// Set node condition for subnet ensure failure
+			nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, nodeutils.ReasonSubnetEnsureFailure, errMsg, n.log)
 			return err
 		}
+
+		// Set node condition to False when subnet is successfully ensured
+		ensureSuccessMsg := fmt.Sprintf("Successfully ensured subnet %s for ENI %s", newENI.Spec.SubnetID, newENI.Spec.ENI.ID)
+		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetEnsured, ensureSuccessMsg, n.log)
 
 		var (
 			maxAllocateIPs = n.GetMaximumAllocatableIPv4() - n.getAvailableIPv4()
@@ -1660,9 +1705,15 @@ func (n *bceNetworkResourceSet) tryBorrowIPs(newENI *ccev2.ENI) error {
 			errMsg := fmt.Sprintf("Failed to borrow ENI ips (%d/%d) for eni %s, please change subnet of %s instance", borrowedIPs, toBorrowIps, newENI.Spec.SubnetID, n.instanceType)
 			n.eventRecorder.Eventf(n.k8sObj, corev1.EventTypeWarning, "FailedBorrowEniIPs", errMsg)
 			metrics.IPAMErrorCounter.WithLabelValues(ccev2.ErrorCodeNoAvailableSubnetCreateENI, "Subnet", newENI.Spec.SubnetID).Inc()
+			// Set node condition for ENI IP borrow failure
+			nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, nodeutils.ReasonSubnetInsufficientIPs, errMsg, n.log)
 			return goerrors.New(errMsg)
 		}
 		newENI.Spec.BorrowIPCount = borrowedIPs
+
+		// Set node condition to False when IP borrowing succeeds
+		successMsg := fmt.Sprintf("Successfully borrowed %d IPs for ENI %s from subnet %s", borrowedIPs, newENI.Spec.ENI.ID, newENI.Spec.SubnetID)
+		nodeutils.SetNodeCondition(n.k8sObj.Name, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonIPBorrowSucceeded, successMsg, n.log)
 	}
 	return nil
 }

@@ -50,7 +50,7 @@ func checkNetworkNamespacePermissions() error {
 	// 简单检查是否有权限访问网络命名空间目录
 	_, err := os.Stat("/var/run/netns")
 	if err != nil {
-		return fmt.Errorf("无法访问网络命名空间目录: %v", err)
+		return fmt.Errorf("Unable to access network namespace directory: %v", err)
 	}
 	return nil
 }

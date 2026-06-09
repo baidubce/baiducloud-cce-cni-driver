@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
+	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
@@ -39,9 +40,12 @@ import (
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nodeutils"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	bccapi "github.com/baidubce/bce-sdk-go/services/bcc/api"
 	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -474,17 +478,52 @@ func (n *rdmaNetResourceSetWrapper) createERIInterface(ctx context.Context, allo
 
 	vpcID := n.k8sObj.Spec.ENI.VpcID
 
-	// Get available subnets (referencing BCC mode)
-	availableSubnets := n.bceRDMANetResourceSet.FilterAvailableSubnetIds(resource.Spec.ENI.SubnetIDs, 1)
+	// Ensure all configured subnets (referencing node_super.go)
+	var allSubnets []*bcesync.BorrowedSubnet
+	for _, subnetID := range resource.Spec.ENI.SubnetIDs {
+		sbn, err := bcesync.GlobalBSM().EnsureSubnet(vpcID, subnetID)
+		if err != nil {
+			continue
+		}
+		allSubnets = append(allSubnets, sbn)
+	}
+
+	// Filter subnets with detailed error information (referencing node_super.go)
+	availableSubnets, filterErr := nodeutils.FilterAvailableSubnet(
+		allSubnets,
+		defaultRdmaMaxIPsPerENI,
+		operatorOption.Config.BCECloudContry,
+		operatorOption.Config.BCECloudRegion,
+		resource.Spec.ENI.AvailabilityZone,
+	)
+
+	// Get the actual node name from NetResourceSet name (referencing ERI managed NRS)
+	nodeName := strings.TrimSuffix(resource.Name, "-eri-managed")
+
 	if len(availableSubnets) == 0 {
-		msg = fmt.Sprintf("no matching subnet available for ERI creation (VPC=%s AZ=%s SubnetIDs=%v)",
-			vpcID,
-			resource.Spec.ENI.AvailabilityZone,
-			resource.Spec.ENI.SubnetIDs,
-		)
+		// Categorize subnet error and set node condition (referencing node_super.go)
+		errorCode, reason, errStr := nodeutils.CategorizeSubnetError(filterErr, resource.Spec.ENI.SubnetIDs, resource.Name)
+		metrics.IPAMErrorCounter.WithLabelValues(errorCode, "NetResourceSet", resource.Name).Inc()
+		nodeutils.SetNodeCondition(nodeName, nodeutils.CCESubnetUnavailable, corev1.ConditionTrue, reason, errStr, n.log)
+
+		// Use filterErr if available, otherwise use default message (referencing node_super.go)
+		if filterErr != nil {
+			msg = filterErr.Error()
+		} else {
+			msg = fmt.Sprintf("no matching subnet available for ERI creation (VPC=%s AZ=%s SubnetIDs=%v)",
+				vpcID,
+				resource.Spec.ENI.AvailabilityZone,
+				resource.Spec.ENI.SubnetIDs,
+			)
+		}
 		err = errors.New(msg)
 		return
 	}
+
+	// Set node condition to False when subnets are available (referencing node_super.go)
+	subnetIDs := nodeutils.ExtractSubnetIDs(availableSubnets)
+	successMsg := fmt.Sprintf("subnets [%v] are available for ERI creation on node %s, total %d subnets ready", subnetIDs, nodeName, len(availableSubnets))
+	nodeutils.SetNodeCondition(nodeName, nodeutils.CCESubnetUnavailable, corev1.ConditionFalse, nodeutils.ReasonSubnetsAvailable, successMsg, n.log)
 
 	// Select the best subnet
 	bestSubnet := n.searchMaxAvailableSubnet(availableSubnets)

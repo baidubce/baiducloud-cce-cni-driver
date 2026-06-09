@@ -38,13 +38,13 @@ const (
 	ProtocolUDP  = "udp"
 	ProtocolICMP = "icmp"
 
-	RemarkDefault              = "CCE默认规则: 节点间内网通信"
-	RemarkFloatingIP           = "CCE默认规则: 与隐藏子网节点内网通信"
-	RemarkEgressAllAllowed     = "CCE默认规则: 出向全通"
-	RemarkNodePort             = "CCE默认规则: K8s NodePort 默认范围"
-	RemarkIPv6Default          = "CCE默认规则: IPv6 节点间内网通信"
-	RemarkIPv6EgressAllAllowed = "CCE默认规则: IPv6 出向全通"
-	RemarkIPv6NodePort         = "CCE默认规则: K8s NodePort 默认范围"
+	RemarkDefault              = "CCE default rule: Inter-node internal communication"
+	RemarkFloatingIP           = "CCE default rule: Internal communication with hidden subnet nodes"
+	RemarkEgressAllAllowed     = "CCE default rule: Allow all egress"
+	RemarkNodePort             = "CCE default rule: K8s NodePort default range"
+	RemarkIPv6Default          = "CCE default rule: IPv6 inter-node internal communication"
+	RemarkIPv6EgressAllAllowed = "CCE default rule: IPv6 allow all egress"
+	RemarkIPv6NodePort         = "CCE default rule: K8s NodePort default range"
 )
 
 var (
@@ -90,7 +90,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: 6443,
 			PortRangeMax: 6443,
-			Remark:       "CCE默认规则: apiserver 访问 6443",
+			Remark:       "CCE default rule: apiserver access 6443",
 		},
 		{
 			EtherType:    ProtocolIPv4,
@@ -100,7 +100,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: 443,
 			PortRangeMax: 443,
-			Remark:       "CCE默认规则: apiserver 访问 443",
+			Remark:       "CCE default rule: apiserver access 443",
 		},
 	}
 	masterOptionRule []RequiredSGRule = []RequiredSGRule{
@@ -112,7 +112,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: 6443,
 			PortRangeMax: 6443,
-			Remark:       "CCE可选规则: 开放 apiserver 公网访问",
+			Remark:       "CCE optional rule: Enable apiserver public access",
 		},
 	}
 	nodeRequiredRule []RequiredSGRule = []RequiredSGRule{
@@ -124,7 +124,7 @@ var (
 			DestIP:       IPv4RangeAll,
 			PortRangeMin: 10250,
 			PortRangeMax: 10250,
-			Remark:       "CCE默认规则: Kubelet 节点间通信 10250 端口",
+			Remark:       "CCE default rule: Kubelet inter-node communication port 10250",
 		},
 		{
 			EtherType:    ProtocolIPv4,
@@ -156,7 +156,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: 22,
 			PortRangeMax: 22,
-			Remark:       "CCE可选规则: 公网 SSH 登录",
+			Remark:       "CCE optional rule: Public SSH login",
 		},
 		{
 			EtherType:    ProtocolIPv4,
@@ -166,7 +166,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: -1,
 			PortRangeMax: -1,
-			Remark:       "CCE可选规则: 公网 ping 命令",
+			Remark:       "CCE optional rule: Public ping command",
 		},
 	}
 
@@ -179,7 +179,7 @@ var (
 			DestIP:       Empty,
 			PortRangeMin: -1,
 			PortRangeMax: -1,
-			Remark:       "CCE可选规则: 公网 ping 命令",
+			Remark:       "CCE optional rule: Public ping command",
 		},
 		{
 			EtherType:    ProtocolIPv6,

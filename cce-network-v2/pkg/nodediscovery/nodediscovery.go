@@ -39,6 +39,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	ccev2alpha1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2alpha1"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
@@ -69,6 +70,10 @@ type nrcsNodeGetter interface {
 	GetNodeNrcs(nodeName string) (*ccev2alpha1.NetResourceConfigSet, error)
 }
 
+type netResourceSetGetter interface {
+	GetInstanceNetResourceSets(instanceID string) ([]*ccev2.NetResourceSet, error)
+}
+
 // NodeDiscovery represents a node discovery action
 type NodeDiscovery struct {
 	Manager               *nodemanager.Manager
@@ -78,6 +83,8 @@ type NodeDiscovery struct {
 	NetConf               *cnitypes.NetConf
 	k8sNodeGetter         k8sNodeGetter
 	nrcsNodeGetter        nrcsNodeGetter
+	netResourceSetGetter  netResourceSetGetter
+	eniClient             *watchers.ENIClient
 	localNodeLock         lock.Mutex
 	localNode             nodeTypes.Node
 	eventRecorder         record.EventRecorder
@@ -116,7 +123,9 @@ func NewNodeDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration,
 
 // NewNodeDiscovery returns a pointer to new node discovery object
 func NewRdmaDiscovery(manager *nodemanager.Manager, mtuConfig mtu.Configuration, netConf *cnitypes.NetConf) *RdmaDiscovery {
-	return &RdmaDiscovery{NewNodeDiscovery(manager, mtuConfig, netConf)}
+	return &RdmaDiscovery{
+		NodeDiscovery: NewNodeDiscovery(manager, mtuConfig, netConf),
+	}
 }
 
 // StartDiscovery start configures the local node and starts node discovery. This is called on
@@ -596,6 +605,14 @@ func (n *NodeDiscovery) RegisterK8sNodeGetter(k8sNodeGetter k8sNodeGetter) {
 
 func (n *NodeDiscovery) RegisterNrcsNodeGetter(nrcsNodeGetter nrcsNodeGetter) {
 	n.nrcsNodeGetter = nrcsNodeGetter
+}
+
+func (n *NodeDiscovery) RegisterNetResourceSetGetter(netResourceSetGetter netResourceSetGetter) {
+	n.netResourceSetGetter = netResourceSetGetter
+}
+
+func (n *NodeDiscovery) RegisterENIClient(eniClient *watchers.ENIClient) {
+	n.eniClient = eniClient
 }
 
 // LocalAllocCIDRsUpdated informs the agent that the local allocation CIDRs have

@@ -47,7 +47,7 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 		obj, err := enisLister.Get(key)
 
 		// Delete handling
-		if kerrors.IsNotFound(err) {
+		if kerrors.IsNotFound(err) || (obj != nil && obj.DeletionTimestamp != nil) {
 			return eniManager.Delete(key)
 		}
 		if err != nil {

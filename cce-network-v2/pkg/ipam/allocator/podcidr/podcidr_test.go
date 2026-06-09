@@ -19,12 +19,13 @@ package podcidr
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	. "gopkg.in/check.v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +40,6 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/test/mock/ccemock"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test(t *testing.T) {
@@ -279,7 +279,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Create(c *C) {
 					v4ClusterCIDRs: []CIDRAllocator{
 						&mockCIDRAllocator{
 							OnAllocateNext: func() (ipNet *net.IPNet, err error) {
-								return nil, fmt.Errorf("Allocator full!")
+								return nil, errors.New("Allocator full!")
 							},
 							OnIsFull: func() bool {
 								return false
@@ -654,9 +654,9 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Resync(c *C) {
 			},
 			testPostRun: func(fields *fields) {
 				time.Sleep(2 * time.Millisecond)
-				// 检查触发次数大于等于1，适应原有逻辑的多次触发
+				// Check if the trigger count is greater than or equal to 1, to accommodate multiple triggers in accordance with the original logic
 				calls := atomic.LoadInt32(&reSyncCalls)
-				c.Assert(calls >= 1, Equals, true, Commentf("Expected reSyncCalls >= 1, got %d", calls))
+				c.Assert(calls >= int32(1), Equals, true, Commentf("Expected reSyncCalls >= 1, got %d", calls))
 			},
 		},
 	}
@@ -767,7 +767,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 					v4ClusterCIDRs: []CIDRAllocator{
 						&mockCIDRAllocator{
 							OnAllocateNext: func() (ipNet *net.IPNet, err error) {
-								return nil, fmt.Errorf("Allocator full!")
+								return nil, errors.New("Allocator full!")
 							},
 							OnIsFull: func() bool {
 								return false
@@ -820,7 +820,7 @@ func (s *PodCIDRSuite) TestNodesPodCIDRManager_Update(c *C) {
 					v4ClusterCIDRs: []CIDRAllocator{
 						&mockCIDRAllocator{
 							OnAllocateNext: func() (ipNet *net.IPNet, err error) {
-								return nil, fmt.Errorf("Allocator full!")
+								return nil, errors.New("Allocator full!")
 							},
 							OnIsFull: func() bool {
 								return false

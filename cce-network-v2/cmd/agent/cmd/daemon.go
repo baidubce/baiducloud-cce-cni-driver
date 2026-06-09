@@ -237,6 +237,9 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc) (*Daemon, error) 
 
 	d.rdmaDiscovery.RegisterK8sNodeGetter(d.k8sWatcher)
 	d.rdmaDiscovery.RegisterNrcsNodeGetter(d.k8sWatcher)
+	d.rdmaDiscovery.RegisterNetResourceSetGetter(d.k8sWatcher)
+	// RdmaDiscovery registers its own ENIClient since it needs it
+	d.rdmaDiscovery.RegisterENIClient(d.k8sWatcher.NewENIClient())
 
 	d.k8sWatcher.NodeChain.Register(d.nodeDiscovery)
 

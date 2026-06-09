@@ -89,7 +89,7 @@ var _ IPAM = &DefaultIPAM{}
 
 // NetworkConfigurer interface defines methods for network configuration
 type NetworkConfigurer interface {
-	SetupContainerVeth(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error)
+	SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error)
 	SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error
 	RollbackVeth(netns ns.NetNS, hostInterface, containerInterface *current.Interface) error
 }
@@ -100,7 +100,7 @@ type DefaultNetworkConfigurer struct{}
 // SetupContainerVeth 设置容器虚拟网卡。
 //
 // 参数:
-//   - containerID (string)：容器的ID。
+//   - podname (string)：容器的名称。
 //   - namespace (string)：容器所在的命名空间。
 //   - netns (ns.NetNS)：容器的网络命名空间。
 //   - ifName (string)：容器的网卡名称。
@@ -111,8 +111,8 @@ type DefaultNetworkConfigurer struct{}
 //   - current.Interface（*current.Interface）：容器的网卡配置信息。
 //   - current.Interface（*current.Interface）：主机上的网卡配置信息。
 //   - error（error）：错误信息，如果没有错误则为nil。
-func (d *DefaultNetworkConfigurer) SetupContainerVeth(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
-	return setupContainerVethLegacy(containerID, namespace, netns, ifName, mtu, pr)
+func (d *DefaultNetworkConfigurer) SetupContainerVeth(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
+	return setupContainerVethLegacy(podname, namespace, netns, ifName, mtu, pr)
 }
 
 func (d *DefaultNetworkConfigurer) SetupHostVeth(host *current.Interface, container *current.Interface, result *current.Result) error {
@@ -160,7 +160,7 @@ type NetConf struct {
 }
 
 // setupContainerVethLegacy setupContainerVethLegacy 设置容器的虚拟网卡，使用传统方式。
-// containerID：字符串类型，容器ID。
+// podname：字符串类型，容器ID。
 // namespace：字符串类型，容器所在的命名空间。
 // netns：ns.NetNS类型，容器所在的网络命名空间。
 // ifName：字符串类型，容器虚拟网卡的名称。
@@ -170,7 +170,7 @@ type NetConf struct {
 // - hostInterface：*current.Interface类型，主机虚拟网卡信息。
 // - containerInterface：*current.Interface类型，容器虚拟网卡信息。
 // - error：error类型，错误信息，如果没有错误则为nil。
-func setupContainerVethLegacy(containerID string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
+func setupContainerVethLegacy(podname string, namespace string, netns ns.NetNS, ifName string, mtu int, pr *current.Result) (*current.Interface, *current.Interface, error) {
 	// The IPAM result will be something like IP=192.168.3.5/24, GW=192.168.3.1.
 	// What we want is really a point-to-point link but veth does not support IFF_POINTTOPOINT.
 	// Next best thing would be to let it ARP but set interface to 192.168.3.5/32 and
@@ -188,7 +188,7 @@ func setupContainerVethLegacy(containerID string, namespace string, netns ns.Net
 	err := netns.Do(func(hostNS ns.NetNS) error {
 		var hostInterfaceNameTmp string
 
-		hostInterfaceNameTmp = vethNameForPod(containerID, namespace, "veth")
+		hostInterfaceNameTmp = vethNameForPod(podname, namespace, "veth")
 		hostVeth, contVeth0, err := ip.SetupVethWithName(ifName, hostInterfaceNameTmp, mtu, "", hostNS)
 		if err != nil {
 			return err
@@ -627,7 +627,7 @@ func configureNetworkWithIPAM(conf *NetConf, pK8Sargs *K8SArgs, args *skel.CmdAr
 	}
 
 	// Set up the veth pair between the host and the container
-	hostInterface, containerInterface, err := networkConfigurer.SetupContainerVeth(string(pK8Sargs.K8S_POD_INFRA_CONTAINER_ID), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
+	hostInterface, containerInterface, err := networkConfigurer.SetupContainerVeth(string(pK8Sargs.K8S_POD_NAME), string(pK8Sargs.K8S_POD_NAMESPACE), netns, args.IfName, conf.MTU, result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup container veth: %w", err)
 	}

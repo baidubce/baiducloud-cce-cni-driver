@@ -85,8 +85,13 @@ func addHandlersWithGate(m map[string]admission.Handler, fn GateFunc) {
 func RunWebhookServer() error {
 	server := standaloneWebhookServer()
 	var err error
+	// Always initialize informers to avoid gating by certificate setup switch
+	err = initializeInformers()
+	if err != nil {
+		return err
+	}
 	if webhookcontroller.EnableInitialize {
-		err = initialize()
+		err = initializeCertController()
 		if err != nil {
 			return err
 		}
@@ -149,12 +154,10 @@ func filterActiveHandlers() {
 	}
 }
 
-func initialize() error {
-	// add secret cache for webhook
+func initializeInformers() error {
 	if port == 0 {
 		return nil
 	}
-
 	k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer()
 	k8s.CCEClient().Informers.Cce().V2().PodSubnetTopologySpreads().Informer()
 	k8s.CCEClient().Informers.Cce().V1().Subnets().Informer()
@@ -162,6 +165,13 @@ func initialize() error {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	k8s.CCEClient().Informers.WaitForCacheSync(ctx.Done())
 	cancel()
+	return nil
+}
+
+func initializeCertController() error {
+	if port == 0 {
+		return nil
+	}
 	c, err := webhookcontroller.New(HandlerMap)
 	if err != nil {
 		return err

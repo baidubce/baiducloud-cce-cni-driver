@@ -88,7 +88,7 @@ func (n *bbcNetworkResourceSet) createBBCENI(scopedLog *logrus.Entry) error {
 	scopedLog.WithField("bbceni", logfields.Repr(bbceni)).Infof("get instance bbc eni success")
 	err = n.refreshAvailableSubnets()
 	if err != nil {
-		n.appendAllocatedIPError(bbceni.Id, ccev2.NewCustomerErrorStatusChange(ccev2.ErrorCodeNoAvailableSubnet, "failed to refresh available subnets"))
+		n.appendAllocatedIPError(bbceni.Id, ccev2.NewCustomerErrorStatusChange(ccev2.StatusFailed, "failed to refresh available subnets"))
 	}
 
 	var (

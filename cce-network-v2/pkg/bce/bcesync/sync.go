@@ -82,6 +82,24 @@ func (s *SyncManager[T]) RunImmediately() {
 	s.mngr.TriggerController(s.Name)
 }
 
+// RunOnce executes sync only once without starting periodic sync
+// This is used to reduce QPS by avoiding periodic sync calls
+// Since this is only run once at startup, we don't maintain the cache pool
+func (s *SyncManager[T]) RunOnce(ctx context.Context) error {
+	dataList, err := s.resync(ctx)
+	if err != nil {
+		log.WithField(taskLogField, s.Name).WithError(err).Error("one-time resync failed")
+		return err
+	}
+
+	// For startup-only sync, we don't need to maintain cache pool,
+	// so we don't maintain s.pool, which is similarly used in Run()
+
+	// The resync function (e.g., syncENI) already handles creating/updating K8s resources
+	log.WithField(taskLogField, s.Name).Infof("one-time resync completed. processed count: %d", len(dataList))
+	return nil
+}
+
 // ingestKeywords fetch keywords from generic objects
 func (s *SyncManager[T]) ingestKeywords(data interface{}) string {
 	switch data.(type) {

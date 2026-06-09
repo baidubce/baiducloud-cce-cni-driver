@@ -161,13 +161,14 @@ func (n *nodeOperationsMock) releaseIP(ip string) error {
 	return fmt.Errorf("IP %s not found", ip)
 }
 
-func (n *nodeOperationsMock) ReleaseIPs(ctx context.Context, release *ReleaseAction) error {
+func (n *nodeOperationsMock) ReleaseIPs(ctx context.Context, release *ReleaseAction) ([]string, error) {
 	for _, ipToDelete := range release.IPsToRelease {
 		if err := n.releaseIP(ipToDelete); err != nil {
-			return fmt.Errorf("unable to release IP %s: %s", ipToDelete, err)
+			return nil, fmt.Errorf("unable to release IP %s: %s", ipToDelete, err)
 		}
 	}
-	return nil
+	// Return all requested IPs as successfully released for testing
+	return release.IPsToRelease, nil
 }
 
 func (n *nodeOperationsMock) GetMaximumAllocatableIPv4() int {
@@ -351,4 +352,41 @@ func (e *IPAMSuite) BenchmarkAllocDelay50Worker10(c *check.C) {
 }
 func (e *IPAMSuite) BenchmarkAllocDelay50Worker50(c *check.C) {
 	benchmarkAllocWorker(c, 50, 50*time.Millisecond, 100.0, 4)
+}
+
+// TestResyncStatsInitialization_GivenEmptyStats_WhenInitialized_ThenMapsAreNotNil tests resyncStats initialization
+func (e *IPAMSuite) TestResyncStatsInitialization_GivenEmptyStats_WhenInitialized_ThenMapsAreNotNil(c *check.C) {
+	// Given: Create a NetResourceSetManager instance with required fields
+	manager := &NetResourceSetManager{
+		metricsAPI:      metricsapi,
+		instancesAPI:    &mockInstancesAPI{},
+		parallelWorkers: 1,
+	}
+
+	// When: Call Resync with empty context and current time
+	// Then: Verify it doesn't panic due to nil map assignment
+	ctx := context.Background()
+	syncTime := time.Now()
+
+	// This should not panic because we fixed the resyncStats initialization
+	// to include both subnetUsedCounts and subnetAZs maps
+	manager.Resync(ctx, syncTime)
+
+	// If we reach here without panic, the test passes
+	c.Assert(true, check.Equals, true)
+}
+
+// mockInstancesAPI is a mock implementation for testing
+type mockInstancesAPI struct{}
+
+func (m *mockInstancesAPI) CreateNetResource(obj *v2.NetResourceSet, node *NetResource) NetResourceOperations {
+	return nil
+}
+
+func (m *mockInstancesAPI) GetPoolQuota() ipamTypes.PoolQuotaMap {
+	return make(ipamTypes.PoolQuotaMap)
+}
+
+func (m *mockInstancesAPI) Resync(ctx context.Context) time.Time {
+	return time.Now()
 }

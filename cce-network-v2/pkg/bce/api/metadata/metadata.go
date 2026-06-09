@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
@@ -339,6 +340,22 @@ func (c *Client) GetVifFeatures(macAddress string) (string, error) {
 	}
 	vifFeatures := strings.TrimSpace(string(body))
 	return vifFeatures, nil
+}
+
+func (c *Client) GetLinkMTU(macAddress string) (int, error) {
+	// eg. /1.0/meta-data/network/interfaces/macs/fa:28:00:18:ab:51/mtu
+	// response: 9000
+	path := fmt.Sprintf(metadataBasePath+"network/interfaces/macs/%s/mtu", macAddress)
+	body, err := c.sendRequest(path)
+	if err != nil {
+		return 0, err
+	}
+	mtuStr := strings.TrimSpace(string(body))
+	mtu, err := strconv.Atoi(mtuStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse MTU value '%s': %v", mtuStr, err)
+	}
+	return mtu, nil
 }
 
 func (c *Client) GetFeatureList() (*FeatureList, error) {

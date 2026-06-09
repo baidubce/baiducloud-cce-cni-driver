@@ -29,6 +29,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/rdma/client"
@@ -378,10 +379,22 @@ func (n *rdmaNetResourceSetWrapper) allocateIPs(ctx context.Context, scopedLog *
 		if eni == nil {
 			return nil, nil, fmt.Errorf("eni is nil")
 		}
-		// allocate ips
+
+		// Batch allocation as primary approach
 		ips, err := iaasClient.BatchAddPrivateIP(ctx, eni.Spec.ID, []string{}, ipv4ToAllocate)
 		err = n.manager.HandlerVPCError(scopedLog, err, string(allocation.PoolID))
 		if err != nil {
+			// Check if this is a "no more IP" related error that might benefit from recovery
+			if cloud.IsErrorSubnetHasNoMoreIP(err) {
+
+				scopedLog.WithError(err).Info("RDMA ENI already has IPs in VPC, recovering all from VPC")
+				// Try to recover IPs from VPC as fallback (for restart recovery)
+				if recoveredIPs := n.tryRecoverIPsFromVPC(ctx, scopedLog, eni, allocation); recoveredIPs != nil {
+					scopedLog.Info("Successfully recovered IPs from VPC after batch allocation failure")
+					return recoveredIPs, ipv6PrivateIPSet, nil
+				}
+			}
+			// For other errors or if recovery failed, return the original error
 			if len(ips) == 0 {
 				return nil, nil, fmt.Errorf("allocate ips to rdma eni %s failed: %v", allocation.InterfaceID, err)
 			}
@@ -881,6 +894,69 @@ func (n *rdmaNetResourceSetWrapper) getMinimumAllocatable() int {
 		min = defaults.IPAMPreAllocation
 	}
 	return min
+}
+
+// tryRecoverIPsFromVPC attempts to recover IPs from VPC as fallback
+
+// this function is designed espacially for the scenario below:
+// The operator has already performed IP allocation for this RDMA network interface, and IP has been allocated on the RDMA ENI on the VPC side.
+// However, an unexpected operator restart (or similar process interruptions) occurred before the ENI CR on the K8S side was recorded.
+// Therefore, the rdma nrs control loop of the operator will initiate another request to allocate IPs to this rdma network interface.
+// At this time, due to the VPC side's regulation that a single rdma network interface can only mount 13 IPs (which have already been mounted),
+// this request to mount IPs will fail, resulting in the continued inability of this nrs to be ready.
+// This function is used as a fallback mechanism when batch allocation fails due to operator restart.
+// It directly queries VPC to get the current state of the ENI and returns whatever IPs are found.
+// The caller is responsible for determining whether the recovered IPs are sufficient.
+func (n *rdmaNetResourceSetWrapper) tryRecoverIPsFromVPC(ctx context.Context, scopedLog *logrus.Entry, eni *ccev2.ENI, allocation *ipam.AllocationAction) []*models.PrivateIP {
+	// For RDMA ENI, use the appropriate IaaS client to list ENIs and find the matching one
+	vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
+	iaasClient := n.manager.getIaaSClient(vifFeatures)
+
+	// List ENIs for this instance and find the matching one by ID
+	eniList, err := iaasClient.ListEnis(ctx, eni.Spec.VpcID, n.instanceID)
+	if err != nil {
+		scopedLog.WithError(err).Warning("Failed to list ENIs from VPC during recovery")
+		return nil
+	}
+
+	// Find the matching ENI by ID
+	var matchedEni *client.EniResult
+	for i := range eniList {
+		if eniList[i].Id == eni.Spec.ID {
+			matchedEni = &eniList[i]
+			break
+		}
+	}
+
+	if matchedEni == nil {
+		scopedLog.Warning("ENI not found in VPC during recovery")
+		return nil
+	}
+
+	scopedLog.WithField("vpcIPCount", len(matchedEni.PrivateIpSet)).Info("Querying VPC for existing IPs on RDMA ENI")
+
+	// Convert all VPC IPs to models.PrivateIP - return whatever is found
+	var recoveredIPs []*models.PrivateIP
+	var ipAddresses []string
+	for _, vpcIP := range matchedEni.PrivateIpSet {
+		recoveredIPs = append(recoveredIPs, &models.PrivateIP{
+			PrivateIPAddress: vpcIP.PrivateIpAddress,
+			SubnetID:         string(allocation.PoolID),
+			Primary:          vpcIP.Primary,
+		})
+		ipAddresses = append(ipAddresses, vpcIP.PrivateIpAddress)
+	}
+
+	if len(recoveredIPs) > 0 {
+		scopedLog.WithFields(logrus.Fields{
+			"recoveredIPCount": len(recoveredIPs),
+			"recoveredIPs":     ipAddresses,
+		}).Info("Found existing IPs in VPC during recovery")
+	} else {
+		scopedLog.Info("No existing IPs found in VPC during recovery")
+	}
+
+	return recoveredIPs
 }
 
 // isERIManagedNRS checks whether the current NRS is an ERI managed NRS

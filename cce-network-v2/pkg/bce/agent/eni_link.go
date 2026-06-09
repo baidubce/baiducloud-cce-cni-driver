@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/datapath/link"
@@ -16,7 +17,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
-	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
+	os "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/os"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/sysctl"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -26,6 +27,7 @@ import (
 const (
 	fromENIPrimaryIPRulePriority = 1024
 	rpFilterSysctlTemplate       = "net.ipv4.conf.%s.rp_filter"
+	defaultMTUforENI             = 1500
 
 	// ENINamePrefix ENI device name prefix
 	ENINamePrefix = "cce-eni"
@@ -35,6 +37,383 @@ const (
 	// it is also the max route table for a node
 	maxENIIndex = 252
 )
+
+// ENI configuration state tracking (memory-only)
+type eniConfigState struct {
+	ENIID       string    `json:"eni_id"`
+	MACAddress  string    `json:"mac_address"` // Primary identifier - MAC is unique and persistent
+	ConfigSaved bool      `json:"config_saved"`
+	LastUpdated time.Time `json:"last_updated"` // When configuration was last fetched from MetaAPI
+
+	// ENI correct configuration from metadata API
+	CorrectConfig *eniCorrectConfig `json:"correct_config,omitempty"`
+}
+
+// eniCorrectConfig stores the correct ENI configuration from metadata API
+// Only stores primary IP configuration, secondary IPs are managed by IPAM
+type eniCorrectConfig struct {
+	// Primary IP configuration (only these are managed by ENI agent)
+	PrimaryIPv4 string `json:"primary_ipv4"`
+	PrimaryIPv6 string `json:"primary_ipv6"`
+
+	// Network configuration
+	Gateway     string `json:"gateway"`
+	IPv6Gateway string `json:"ipv6_gateway"`
+
+	// Interface configuration
+	MTU int `json:"mtu"`
+}
+
+var (
+	// eniConfigStates uses sync.Map for better concurrent performance
+	// Key: macAddress (string), Value: *eniConfigState
+	eniConfigStates sync.Map
+)
+
+// getOrCreateENIConfigState gets or creates ENI configuration state in memory
+// Uses MAC address as the primary identifier since it's unique and persistent across renames/reboots
+// Returns a complete and valid ENI config, refreshing from MetaAPI if needed
+func getOrCreateENIConfigState(eniID, macAddress string, eni *ccev2.ENI) (*eniConfigState, error) {
+	// Check memory cache first using MAC address as key
+	value, exists := eniConfigStates.Load(macAddress)
+
+	var state *eniConfigState
+	if exists {
+		state = value.(*eniConfigState)
+	}
+
+	// Determine if we need to refresh from MetaAPI
+	needsRefresh := false
+	reason := ""
+
+	if !exists || state == nil {
+		// No cached config (first time or restart)
+		needsRefresh = true
+		reason = "no cached config"
+
+		// Create new state if not found
+		state = &eniConfigState{
+			ENIID:       eniID,
+			MACAddress:  macAddress,
+			ConfigSaved: false,
+			LastUpdated: time.Time{}, // Zero time indicates never updated
+		}
+	} else if time.Since(state.LastUpdated) > 24*time.Hour {
+		// Cache expired (>24h)
+		needsRefresh = true
+		reason = "cache expired"
+	}
+
+	// Refresh from MetaAPI if needed
+	if needsRefresh {
+		config, err := getENICorrectConfigFromMetadata(macAddress, eni)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get ENI configuration from metadata: %w", err)
+		}
+
+		state.CorrectConfig = config
+		state.ConfigSaved = true
+		state.LastUpdated = time.Now()
+
+		// Log the refresh reason
+		logrus.WithFields(logrus.Fields{
+			"eniID":      eniID,
+			"macAddress": macAddress,
+			"reason":     reason,
+		}).Info("Refreshed ENI configuration from MetaAPI")
+
+		// Store the state (whether new or updated)
+		eniConfigStates.Store(macAddress, state)
+	}
+
+	return state, nil
+}
+
+// isIPOnInterface quickly checks if an IP address is configured on the interface
+func isIPOnInterface(link netlink.Link, expectedIP string) bool {
+	if link == nil || expectedIP == "" {
+		return false
+	}
+
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	if err != nil {
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"interface":  link.Attrs().Name,
+			"expectedIP": expectedIP,
+		}).Warning("Failed to list addresses on interface, assuming IP changed")
+		return false // Assume changed if we can't check
+	}
+
+	for _, addr := range addrs {
+		if addr.IP.String() == expectedIP {
+			return true
+		}
+	}
+	return false
+}
+
+// checkAndFixNetworkConfiguration checks and fixes network configuration
+// 1. Check IP configuration - fix if wrong (add missing, remove extra)
+// 2. Check MTU - log warning if wrong (don't fix to avoid disruption)
+func (ec *eniLink) checkAndFixNetworkConfiguration(state *eniConfigState) error {
+	if state == nil || state.CorrectConfig == nil {
+		return fmt.Errorf("no configuration available")
+	}
+
+	config := state.CorrectConfig
+	linkName := ec.link.Attrs().Name
+
+	ec.log.WithField("interface", linkName).Debug("Checking and fixing network configuration")
+
+	// 1. Check and fix IP configuration
+	if err := ec.ensureCorrectIPConfiguration(config); err != nil {
+		return fmt.Errorf("failed to fix IP configuration: %w", err)
+	}
+
+	// 2. Check MTU and log warning if mismatch (don't fix)
+	if config.MTU > 0 {
+		currentMTU := ec.link.Attrs().MTU
+		if currentMTU != config.MTU {
+			ec.log.WithFields(logrus.Fields{
+				"interface":   linkName,
+				"currentMTU":  currentMTU,
+				"expectedMTU": config.MTU,
+			}).Warning("MTU mismatch detected but not correcting to avoid network disruption")
+		}
+	}
+
+	return nil
+}
+
+// ensureCorrectIPConfiguration ensures the interface has only the correct IP addresses from MetaAPI
+// This function will: 1) Remove any incorrect/extra IPs, 2) Add missing correct IPs
+func (ec *eniLink) ensureCorrectIPConfiguration(config *eniCorrectConfig) error {
+	if config == nil {
+		return fmt.Errorf("no configuration provided")
+	}
+
+	linkName := ec.link.Attrs().Name
+
+	// Build expected IP set from MetaAPI configuration
+	expectedIPs := make(map[string]bool)
+	if config.PrimaryIPv4 != "" {
+		expectedIPs[config.PrimaryIPv4] = true
+	}
+	if config.PrimaryIPv6 != "" {
+		expectedIPs[config.PrimaryIPv6] = true
+	}
+
+	ec.log.WithFields(logrus.Fields{
+		"interface":   linkName,
+		"expectedIPs": expectedIPs,
+	}).Info("Ensuring correct IP configuration from MetaAPI")
+
+	// Get current IP addresses on the interface
+	currentAddrs, err := netlink.AddrList(ec.link, netlink.FAMILY_ALL)
+	if err != nil {
+		return fmt.Errorf("failed to list current addresses: %w", err)
+	}
+
+	// Step 1: Remove incorrect/extra IP addresses
+	for _, addr := range currentAddrs {
+		ipStr := addr.IP.String()
+
+		// Skip link-local and loopback addresses (these are system managed)
+		if addr.IP.IsLinkLocalUnicast() || addr.IP.IsLoopback() {
+			continue
+		}
+
+		// Skip non-global unicast addresses
+		if !addr.IP.IsGlobalUnicast() {
+			continue
+		}
+
+		// If this IP is not in our expected set, remove it
+		if !expectedIPs[ipStr] {
+			ec.log.WithFields(logrus.Fields{
+				"interface": linkName,
+				"ip":        ipStr,
+			}).Info("Removing incorrect IP address from interface")
+
+			if err := netlink.AddrDel(ec.link, &addr); err != nil {
+				ec.log.WithError(err).WithFields(logrus.Fields{
+					"interface": linkName,
+					"ip":        ipStr,
+				}).Warning("Failed to remove incorrect IP address")
+				// Continue with other IPs even if one fails
+			}
+		}
+	}
+
+	// Step 2: Ensure correct IP addresses are present
+	for expectedIP := range expectedIPs {
+		if !isIPOnInterface(ec.link, expectedIP) {
+			ec.log.WithFields(logrus.Fields{
+				"interface": linkName,
+				"ip":        expectedIP,
+			}).Info("Adding missing correct IP address to interface")
+
+			// Parse IP and determine subnet mask from config
+			ip := net.ParseIP(expectedIP)
+			if ip == nil {
+				ec.log.WithFields(logrus.Fields{
+					"interface": linkName,
+					"ip":        expectedIP,
+				}).Error("Failed to parse expected IP address")
+				continue
+			}
+
+			// Get subnet mask from ENI spec
+			var mask net.IPMask
+			var err error
+			if ip.To4() != nil {
+				// IPv4: get subnet mask from ENI spec
+				mask, err = ec.getSubnetMaskFromENI(ip.String())
+				if err != nil {
+					ec.log.WithError(err).WithField("ip", ip.String()).Error("Failed to get IPv4 subnet mask from ENI")
+					continue // Skip this IP if we can't get the subnet mask
+				}
+			} else {
+				// IPv6: get subnet mask from ENI spec
+				mask, err = ec.getIPv6SubnetMaskFromENI(ip.String())
+				if err != nil {
+					ec.log.WithError(err).WithField("ip", ip.String()).Error("Failed to get IPv6 subnet mask from ENI")
+					continue // Skip this IP if we can't get the subnet mask
+				}
+			}
+
+			addr := &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   ip,
+					Mask: mask,
+				},
+			}
+
+			if err := netlink.AddrAdd(ec.link, addr); err != nil {
+				ec.log.WithError(err).WithFields(logrus.Fields{
+					"interface": linkName,
+					"ip":        expectedIP,
+				}).Warning("Failed to add correct IP address")
+				// Continue with other IPs even if one fails
+			}
+		}
+	}
+
+	ec.log.WithField("interface", linkName).Info("IP configuration correction completed")
+	return nil
+}
+
+// getSubnetMaskFromENI gets subnet mask for IPv4 from ENI spec and Subnet CR
+// Returns error instead of nil to provide better error handling for callers
+func (ec *eniLink) getSubnetMaskFromENI(ipAddress string) (net.IPMask, error) {
+	if ec.eni == nil {
+		return nil, fmt.Errorf("ENI object is nil")
+	}
+
+	// Use ENI's subnet ID directly
+	subnetID := ec.eni.Spec.ENI.SubnetID
+
+	if subnetID == "" {
+		return nil, fmt.Errorf("ENI subnet ID is empty")
+	}
+
+	// Get Subnet CR from cluster
+	subnet, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().Get(subnetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get subnet CR %s for IP %s: %w", subnetID, ipAddress, err)
+	}
+
+	// Parse CIDR from Subnet CR spec
+	if subnet.Spec.CIDR == "" {
+		return nil, fmt.Errorf("subnet %s has empty CIDR", subnetID)
+	}
+
+	_, ipnet, err := net.ParseCIDR(subnet.Spec.CIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CIDR %s from subnet %s: %w", subnet.Spec.CIDR, subnetID, err)
+	}
+
+	return ipnet.Mask, nil
+}
+
+// getIPv6SubnetMaskFromENI gets subnet mask for IPv6 from ENI spec and Subnet CR
+// Returns error instead of nil to provide better error handling for callers
+func (ec *eniLink) getIPv6SubnetMaskFromENI(ipAddress string) (net.IPMask, error) {
+	if ec.eni == nil {
+		return nil, fmt.Errorf("ENI object is nil")
+	}
+
+	// Use ENI's subnet ID directly
+	subnetID := ec.eni.Spec.ENI.SubnetID
+
+	if subnetID == "" {
+		return nil, fmt.Errorf("ENI subnet ID is empty")
+	}
+
+	// Get Subnet CR from cluster
+	subnet, err := k8s.CCEClient().Informers.Cce().V1().Subnets().Lister().Get(subnetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get subnet CR %s for IPv6 %s: %w", subnetID, ipAddress, err)
+	}
+
+	// Parse IPv6 CIDR from Subnet CR spec
+	if subnet.Spec.IPv6CIDR == "" {
+		return nil, fmt.Errorf("subnet %s has empty IPv6 CIDR", subnetID)
+	}
+
+	_, ipnet, err := net.ParseCIDR(subnet.Spec.IPv6CIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse IPv6 CIDR %s from subnet %s: %w", subnet.Spec.IPv6CIDR, subnetID, err)
+	}
+
+	return ipnet.Mask, nil
+}
+
+// getENICorrectConfigFromMetadata retrieves the correct ENI configuration from metadata API
+// Only retrieves primary IP configuration, secondary IPs are managed by IPAM
+func getENICorrectConfigFromMetadata(macAddress string, eni *ccev2.ENI) (*eniCorrectConfig, error) {
+	config := &eniCorrectConfig{}
+
+	// Get primary IP only (we don't manage secondary IPs)
+	primaryIP, err := defaultMetaClient.GetLinkPrimaryIP(macAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary IP from metadata: %w", err)
+	}
+	config.PrimaryIPv4 = primaryIP
+
+	// Get gateway for primary IP
+	gateway, err := defaultMetaClient.GetLinkGateway(macAddress, primaryIP)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get gateway from metadata: %w", err)
+	}
+	config.Gateway = gateway
+
+	// Get IPv6 primary IP if enabled
+	if eni != nil && option.Config.EnableIPv6 && len(eni.Spec.ENI.IPV6PrivateIPSet) > 0 {
+		for _, ipv6IP := range eni.Spec.ENI.IPV6PrivateIPSet {
+			if ipv6IP.Primary {
+				config.PrimaryIPv6 = ipv6IP.PrivateIPAddress
+				break // Only need the primary IPv6
+			}
+		}
+	}
+
+	// Get MTU from metadata API (authoritative source)
+	mtu, err := defaultMetaClient.GetLinkMTU(macAddress)
+	if err != nil {
+		// If MTU is not available from metadata, use default
+		config.MTU = defaultMTUforENI
+		logrus.WithError(err).WithField("macAddress", macAddress).Warning("Failed to get MTU from metadata, using default 1500")
+	} else {
+		config.MTU = mtu
+		logrus.WithFields(logrus.Fields{
+			"macAddress": macAddress,
+			"mtu":        mtu,
+		}).Debug("Retrieved MTU from metadata API")
+	}
+
+	return config, nil
+}
 
 var (
 	// eniIndexMutex protects the ENI index allocation to prevent race conditions
@@ -202,6 +581,12 @@ func (ec *eniLink) rename(isPrimary bool) error {
 // return:
 // error: error when opening the link
 func (ec *eniLink) ensureLinkConfig() (err error) {
+	// 0. validate ENI configuration and clean up conflicts
+	err = ec.ensureENIConfiguration()
+	if err != nil {
+		return err
+	}
+
 	// 1. set link up
 	err = ec.ensureLinkUp()
 	if err != nil {
@@ -727,4 +1112,27 @@ func macToEUI64LinkLocal(mac net.HardwareAddr) net.IP {
 	copy(ip, []byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0})
 	copy(ip[8:], eui)
 	return ip
+}
+
+// validateENIConfiguration validates that the ENI has the correct configuration
+// and cleans up any conflicting NetworkManager configurations (checks periodically and handles NetworkManager restarts)
+func (ec *eniLink) ensureENIConfiguration() error {
+	eniID := ec.eni.Spec.ENI.ID
+
+	// Get or create ENI configuration state using MAC address as primary identifier
+	// MAC address is unique and persistent across renames and reboots
+	state, err := getOrCreateENIConfigState(eniID, ec.macAddr, ec.eni)
+	if err != nil {
+		ec.log.WithError(err).Error("Failed to get ENI configuration state")
+		return err
+	}
+
+	// Check and fix network configuration if need
+	if err := ec.checkAndFixNetworkConfiguration(state); err != nil {
+		ec.log.WithError(err).Warning("Failed to check and fix network configuration")
+		return err
+	}
+
+	ec.log.WithField("eniID", eniID).Info("ENI configuration validation completed")
+	return nil
 }

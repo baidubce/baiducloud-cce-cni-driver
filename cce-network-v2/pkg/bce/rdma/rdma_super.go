@@ -747,9 +747,18 @@ func (set ipToReleaseSet) append(ip string, maxLen int) [][]string {
 
 // ReleaseIPs is called after invoking PrepareIPRelease and needs to
 // perform the release of IPs.
-func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) error {
+// 释放IP地址，在调用PrepareIPRelease之后执行实际的IP释放操作
+//
+// 参数:
+//   - ctx: 上下文
+//   - release: IP释放操作，包含要释放的IP列表和ENI信息
+//
+// 返回值:
+//   - []string: 成功释放的IP地址列表，即使部分IP释放失败也会返回成功释放的IP
+//   - error: 错误信息，如果所有IP都释放失败则返回错误，部分成功时返回nil
+func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) ([]string, error) {
 	if release == nil || len(release.IPsToRelease) == 0 {
-		return nil
+		return nil, nil
 	}
 	scopeLog := n.log.WithFields(logrus.Fields{
 		"ips":   release.IPsToRelease,
@@ -765,7 +774,7 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 	// get eni
 	eni, err := n.manager.eniLister.Get(string(release.InterfaceID))
 	if err != nil {
-		return fmt.Errorf("get eni %s failed: %v", release.InterfaceID, err)
+		return nil, fmt.Errorf("get eni %s failed: %v", release.InterfaceID, err)
 	}
 	eni = eni.DeepCopy()
 
@@ -798,8 +807,9 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 	}
 
 	// 2. do release IP
-	doRelease := func(toReleaseSet ipToReleaseSet, isIPv6 bool) error {
+	doRelease := func(toReleaseSet ipToReleaseSet, isIPv6 bool) ([]string, error) {
 		var isPartialSuccess = false
+		var successfullyReleasedIPs []string
 		// the vifFeatures is decided by the NetResourceSet's annotation
 		vifFeatures := n.k8sObj.Annotations[k8s.AnnotationRDMAInfoVifFeatures]
 		iaasClient := n.manager.getIaaSClient(vifFeatures)
@@ -816,31 +826,40 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 			if err != nil {
 				scopeLog.WithError(err).Error("release ip failed")
 				if !isPartialSuccess {
-					return err
+					return successfullyReleasedIPs, err
 				}
 			} else {
 				scopeLog.Info("release ip success")
 				isPartialSuccess = true
 
-				// update releaseIPMap
+				// update releaseIPMap and successfullyReleasedIPs
 				for _, ipstr := range ipToRelease {
 					releaseIPMap[ipstr] = true
+					successfullyReleasedIPs = append(successfullyReleasedIPs, ipstr)
 				}
 			}
 		}
-		return nil
+		return successfullyReleasedIPs, nil
 	}
-	err = doRelease(ipv4ToReleaseSet, false)
-	if err != nil {
-		return err
+
+	// 分别处理 IPv4 和 IPv6 的释放，即使其中一个失败也要继续处理另一个
+	ipv4ReleasedIPs, ipv4Err := doRelease(ipv4ToReleaseSet, false)
+	if ipv4Err != nil {
+		scopeLog.WithError(ipv4Err).Warning("IPv4 release failed, but continuing with IPv6 release")
 	}
-	err = doRelease(ipv6ToReleaseSet, true)
-	if err != nil {
-		return err
+
+	ipv6ReleasedIPs, ipv6Err := doRelease(ipv6ToReleaseSet, true)
+	if ipv6Err != nil {
+		scopeLog.WithError(ipv6Err).Warning("IPv6 release failed, but continuing with ENI update")
+	}
+
+	// 如果两个都失败了，返回错误
+	if ipv4Err != nil && ipv6Err != nil {
+		return nil, fmt.Errorf("both IPv4 and IPv6 release failed: IPv4 error: %v, IPv6 error: %v", ipv4Err, ipv6Err)
 	}
 
 	// 3. update IP on eni
-	return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
+	err = n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
 		var (
 			ipv4Addrs []*models.PrivateIP
 			ipv6Addrs []*models.PrivateIP
@@ -859,6 +878,22 @@ func (n *bceRDMANetResourceSet) ReleaseIPs(ctx context.Context, release *ipam.Re
 		eni.Spec.ENI.IPV6PrivateIPSet = ipv6Addrs
 		return eni
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Return the list of successfully released IPs
+	var allSuccessfullyReleasedIPs []string
+	// 合并 IPv4 和 IPv6 成功释放的 IP
+	allSuccessfullyReleasedIPs = append(allSuccessfullyReleasedIPs, ipv4ReleasedIPs...)
+	allSuccessfullyReleasedIPs = append(allSuccessfullyReleasedIPs, ipv6ReleasedIPs...)
+
+	// 如果没有任何 IP 成功释放，返回错误
+	if len(allSuccessfullyReleasedIPs) == 0 {
+		return nil, fmt.Errorf("no IPs were successfully released: IPv4 error: %v, IPv6 error: %v", ipv4Err, ipv6Err)
+	}
+
+	return allSuccessfullyReleasedIPs, nil
 }
 
 func (n *bceRDMANetResourceSet) updateENIWithPoll(ctx context.Context, toUpdateEni *ccev2.ENI, refresh func(eni *ccev2.ENI) *ccev2.ENI) error {

@@ -35,7 +35,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/baidubce/bce-sdk-go/services/eni"
+	enisdk "github.com/baidubce/bce-sdk-go/services/eni"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +51,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/bcesync"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
@@ -65,6 +67,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/nodeutils"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 )
 
 const (
@@ -201,6 +204,11 @@ func NewBCENetworkResourceSet(node *ipam.NetResource, k8sObj *ccev2.NetResourceS
 	}
 
 	return bceNrs
+}
+
+// GetBCEClient returns the BCE cloud client for IaaS operations
+func (n *bceNetworkResourceSet) GetBCEClient() cloud.Interface {
+	return n.bceclient
 }
 
 func (n *bceNetworkResourceSet) getENIQuota() ENIQuotaManager {
@@ -390,30 +398,34 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 		a        = ipamTypes.AllocationMap{}
 		allENIId []string
 	)
+
 	n.waitForENISynced(ctx)
 
 	availableENIsNumber := 0
 	availableIPsNumber := 0
 	usedENIsNumber := 0
 	haveCreatingENI := false
+
 	n.manager.ForeachInstanceWithAllEni(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			e, ok := iface.Resource.(*eniResource)
 			if !ok {
 				return nil
 			}
+
 			allENIId = append(allENIId, e.Name)
 
 			// eni is not ready to use
 			eniSubnet := e.Spec.ENI.SubnetID
+
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse &&
 				(e.Spec.Type == ccev2.ENIForBBC || e.Spec.UseMode == ccev2.ENIUseModePrimaryWithSecondaryIP) {
 
 				err := n.forceUpdateEniToInuse(ctx, scopedLog, e.Name)
 				if err != nil {
+					scopedLog.WithError(err).WithField("eniName", e.Name).Error("Failed to force update ENI to inuse")
 					return err
 				}
-
 			}
 
 			if e.Status.VPCStatus != ccev2.VPCENIStatusInuse || e.Status.CCEStatus == ccev2.ENIMSGPCIERROR || e.Status.CCEStatus == "" {
@@ -463,6 +475,7 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 						(n.instanceType != string(metadata.InstanceTypeExBBC) || !n.enableNodeAnnotationSubnet()) {
 						continue
 					}
+
 					a[addr.PrivateIPAddress] = ipamTypes.AllocationIP{
 						Resource: e.Name,
 						SubnetID: addr.SubnetID,
@@ -475,6 +488,7 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 			return nil
 		})
+
 	n.creatingEni.cleanExpiredCreatingENI(allENIId, operatorOption.Config.ResourceResyncInterval*3)
 
 	// the 	CreateInterface function will not be called in the primary IP mode
@@ -495,8 +509,10 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 
 	eniQuota := n.getENIQuota()
 	if eniQuota == nil {
+		scopedLog.Error("ENI quota is nil, returning error")
 		return a, goerrors.New(errUnableToGetEniQuota)
 	}
+
 	err := eniQuota.RefreshEniCapacityToK8s(ctx, availableENIsNumber, availableIPsNumber)
 	if err != nil {
 		scopedLog.WithError(err).Errorf("refresh eni capacity to k8s node error")
@@ -507,7 +523,8 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 	n.mutex.Unlock()
 
 	// clean borrowed subnet ip
-	if availableIPsNumber >= n.GetMaximumAllocatableIPv4() {
+	maxAllocatableIPv4 := n.GetMaximumAllocatableIPv4()
+	if availableIPsNumber >= maxAllocatableIPv4 {
 		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				e, ok := iface.Resource.(*eniResource)
@@ -515,13 +532,15 @@ func (n *bceNetworkResourceSet) ResyncInterfacesAndIPs(ctx context.Context, scop
 					return nil
 				}
 				if subnet, err := bcesync.GlobalBSM().GetSubnet(e.Spec.ENI.SubnetID); err == nil {
-					if subnet.GetBorrowedIPNum(interfaceID) > 0 {
+					borrowedIPNum := subnet.GetBorrowedIPNum(interfaceID)
+					if borrowedIPNum > 0 {
 						subnet.Cancel(interfaceID)
 					}
 				}
 				return nil
 			})
 	}
+
 	return a, nil
 }
 
@@ -633,13 +652,14 @@ func (n *bceNetworkResourceSet) forceGetENIFromIaaS(ctx context.Context, scopedL
 	scopedLog = scopedLog.WithField("NetworkResourceSet", n.k8sObj.Name)
 	scopedLog.WithField("StartTime", startTime).Infof("Start force get ENI from IaaS")
 
-	args := eni.ListEniArgs{
+	args := enisdk.ListEniArgs{
 		VpcId:      vpcID,
 		InstanceId: instanceID,
+		Name:       fmt.Sprintf("%s/", option.Config.ClusterID),
 	}
 
 	var (
-		eniList []eni.Eni
+		eniList []enisdk.Eni
 		listErr error
 	)
 	if err = wait.PollImmediateWithContext(ctx, eniSyncPeriod, maxENISyncDuration, func(context.Context) (done bool, err error) {
@@ -1131,12 +1151,23 @@ func appenUniqueElement(arr, toadd []*models.PrivateIP) []*models.PrivateIP {
 func (n *bceNetworkResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.ReleaseAction {
 	r := &ipam.ReleaseAction{}
 
+	scopedLog.WithFields(logrus.Fields{
+		"function":   "PrepareIPRelease",
+		"excessIPs":  excessIPs,
+		"instanceID": n.instanceID,
+		"nodeName":   n.k8sObj.Name,
+	}).Info("release: starting IP release preparation")
+
 	// Needed for selecting the same ENI to release IPs from
 	// when more than one ENI qualifies for release
 	n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 		func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 			// if r.IPsToRelease is not empty, don't excute the following code
 			if len(r.IPsToRelease) > 0 {
+				scopedLog.WithFields(logrus.Fields{
+					"interfaceID": interfaceID,
+					"reason":      "already_selected_eni",
+				}).Debug("release: skipping ENI, already selected one")
 				return nil
 			}
 
@@ -1152,8 +1183,9 @@ func (n *bceNetworkResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logru
 				"eniID":        e.Spec.ENI.ID,
 				"index":        e.Status.InterfaceIndex,
 				"numAddresses": len(e.Spec.ENI.PrivateIPSet),
+				"useMode":      e.Spec.UseMode,
 			})
-			scopeENILog.Debug("Considering ENI for IP release")
+			scopeENILog.Debug("release: considering ENI for IP release")
 
 			// Count free IP addresses on this ENI
 			var (
@@ -1224,7 +1256,11 @@ func (n *bceNetworkResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logru
 				"excessIPs":       excessIPs,
 				"ipv4ToFreeCount": ipv4ToFreeCount,
 				"ipv6ToFreeCount": ipv6ToFreeCount,
-			}).Debug("ENI has unused IPs that can be released")
+				"ipv4ToFree":      ipv4ToFree,
+				"ipv6ToFree":      ipv6ToFree,
+				"totalFreeIPs":    len(ipv4ToFree) + len(ipv6ToFree),
+			}).Debug("release: ENI has unused IPs that can be released")
+
 			// Select the ENI with the most addresses available for release
 			if len(r.IPsToRelease) == 0 {
 				r.InterfaceID = e.Spec.ENI.ID
@@ -1232,12 +1268,29 @@ func (n *bceNetworkResourceSet) PrepareIPRelease(excessIPs int, scopedLog *logru
 				if ipv4ToFreeCount > 0 && len(ipv4ToFree) > 0 {
 					r.IPsToRelease = ipv4ToFree[:ipv4ToFreeCount]
 				}
-				if ipv6ToFreeCount > 0 && len(ipv4ToFree) > 0 {
+				if ipv6ToFreeCount > 0 && len(ipv6ToFree) > 0 {
 					r.IPsToRelease = append(r.IPsToRelease, ipv6ToFree[:ipv6ToFreeCount]...)
 				}
+
+				scopeENILog.WithFields(logrus.Fields{
+					"selectedENI":    e.Spec.ENI.ID,
+					"selectedSubnet": e.Spec.ENI.SubnetID,
+					"ipsToRelease":   r.IPsToRelease,
+					"releaseCount":   len(r.IPsToRelease),
+				}).Info("release: selected ENI for IP release")
 			}
 			return nil
 		})
+
+	scopedLog.WithFields(logrus.Fields{
+		"function":         "PrepareIPRelease",
+		"excessIPs":        excessIPs,
+		"selectedENI":      r.InterfaceID,
+		"selectedSubnet":   r.PoolID,
+		"ipsToRelease":     r.IPsToRelease,
+		"releaseCount":     len(r.IPsToRelease),
+		"hasReleaseAction": len(r.IPsToRelease) > 0,
+	}).Info("release: completed IP release preparation")
 
 	return r
 }
@@ -1256,117 +1309,53 @@ func (set ipToReleaseSet) append(ip string, maxLen int) [][]string {
 }
 
 // ReleaseIPs is called after invoking PrepareIPRelease and needs to
-// perform the release of IPs.
-func (n *bceNetworkResourceSet) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) error {
+// perform the release of IPs with enhanced retry and verification logic.
+func (n *bceNetworkResourceSet) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) ([]string, error) {
 	if release == nil || len(release.IPsToRelease) == 0 {
-		return nil
+		return nil, nil
 	}
+
 	scopeLog := n.log.WithFields(logrus.Fields{
 		"ips":   release.IPsToRelease,
 		"eniID": release.InterfaceID,
 	})
-	scopeLog.Debug("start to releasing IPs")
-	var (
-		ipv4ToReleaseSet ipToReleaseSet
-		ipv6ToReleaseSet ipToReleaseSet
-		releaseIPMap     = make(map[string]bool)
-	)
-	// append ip to eni
-	// get eni
-	eni, err := n.manager.enilister.Get(string(release.InterfaceID))
-	if err != nil {
-		scopeLog.WithField("eniID", release.InterfaceID).WithError(err).Warn("get eni failed")
-		return err
-	}
-	eni = eni.DeepCopy()
+	scopeLog.Debug("start to releasing IPs with enhanced retry logic")
 
-	// 1. check to release IP
-	for _, ipstr := range release.IPsToRelease {
-		ip := net.ParseIP(ipstr)
-		if ip != nil && ip.To4() == nil {
-			containsIP := false
-			for _, privateAddress := range eni.Spec.IPV6PrivateIPSet {
-				if privateAddress.PrivateIPAddress == ipstr {
-					containsIP = true
-					break
-				}
-			}
-			if containsIP {
-				ipv6ToReleaseSet = ipv6ToReleaseSet.append(ipstr, 10)
-			}
-		} else if ip != nil {
-			containsIP := false
-			for _, privateAddress := range eni.Spec.PrivateIPSet {
-				if privateAddress.PrivateIPAddress == ipstr {
-					containsIP = true
-					break
-				}
-			}
-			if containsIP {
-				ipv4ToReleaseSet = ipv4ToReleaseSet.append(ipstr, 10)
-			}
+	// 批量释放IP，带重试逻辑
+	successfullyReleasedIPs, err := n.releaseBatchIPsWithRetry(ctx, release, release.IPsToRelease, scopeLog)
+
+	// 记录释放结果
+	if len(successfullyReleasedIPs) > 0 {
+		scopeLog.WithFields(logrus.Fields{
+			"totalIPs":      len(release.IPsToRelease),
+			"successfulIPs": len(successfullyReleasedIPs),
+		}).Info("Batch IP release completed")
+	}
+
+	// 如果有部分失败，记录错误但不失败整个操作
+	if len(successfullyReleasedIPs) < len(release.IPsToRelease) {
+		failedCount := len(release.IPsToRelease) - len(successfullyReleasedIPs)
+		scopeLog.WithFields(logrus.Fields{
+			"totalIPs":      len(release.IPsToRelease),
+			"successfulIPs": len(successfullyReleasedIPs),
+			"failedIPs":     failedCount,
+		}).Warning("Partial IP release completed")
+	}
+
+	// 更新ENI，移除成功释放的IP
+	if len(successfullyReleasedIPs) > 0 {
+		updateErr := n.updateENIWithReleasedIPs(ctx, release.InterfaceID, successfullyReleasedIPs, scopeLog)
+		if updateErr != nil {
+			scopeLog.WithError(updateErr).Error("Failed to update ENI after IP release")
+			// 如果更新ENI失败，但IP已经从IaaS释放了，这是一个严重问题
+			// 这里不认为IP已经成功释放，返回的success ReleaseIP为空，IP 仍然在 nrs 的待释放 status 中
+			// 由于 IP 仍然处在待释放状态，后续IP会重试删除（非本轮）
+			// 后续的删除操作在IAAS侧返回已经不存在视为成功，于是再次进入 update ENI 操作
+			return nil, updateErr // eni update 失败也不认为释放成功
 		}
 	}
 
-	// 2. do release IP
-	doRelease := func(toReleaseSet ipToReleaseSet, isIPv6 bool) error {
-		isPartialSuccess := false
-		for _, ipToRelease := range toReleaseSet {
-			scopeLog = scopeLog.WithFields(logrus.Fields{
-				"partialToRelease": ipToRelease,
-			})
-			if isIPv6 {
-				err = n.real.releaseIPs(ctx, release, []string{}, ipToRelease)
-			} else {
-				err = n.real.releaseIPs(ctx, release, ipToRelease, []string{})
-			}
-			if err != nil && !strings.Contains(err.Error(), "PrivateIpInvalid") {
-				err = fmt.Errorf("release ip %s failed: %v", ipToRelease, err)
-				n.appendAllocatedIPError(release.InterfaceID, ccev2.NewErrorStatusChange(err.Error()))
-				if !isPartialSuccess {
-					return err
-				}
-			} else {
-				scopeLog.Info("release ip success")
-				isPartialSuccess = true
-
-				// update releaseIPMap
-				for _, ipstr := range ipToRelease {
-					releaseIPMap[ipstr] = true
-				}
-			}
-		}
-		return nil
-	}
-	err = doRelease(ipv4ToReleaseSet, false)
-	if err != nil {
-		return err
-	}
-	err = doRelease(ipv6ToReleaseSet, true)
-	if err != nil {
-		return err
-	}
-
-	// 3. update IP on eni
-	return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
-		var (
-			ipv4Addrs []*models.PrivateIP
-			ipv6Addrs []*models.PrivateIP
-		)
-		for _, addr := range eni.Spec.ENI.PrivateIPSet {
-			if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
-				ipv4Addrs = append(ipv4Addrs, addr)
-			}
-		}
-		for _, addr := range eni.Spec.ENI.IPV6PrivateIPSet {
-			if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
-				ipv6Addrs = append(ipv6Addrs, addr)
-			}
-		}
-		eni.Spec.ENI.PrivateIPSet = ipv4Addrs
-		eni.Spec.ENI.IPV6PrivateIPSet = ipv6Addrs
-		return eni
-	})
+	return successfullyReleasedIPs, err
 }
 
 func (n *bceNetworkResourceSet) updateENIWithPoll(ctx context.Context, toUpdateEni *ccev2.ENI, refresh func(eni *ccev2.ENI) *ccev2.ENI) error {
@@ -1622,7 +1611,8 @@ func (n *bceNetworkResourceSet) DeleteIP(ctx context.Context, allocation *endpoi
 		}
 		action.IPsToRelease = append(action.IPsToRelease, addressPair.IP)
 	}
-	return n.ReleaseIPs(ctx, action)
+	_, err := n.ReleaseIPs(ctx, action)
+	return err
 }
 
 // appendAllocatedIPError append eni allocated ip error to bcenode
@@ -1904,6 +1894,300 @@ func (n *bceNetworkResourceSet) removeReleasedIPsFromENI(ctx context.Context, in
 			}
 		}
 		// Filter out released IPv6 addresses
+		for _, addr := range eni.Spec.ENI.IPV6PrivateIPSet {
+			if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
+				ipv6Addrs = append(ipv6Addrs, addr)
+			}
+		}
+		eni.Spec.ENI.PrivateIPSet = ipv4Addrs
+		eni.Spec.ENI.IPV6PrivateIPSet = ipv6Addrs
+		return eni
+	})
+}
+
+// releaseBatchIPsWithRetry attempts to release a batch of IPs with retry logic
+// Note: Each batch can only release up to 10 IPs at once due to API limitations
+func (n *bceNetworkResourceSet) releaseBatchIPsWithRetry(ctx context.Context, release *ipam.ReleaseAction, ipsToRelease []string, scopedLog *logrus.Entry) ([]string, error) {
+	var successfullyReleasedIPs []string
+	remainingIPs := make([]string, len(ipsToRelease))
+	copy(remainingIPs, ipsToRelease)
+
+	batchLog := scopedLog.WithFields(logrus.Fields{
+		"totalIPs":          len(ipsToRelease),
+		"selectedInterface": release.InterfaceID,
+	})
+
+	// 获取ENI信息，如果ENI不存在则直接退出
+	eni, err := n.manager.enilister.Get(string(release.InterfaceID))
+	if err != nil {
+		batchLog.WithError(err).Warn("Failed to get ENI, skipping IP release")
+		return successfullyReleasedIPs, err
+	}
+
+	retryCount := 0
+	// 持续重试批量释放，直到满足退出条件
+	for len(remainingIPs) > 0 {
+		batchLog.WithField("remainingIPs", len(remainingIPs)).Debug("Attempting batch IP release")
+
+		// 取出当前批次要处理的IP（最多10个）
+		currentBatchSize := len(remainingIPs)
+		if currentBatchSize > 10 {
+			currentBatchSize = 10
+		}
+		currentBatch := remainingIPs[:currentBatchSize]
+
+		batchLog.WithField("currentBatchSize", currentBatchSize).Debug("Processing current batch")
+
+		// 尝试释放当前批次的IP
+		err := n.attemptBatchRelease(ctx, release, currentBatch, eni, scopedLog)
+		if err == nil {
+			// 当前批次释放成功
+			successfullyReleasedIPs = append(successfullyReleasedIPs, currentBatch...)
+			remainingIPs = remainingIPs[currentBatchSize:]
+			batchLog.WithField("releasedCount", currentBatchSize).Debug("Current batch released successfully")
+			continue
+		}
+
+		// 检查是否为明确的错误
+		if n.isDefinitiveError(err) {
+			batchLog.WithError(err).Warning("Batch IP release failed with definitive error")
+			return successfullyReleasedIPs, err
+		}
+
+		// 对于不明确的错误，通过IaaS验证当前批次中哪些IP已经实际释放
+		verifiedReleasedIPs, stillPendingIPs := n.verifyReleasedIPs(ctx, release.InterfaceID, currentBatch, scopedLog)
+
+		// 更新已释放的IP列表
+		if len(verifiedReleasedIPs) > 0 {
+			successfullyReleasedIPs = append(successfullyReleasedIPs, verifiedReleasedIPs...)
+			batchLog.WithField("verifiedCount", len(verifiedReleasedIPs)).Info("IPs verified as released through IaaS check")
+		}
+
+		// 更新剩余待释放的IP列表
+		// 将当前批次中仍然待释放的IP与后续批次合并
+		newRemainingIPs := make([]string, 0, len(stillPendingIPs)+len(remainingIPs)-currentBatchSize)
+		newRemainingIPs = append(newRemainingIPs, stillPendingIPs...)
+		if currentBatchSize < len(remainingIPs) {
+			newRemainingIPs = append(newRemainingIPs, remainingIPs[currentBatchSize:]...)
+		}
+		remainingIPs = newRemainingIPs
+
+		if len(remainingIPs) == 0 {
+			break
+		}
+		retryCount++
+		// 等待重试延迟，每次重试延迟时间会指数增长
+		if err := n.waitForRetry(ctx, retryCount, err, batchLog); err != nil {
+			return successfullyReleasedIPs, err
+		}
+	}
+
+	batchLog.WithFields(logrus.Fields{
+		"totalReleased":  len(successfullyReleasedIPs),
+		"totalRequested": len(ipsToRelease),
+	}).Info("Batch IP release completed")
+
+	return successfullyReleasedIPs, nil
+}
+
+// attemptBatchRelease 尝试批量释放IP (最多10个IP)
+func (n *bceNetworkResourceSet) attemptBatchRelease(ctx context.Context, release *ipam.ReleaseAction, ipsToRelease []string, eni *ccev2.ENI, scopedLog *logrus.Entry) error {
+	if len(ipsToRelease) > 10 {
+		return fmt.Errorf("batch size %d exceeds maximum limit of 10", len(ipsToRelease))
+	}
+
+	// 分类IP为IPv4和IPv6
+	var ipv4ToRelease, ipv6ToRelease []string
+	for _, ipstr := range ipsToRelease {
+		ip := net.ParseIP(ipstr)
+		if ip == nil {
+			continue
+		}
+
+		if ip.To4() == nil {
+			// IPv6 - 检查是否在ENI中
+			for _, privateAddress := range eni.Spec.IPV6PrivateIPSet {
+				if privateAddress.PrivateIPAddress == ipstr {
+					ipv6ToRelease = append(ipv6ToRelease, ipstr)
+					break
+				}
+			}
+		} else {
+			// IPv4 - 检查是否在ENI中
+			for _, privateAddress := range eni.Spec.PrivateIPSet {
+				if privateAddress.PrivateIPAddress == ipstr {
+					ipv4ToRelease = append(ipv4ToRelease, ipstr)
+					break
+				}
+			}
+		}
+	}
+
+	// 释放IPv4地址
+	if len(ipv4ToRelease) > 0 {
+		err := n.real.releaseIPs(ctx, release, ipv4ToRelease, []string{})
+		if err != nil && !strings.Contains(err.Error(), "PrivateIpInvalid") {
+			scopedLog.WithError(err).WithField("ipv4ToRelease", ipv4ToRelease).Warn("Failed to release IPv4 addresses")
+			return err // 返回原始错误，保持错误类型用于后续判断
+		}
+		scopedLog.WithField("ipv4Released", len(ipv4ToRelease)).Debug("IPv4 addresses released")
+	}
+
+	// 释放IPv6地址
+	if len(ipv6ToRelease) > 0 {
+		err := n.real.releaseIPs(ctx, release, []string{}, ipv6ToRelease)
+		if err != nil && !strings.Contains(err.Error(), "PrivateIpInvalid") {
+			scopedLog.WithError(err).WithField("ipv6ToRelease", ipv6ToRelease).Warn("Failed to release IPv6 addresses")
+			return err // 返回原始错误，保持错误类型用于后续判断
+		}
+		scopedLog.WithField("ipv6Released", len(ipv6ToRelease)).Debug("IPv6 addresses released")
+	}
+
+	return nil
+}
+
+// isDefinitiveError 判断是否为明确的错误（如QPS限制、参数错误等）
+func (n *bceNetworkResourceSet) isDefinitiveError(err error) bool {
+	return cloud.IsErrorENIPrivateIPNotFound(err) ||
+		cloud.IsErrorRateLimit(err) ||
+		cloud.IsErrorQuotaLimitExceeded(err) ||
+		cloud.IsErrorBBCENIPrivateIPNotFound(err) ||
+		cloud.IsErrorBBCENIPrivateIPExceedLimit(err) ||
+		strings.Contains(err.Error(), "invalid parameter")
+}
+
+// verifyReleasedIPs 通过IaaS验证哪些IP已经实际释放
+func (n *bceNetworkResourceSet) verifyReleasedIPs(ctx context.Context, eniID string, remainingIPs []string, scopedLog *logrus.Entry) (verified, stillPending []string) {
+	// 一次性从IaaS获取ENI信息，避免多次API调用
+	iaasENI, err := n.getENIFromIaaS(ctx, eniID, scopedLog)
+	if err != nil {
+		scopedLog.WithError(err).Warning("Failed to get ENI info from IaaS for verification, treating all IPs as still pending")
+		return nil, remainingIPs
+	}
+
+	// 使用获取到的ENI信息验证每个IP
+	for _, ip := range remainingIPs {
+		if n.verifyIPReleasedWithENIInfo(ip, iaasENI, scopedLog) {
+			verified = append(verified, ip)
+			scopedLog.WithField("ip", ip).Debug("IP verified as released through IaaS check")
+		} else {
+			stillPending = append(stillPending, ip)
+		}
+	}
+
+	return verified, stillPending
+}
+
+// waitForRetry 等待重试延迟，使用指数退避
+func (n *bceNetworkResourceSet) waitForRetry(ctx context.Context, retryCount int, lastErr error, batchLog *logrus.Entry) error {
+	// 创建指数退避配置
+	backoffConfig := backoff.NewExponentialBackOff()
+	backoffConfig.InitialInterval = time.Second
+	backoffConfig.MaxInterval = 60 * time.Second
+	backoffConfig.Multiplier = 2.0
+	backoffConfig.RandomizationFactor = 0.1
+
+	// 使用context包装的backoff
+	b := backoff.WithContext(backoffConfig, ctx)
+
+	// 使用Ticker进行重试等待
+	ticker := backoff.NewTicker(b)
+	defer ticker.Stop()
+
+	// 等待下一个tick
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ticker.C:
+		batchLog.WithFields(logrus.Fields{
+			"error":      lastErr,
+			"retryCount": retryCount,
+		}).Warning("Batch IP release failed, retrying after backoff delay")
+		return nil
+	}
+}
+
+// getENIFromIaaS 从IaaS获取ENI信息，优化版本避免重复调用
+func (n *bceNetworkResourceSet) getENIFromIaaS(ctx context.Context, eniID string, scopedLog *logrus.Entry) (*eni.Eni, error) {
+	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// 从IaaS获取ENI详情
+	eniCache, err := n.bceclient.StatENI(verifyCtx, eniID)
+	if err != nil {
+		scopedLog.WithError(err).Warning("Failed to get ENI details from IaaS")
+		return nil, err
+	}
+
+	if eniCache == nil {
+		scopedLog.Warning("ENI not found in IaaS")
+		return nil, fmt.Errorf("ENI %s not found in IaaS", eniID)
+	}
+
+	// 转换为包装类型，与remote_eni_syncer.go中的模式一致
+	result := eni.Eni{}
+	result.Eni = *eniCache
+
+	scopedLog.WithField("eniID", eniID).Debug("Successfully retrieved ENI info from IaaS")
+	return &result, nil
+}
+
+// verifyIPReleasedWithENIInfo 使用已获取的ENI信息验证IP是否已释放
+func (n *bceNetworkResourceSet) verifyIPReleasedWithENIInfo(ip string, iaasENI *eni.Eni, scopedLog *logrus.Entry) bool {
+	if iaasENI == nil {
+		return false
+	}
+
+	// 检查IP是否在IaaS的ENI中
+	for _, privateIP := range iaasENI.PrivateIpSet {
+		if privateIP.PrivateIpAddress == ip {
+			scopedLog.WithField("ip", ip).Debug("IP still exists in IaaS ENI")
+			return false // IP仍然存在，说明没有释放成功
+		}
+	}
+
+	for _, ipv6IP := range iaasENI.Ipv6PrivateIpSet {
+		if ipv6IP.PrivateIpAddress == ip {
+			scopedLog.WithField("ip", ip).Debug("IPv6 IP still exists in IaaS ENI")
+			return false // IP仍然存在，说明没有释放成功
+		}
+	}
+
+	// IP不在IaaS的ENI中，说明已经成功释放
+	scopedLog.WithField("ip", ip).Debug("IP verified as released from IaaS ENI")
+	return true
+}
+
+// updateENIWithReleasedIPs 更新ENI，移除已释放的IP
+func (n *bceNetworkResourceSet) updateENIWithReleasedIPs(ctx context.Context, interfaceID string, releasedIPs []string, scopedLog *logrus.Entry) error {
+	if len(releasedIPs) == 0 {
+		return nil
+	}
+
+	eni, err := n.manager.enilister.Get(interfaceID)
+	if err != nil {
+		return fmt.Errorf("fail to get eni %s: %v", interfaceID, err)
+	}
+
+	// 创建已释放IP的映射表
+	releaseIPMap := make(map[string]bool)
+	for _, ipstr := range releasedIPs {
+		releaseIPMap[ipstr] = true
+	}
+
+	// 更新ENI，移除已释放的IP
+	return n.updateENIWithPoll(ctx, eni, func(eni *ccev2.ENI) *ccev2.ENI {
+		var (
+			ipv4Addrs []*models.PrivateIP
+			ipv6Addrs []*models.PrivateIP
+		)
+		// 过滤掉已释放的IPv4地址
+		for _, addr := range eni.Spec.ENI.PrivateIPSet {
+			if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
+				ipv4Addrs = append(ipv4Addrs, addr)
+			}
+		}
+		// 过滤掉已释放的IPv6地址
 		for _, addr := range eni.Spec.ENI.IPV6PrivateIPSet {
 			if _, ok := releaseIPMap[addr.PrivateIPAddress]; !ok {
 				ipv6Addrs = append(ipv6Addrs, addr)

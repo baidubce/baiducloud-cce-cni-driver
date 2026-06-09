@@ -102,7 +102,10 @@ func (m *InstancesManager) ForeachInstanceReadyOnNode(instanceID, nodeName strin
 	}
 
 	sort.Slice(enis, func(i, j int) bool {
-		return enis[i].CreationTimestamp.After(enis[j].CreationTimestamp.Time)
+		if enis[i].CreationTimestamp.Time.Equal(enis[j].CreationTimestamp.Time) {
+			return enis[i].Name > enis[j].Name
+		}
+		return enis[i].CreationTimestamp.Time.After(enis[j].CreationTimestamp.Time)
 	})
 	for i := 0; i < len(enis); i++ {
 		eni := enis[i]
@@ -167,14 +170,20 @@ func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	startTime := time.Now()
+	pollCount := 0
+
 	wait.PollImmediateUntilWithContext(ctx, 200*time.Millisecond, func(ctx context.Context) (done bool, err error) {
+		pollCount++
 		haveSynced := true
+
 		n.manager.ForeachInstanceReadyOnNode(n.instanceID, n.k8sObj.Name,
 			func(instanceID, interfaceID string, iface ipamTypes.InterfaceRevision) error {
 				e, ok := iface.Resource.(*eniResource)
 				if !ok {
 					return nil
 				}
+
 				n.mutex.Lock()
 				if version, ok := n.expiredVPCVersion[interfaceID]; ok {
 					if e.Spec.VPCVersion == version {
@@ -187,8 +196,20 @@ func (n *bceNetworkResourceSet) waitForENISynced(ctx context.Context) {
 
 				return nil
 			})
+
 		return haveSynced, nil
 	})
+
+	// 只在超时或多次轮询时才记录日志
+	totalTime := time.Since(startTime)
+	if totalTime >= 5*time.Second || pollCount > 10 {
+		n.log.WithFields(logrus.Fields{
+			"totalPolls": pollCount,
+			"totalTime":  totalTime,
+			"instanceID": n.instanceID,
+			"nodeName":   n.k8sObj.Name,
+		}).Debug("waitForENISynced completed")
+	}
 }
 
 // CreateInterface create a new ENI

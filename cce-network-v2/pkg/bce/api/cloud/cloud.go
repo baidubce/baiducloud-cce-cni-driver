@@ -17,6 +17,7 @@ package cloud
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/baidubce/bce-sdk-go/services/esg"
 	"github.com/baidubce/bce-sdk-go/services/vpc"
 	sdklog "github.com/baidubce/bce-sdk-go/util/log"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
 	eniExt "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/eni"
@@ -139,26 +141,54 @@ func New(
 	return c, nil
 }
 
-func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+func (c *Client) ListENIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
 
 	isTruncated := true
 	nextMarker := ""
 
 	for isTruncated {
-		t := time.Now()
+		// 每一页使用指数退避重试，最多重试10次，最大延迟10s
+		var res *eni.ListEniResult
+		var lastErr error
 
-		listArgs := &eni.ListEniArgs{
-			VpcId:      args.VpcId,
-			Name:       args.Name,
-			InstanceId: args.InstanceId,
-			Marker:     nextMarker,
+		backoff := wait.Backoff{
+			Duration: 1 * time.Second,  // 初始延迟1s
+			Factor:   2.0,              // 指数因子2.0
+			Steps:    10,               // 最多重试10次
+			Cap:      10 * time.Second, // 最大延迟10s
 		}
 
-		res, err := c.eniClient.ListEnis(listArgs)
-		exportMetric("ListENI", t, err)
+		err := wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+			t := time.Now()
+
+			listArgs := &eni.ListEniArgs{
+				VpcId:      args.VpcId,
+				Name:       args.Name,
+				InstanceId: args.InstanceId,
+				Marker:     nextMarker,
+			}
+
+			res, lastErr = c.eniClient.ListEnis(listArgs)
+			exportMetric("ListENI", t, lastErr)
+
+			if lastErr != nil {
+				log.Warnf("ListENI failed for marker %s, will retry: %v", nextMarker, lastErr)
+				return false, nil // 返回false表示需要重试
+			}
+
+			return true, nil // 成功
+		})
+
 		if err != nil {
-			return nil, err
+			// 重试耗尽或context取消
+			log.Errorf("ListENI failed after retries for marker %s: %v", nextMarker, lastErr)
+			return nil, lastErr
+		}
+
+		if res == nil {
+			log.Errorf("ListENI returned nil response")
+			return nil, fmt.Errorf("ListENI returned nil response")
 		}
 
 		enis = append(enis, res.Eni...)
@@ -170,26 +200,54 @@ func (c *Client) ListENIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, e
 	return enis, nil
 }
 
-func (c *Client) ListERIs(_ context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
+func (c *Client) ListERIs(ctx context.Context, args eni.ListEniArgs) ([]eni.Eni, error) {
 	var enis []eni.Eni
 
 	isTruncated := true
 	nextMarker := ""
 
 	for isTruncated {
-		t := time.Now()
+		// 每一页使用指数退避重试，最多重试10次，最大延迟10s
+		var res *eni.ListEniResult
+		var lastErr error
 
-		listArgs := &eni.ListEniArgs{
-			VpcId:      args.VpcId,
-			Name:       args.Name,
-			InstanceId: args.InstanceId,
-			Marker:     nextMarker,
+		backoff := wait.Backoff{
+			Duration: 1 * time.Second,  // 初始延迟1s
+			Factor:   2.0,              // 指数因子2.0
+			Steps:    10,               // 最多重试10次
+			Cap:      10 * time.Second, // 最大延迟10s
 		}
 
-		res, err := c.eniClient.ListEris(listArgs)
-		exportMetric("ListERI", t, err)
+		err := wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+			t := time.Now()
+
+			listArgs := &eni.ListEniArgs{
+				VpcId:      args.VpcId,
+				Name:       args.Name,
+				InstanceId: args.InstanceId,
+				Marker:     nextMarker,
+			}
+
+			res, lastErr = c.eniClient.ListEris(listArgs)
+			exportMetric("ListERI", t, lastErr)
+
+			if lastErr != nil {
+				log.Warnf("ListERI failed for marker %s, will retry: %v", nextMarker, lastErr)
+				return false, nil // 返回false表示需要重试
+			}
+
+			return true, nil // 成功
+		})
+
 		if err != nil {
-			return nil, err
+			// 重试耗尽或context取消
+			log.Errorf("ListERI failed after retries for marker %s: %v", nextMarker, lastErr)
+			return nil, lastErr
+		}
+
+		if res == nil {
+			log.Errorf("ListERI returned nil response")
+			return nil, fmt.Errorf("ListERI returned nil response")
 		}
 
 		enis = append(enis, res.Eni...)
@@ -278,6 +336,11 @@ func (c *Client) ListEIPs(_ context.Context, args eip.ListEipArgs) ([]eip.EipMod
 		exportMetric("ListEIP", t, err)
 		if err != nil {
 			return nil, err
+		}
+
+		if res == nil {
+			log.Errorf("ListEIP returned nil response")
+			return nil, fmt.Errorf("ListEIP returned nil response")
 		}
 
 		eips = append(eips, res.EipList...)
@@ -472,6 +535,11 @@ func (c *Client) ListSecurityGroup(ctx context.Context, vpcID, instanceID string
 			return nil, err
 		}
 
+		if res == nil {
+			log.Errorf("ListSecurityGroup returned nil response")
+			return nil, fmt.Errorf("ListSecurityGroup returned nil response")
+		}
+
 		securityGroups = append(securityGroups, res.SecurityGroups...)
 
 		nextMarker = res.NextMarker
@@ -506,6 +574,10 @@ func (c *Client) ListEsg(ctx context.Context, instanceID string) ([]esg.Enterpri
 		exportMetricAndLog(ctx, "ListEsg", t, err)
 		if err != nil {
 			return nil, err
+		}
+		if res == nil {
+			log.Errorf("ListEsg returned nil response")
+			return nil, fmt.Errorf("ListEsg returned nil response")
 		}
 		nextMarker = res.NextMarker
 		isTruncated = res.IsTruncated

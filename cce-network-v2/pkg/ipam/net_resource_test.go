@@ -56,12 +56,13 @@ type testNeededDef struct {
 }
 
 type testExcessDef struct {
-	available         int
-	used              int
-	preallocate       int
-	minallocate       int
-	maxabovewatermark int
-	result            int
+	available            int
+	used                 int
+	preallocate          int
+	minallocate          int
+	maxabovewatermark    int
+	readyForReleaseCount int
+	result               int
 }
 
 var neededDef = []testNeededDef{
@@ -78,16 +79,20 @@ var neededDef = []testNeededDef{
 }
 
 var excessDef = []testExcessDef{
-	{0, 0, 0, 16, 0, 0},
-	{15, 0, 8, 16, 8, 0},
-	{17, 0, 8, 16, 0, 9}, // 17 used, 8 pre-allocate, 16 min-allocate => 1 excess
-	{20, 0, 8, 16, 4, 0}, // 20 used, 8 pre-allocate, 16 min-allocate, 4 max-above-watermark => 0 excess
-	{21, 0, 8, 0, 4, 9},  // 21 used, 8 pre-allocate, 4 max-above-watermark => 9 excess
-	{20, 0, 8, 20, 8, 0},
-	{16, 1, 8, 16, 8, 0},
-	{20, 4, 8, 17, 8, 0},
-	{20, 4, 8, 0, 0, 8},
-	{20, 4, 8, 0, 8, 0},
+	{0, 0, 0, 16, 0, 0, 0},
+	{15, 0, 8, 16, 8, 0, 0},
+	{17, 0, 8, 16, 0, 0, 9}, // 17 used, 8 pre-allocate, 16 min-allocate => 1 excess
+	{20, 0, 8, 16, 4, 0, 0}, // 20 used, 8 pre-allocate, 16 min-allocate, 4 max-above-watermark => 0 excess
+	{21, 0, 8, 0, 4, 0, 9},  // 21 used, 8 pre-allocate, 4 max-above-watermark => 9 excess
+	{20, 0, 8, 20, 8, 0, 0},
+	{16, 1, 8, 16, 8, 0, 0},
+	{20, 4, 8, 17, 8, 0, 0},
+	{20, 4, 8, 0, 0, 0, 8},
+	{20, 4, 8, 0, 8, 0, 0},
+	// Test cases with readyForReleaseCount > 0
+	{12, 3, 8, 0, 1, 5, 5}, // available=12, used=3, pre=8, max=1 => excess=0, but readyForRelease=5 => total=5
+	{15, 3, 8, 0, 1, 3, 6}, // available=15, used=3, pre=8, max=1 => excess=3, readyForRelease=3 => total=6
+	{10, 5, 8, 0, 2, 2, 2}, // available=10, used=5, pre=8, max=2 => excess=0, readyForRelease=2 => total=2
 }
 
 func (e *IPAMSuite) TestCalculateNeededIPs(c *check.C) {
@@ -97,9 +102,55 @@ func (e *IPAMSuite) TestCalculateNeededIPs(c *check.C) {
 	}
 }
 
+// TestIsIPInReadyForReleaseStateLocked 测试isIPInReadyForReleaseStateLocked函数
+func (s *IPAMSuite) TestIsIPInReadyForReleaseStateLocked(c *check.C) {
+	// Given - 创建NetResource实例
+	nr := &NetResource{
+		ipReleaseStatus: make(map[string]string),
+	}
+
+	tests := []struct {
+		name     string
+		ip       string
+		status   map[string]string
+		expected bool
+	}{
+		{
+			name:     "IP exists in release status",
+			ip:       "10.0.0.1",
+			status:   map[string]string{"10.0.0.1": ipamOption.IPAMMarkForRelease},
+			expected: true,
+		},
+		{
+			name:     "IP does not exist in release status",
+			ip:       "10.0.0.2",
+			status:   map[string]string{"10.0.0.1": ipamOption.IPAMMarkForRelease},
+			expected: false,
+		},
+		{
+			name:     "Empty release status map",
+			ip:       "10.0.0.3",
+			status:   map[string]string{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		c.Logf("Running test: %s", tt.name)
+		// Given
+		nr.ipReleaseStatus = tt.status
+
+		// When
+		result := nr.isIPInReadyForReleaseStateLocked(tt.ip)
+
+		// Then
+		c.Assert(result, check.Equals, tt.expected, check.Commentf("Test case: %s", tt.name))
+	}
+}
+
 func (e *IPAMSuite) TestCalculateExcessIPs(c *check.C) {
 	for _, d := range excessDef {
-		result := calculateExcessIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxabovewatermark, 0)
+		result := calculateExcessIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxabovewatermark, 0, d.readyForReleaseCount)
 		c.Assert(result, check.Equals, d.result)
 	}
 }
@@ -155,11 +206,16 @@ func (m *mockNetResourceOperations) PrepareIPRelease(excessIPs int, scopedLog *l
 	return nil
 }
 
-func (m *mockNetResourceOperations) ReleaseIPs(ctx context.Context, release *ReleaseAction) error {
+func (m *mockNetResourceOperations) ReleaseIPs(ctx context.Context, release *ReleaseAction) ([]string, error) {
 	if m.onReleaseIPs != nil {
-		return m.onReleaseIPs(ctx, release)
+		err := m.onReleaseIPs(ctx, release)
+		// For backward compatibility, assume all IPs were released if no error
+		if err == nil {
+			return release.IPsToRelease, nil
+		}
+		return nil, err
 	}
-	return nil
+	return release.IPsToRelease, nil
 }
 
 // GetMaximumAllocatableIPv4 返回一个int类型的值，表示可以分配的最大IPv4地址数量。如果mockNetResourceOperations对象中存在onGetMaximumAllocatableIPv4函数，则调用该函数并返回其返回值；否则返回100。
@@ -875,6 +931,9 @@ func (e *IPAMSuite) TestRecalculate_GivenValidResource_WhenCalled_ThenUpdatesSta
 		"192.168.1.11": ipamTypes.AllocationIP{},
 	}
 
+	// Set up ENI spec with AvailabilityZone to trigger collectSubnetUsage
+	node.resource.Spec.ENI.AvailabilityZone = "us-west-1a"
+
 	// Set up available IPs
 	expectedAvailable := ipamTypes.AllocationMap{
 		"192.168.1.10": ipamTypes.AllocationIP{},
@@ -1496,4 +1555,258 @@ func (e *IPAMSuite) TestPopulateIPReleaseStatus_GivenStaleReleasedIPs_WhenCalled
 	// Target node should have the remaining IP
 	c.Assert(len(targetNode.Status.IPAM.ReleaseIPs), check.Equals, 1)
 	c.Assert(targetNode.Status.IPAM.ReleaseIPs["192.168.1.11"], check.Equals, ipamTypes.IPReleaseStatus(ipamOption.IPAMMarkForRelease))
+}
+
+// Test collectSubnetUsage method
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenEmptyUsedIPs_WhenCalled_ThenNoSubnetInfo(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	c.Assert(len(node.stats.SubnetInfos), check.Equals, 0)
+	c.Assert(node.stats.UsedIPs, check.Equals, 0)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenIPv4IPsWithSubnetID_WhenCalled_ThenCorrectSubnetInfo(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.1.11": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.2.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-456",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 2,
+			AZ:        "us-west-1a",
+		},
+		"subnet-456": {
+			UsedCount: 1,
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 3)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenIPv6IPs_WhenCalled_ThenIgnoreIPv6(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"2001:db8::1": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 1,
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 1)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenInvalidIPs_WhenCalled_ThenCountInvalidIPs(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"invalid-ip": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 2, // Both invalid IP and valid IP are counted
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 2)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenIPsWithoutSubnetID_WhenCalled_ThenUseUnknown(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "",
+		},
+		"192.168.1.11": ipamTypes.AllocationIP{
+			SubnetID: "",
+		},
+	}
+	node.resource.Status.ENIs = map[string]ccev2.SimpleENIStatus{
+		"eni-1": {
+			SubnetID: "subnet-from-eni",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"unknown": {
+			UsedCount: 2,
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 2)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenIPsWithoutSubnetIDAndNoENI_WhenCalled_ThenUseUnknown(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "",
+		},
+	}
+	node.resource.Status.ENIs = nil
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"unknown": {
+			UsedCount: 1,
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 1)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenIPsWithEmptyENIStatus_WhenCalled_ThenUseUnknown(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "",
+		},
+	}
+	node.resource.Status.ENIs = map[string]ccev2.SimpleENIStatus{
+		"eni-1": {
+			SubnetID: "",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"unknown": {
+			UsedCount: 1,
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 1)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenMixedIPv4AndIPv6WithSubnetID_WhenCalled_ThenCountIPv4AndInvalidIPs(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = make(map[string]SubnetInfo)
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"2001:db8::1": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.1.11": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"invalid-ip": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 3, // IPv4 addresses + invalid IP (IPv6 is ignored)
+			AZ:        "us-west-1a",
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 3)
+}
+
+func (e *IPAMSuite) TestCollectSubnetUsage_GivenExistingSubnetInfos_WhenCalled_ThenUpdateExistingCounts(c *check.C) {
+	// Given
+	node := createMockNetResource("test-node")
+	node.stats.SubnetInfos = map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 5,
+			AZ:        "us-west-1b",
+		},
+	}
+	node.resource.Status.IPAM.Used = ipamTypes.AllocationMap{
+		"192.168.1.10": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+		"192.168.1.11": ipamTypes.AllocationIP{
+			SubnetID: "subnet-123",
+		},
+	}
+
+	// When
+	node.collectSubnetUsage("us-west-1a")
+
+	// Then
+	expectedSubnetInfos := map[string]SubnetInfo{
+		"subnet-123": {
+			UsedCount: 7,            // 5 + 2
+			AZ:        "us-west-1a", // Updated AZ
+		},
+	}
+	c.Assert(node.stats.SubnetInfos, check.DeepEquals, expectedSubnetInfos)
+	c.Assert(node.stats.UsedIPs, check.Equals, 2)
 }

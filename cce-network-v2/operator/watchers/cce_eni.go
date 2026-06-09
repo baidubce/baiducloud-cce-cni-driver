@@ -57,7 +57,9 @@ func StartSynchronizingENI(ctx context.Context, eniManager syncer.ENIEventHandle
 		return eniManager.Update(obj)
 	}
 
-	eniManager.ResyncENI(ctx)
+	// Remove redundant ResyncENI call here since StartENISyncer already performs
+	// initial sync via RunOnce. This avoids duplicate VPC API calls during startup.
+	// eniManager.ResyncENI(ctx)
 	controller := cm.NewResyncController("cce-eni-controller", int(operatorOption.Config.EniResourceResyncWorkers), k8s.GetQPS(), k8s.GetBurst(),
 		k8s.CCEClient().Informers.Cce().V2().ENIs().Informer(),
 		eniSyncHandler)

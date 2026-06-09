@@ -6,21 +6,35 @@ import (
 
 	bceclound "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/cloud"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/metadata"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/utils"
 )
 
 type HpcClient struct {
-	cloud bceclound.Interface
+	cloud     bceclound.Interface
+	hpasCloud bceclound.Interface
 }
 
-func NewHpcClient(cloud bceclound.Interface) *HpcClient {
+func NewHpcClient(cloud, hpasCloud bceclound.Interface) *HpcClient {
 	return &HpcClient{
-		cloud: cloud,
+		cloud:     cloud,
+		hpasCloud: hpasCloud,
 	}
 }
 
 func (c *HpcClient) ListEnis(ctx context.Context, _, instanceID string) ([]EniResult, error) {
+	// Determine which cloud client to use based on instance type
+	instanceType, err := utils.GetNrsTypeByInstanceID(instanceID)
+	if err != nil {
+		return nil, err
+	}
 
-	hpcEniList, err := c.cloud.GetHPCEniID(ctx, instanceID)
+	var hpcEniList *hpc.EniList
+	if instanceType == string(metadata.InstanceTypeExHPAS) {
+		hpcEniList, err = c.hpasCloud.GetHPCEniID(ctx, instanceID)
+	} else {
+		hpcEniList, err = c.cloud.GetHPCEniID(ctx, instanceID)
+	}
 
 	if err != nil {
 		return nil, err

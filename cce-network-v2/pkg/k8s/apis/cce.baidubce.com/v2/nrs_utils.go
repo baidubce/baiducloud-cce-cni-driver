@@ -8,6 +8,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// StatusOK represents the ok status
+	StatusOK = "ok"
+	// StatusFailed represents the failed status
+	StatusFailed = "failed"
+)
+
 var (
 	effectiveENIErrorDuration = 2 * time.Minute
 )
@@ -93,7 +100,11 @@ func (n *NetResourceSet) SpeculationNoMoreIPReson(crossSubnet bool) error {
 }
 
 func NewErrorStatusChange(msg string) *StatusChange {
-	return NewCustomerErrorStatusChange(ErrorCodeOpenAPIError, msg)
+	return NewCustomerErrorStatusChange(StatusFailed, msg)
+}
+
+func NewOKStatusChange(msg string) *StatusChange {
+	return NewCustomerErrorStatusChange(StatusOK, msg)
 }
 
 func NewCustomerErrorStatusChange(code, msg string) *StatusChange {

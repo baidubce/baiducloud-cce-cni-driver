@@ -17,7 +17,6 @@ package ipam
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -25,8 +24,6 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
-	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -86,6 +83,14 @@ type nodeStore struct {
 
 	conf      Configuration
 	mtuConfig MtuConfiguration
+
+	// lastReleaseHandshakeStart records the time when agent starts handling
+	// a release-handshake decision (from detecting operator mark to our ack/nack).
+	// It is used only for logging end-to-end latency until CR status UpdateStatus.
+	lastReleaseHandshakeStart time.Time
+	// lastReleaseIPs keeps the IPs involved in the last release-handshake decision
+	// for correlation in logs.
+	lastReleaseIPs []string
 }
 
 // newNetResourceSetStore initializes a new store which reflects the NetResourceSet custom
@@ -143,6 +148,9 @@ func newNetResourceSetStore(networkResourceSetName string, conf Configuration, o
 						valid = true
 						newNrs = newNrs.DeepCopy()
 						store.updateLocalNodeResource(newNrs)
+						log.WithFields(logrus.Fields{
+							"node": newNrs.Name,
+						}).Info("Updating local node resource")
 						k8sEventReg.K8sEventProcessed("NetResourceSet", "update", true)
 					} else {
 						log.Warningf("Unknown NetResourceSet object type %T received: %+v", oldNrs, oldNrs)
@@ -293,6 +301,27 @@ func (n *nodeStore) deleteLocalNodeResource() {
 // the local node has been added or updated. It updates the available IPs based
 // on the custom resource passed into the function.
 func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
+	log.WithFields(logrus.Fields{
+		"node": node.Name,
+	}).Info("Updating local node resource")
+
+	// Log the entry of the release-handshake evaluation window
+	// so we can measure from here to the CR status update.
+	n.mutex.Lock()
+	if node != nil && node.Status.IPAM.ReleaseIPs != nil {
+		ips := make([]string, 0, len(node.Status.IPAM.ReleaseIPs))
+		for ip := range node.Status.IPAM.ReleaseIPs {
+			ips = append(ips, ip)
+		}
+		n.lastReleaseHandshakeStart = time.Now()
+		n.lastReleaseIPs = ips
+		log.WithFields(logrus.Fields{
+			"node":       node.Name,
+			"releaseIPs": ips,
+			"startTime":  n.lastReleaseHandshakeStart.Format(time.RFC3339Nano),
+		}).Info("release-handshake: enter evaluation")
+	}
+	n.mutex.Unlock()
 
 	n.mutex.Lock()
 	n.ownNode = node
@@ -331,32 +360,7 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 			continue
 		}
 		if _, ok := n.ownNode.Spec.IPAM.Pool[ip]; !ok {
-			if status == ipamOption.IPAMReleased {
-				// Remove entry from release-ips only when it is removed from .spec.ipam.pool as well
-				delete(n.ownNode.Status.IPAM.ReleaseIPs, ip)
-				releaseUpstreamSyncNeeded = true
-
-				// Remove the unreachable route for this IP
-				if n.conf.UnreachableRoutesEnabled() {
-					parsedIP := net.ParseIP(ip)
-					if parsedIP == nil {
-						// Unable to parse IP, no point in trying to remove the route
-						log.Warningf("Unable to parse IP %s", ip)
-						continue
-					}
-
-					err := netlink.RouteDel(&netlink.Route{
-						Dst:   &net.IPNet{IP: parsedIP, Mask: net.CIDRMask(32, 32)},
-						Table: unix.RT_TABLE_MAIN,
-						Type:  unix.RTN_UNREACHABLE,
-					})
-					if err != nil && !errors.Is(err, unix.ESRCH) {
-						// We ignore ESRCH, as it means the entry was already deleted
-						log.WithError(err).Warningf("Unable to delete unreachable route for IP %s", ip)
-						continue
-					}
-				}
-			} else if status == ipamOption.IPAMMarkForRelease {
+			if status == ipamOption.IPAMMarkForRelease {
 				// NACK the IP, if this node doesn't own the IP
 				n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMDoNotRelease
 				releaseUpstreamSyncNeeded = true
@@ -402,12 +406,19 @@ func (n *nodeStore) updateLocalNodeResource(node *ccev2.NetResourceSet) {
 			n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMDoNotRelease
 		} else {
 			n.ownNode.Status.IPAM.ReleaseIPs[ip] = ipamOption.IPAMReadyForRelease
+			log.WithFields(logrus.Fields{
+				"ip": ip,
+			}).Info("IP marked for release")
 		}
 		n.mutex.Unlock()
 		allocator.mutex.RUnlock()
 	}
 
 	if releaseUpstreamSyncNeeded {
+		log.WithFields(logrus.Fields{
+			"node":       node.Name,
+			"releaseIPs": n.lastReleaseIPs,
+		}).Info("release-handshake: trigger refresh for UpdateStatus")
 		n.refreshTrigger.TriggerWithReason("excess IP release")
 	}
 }
@@ -431,6 +442,12 @@ func (n *nodeStore) refreshNodeTrigger(reasons []string) {
 	if len(reasons) > 0 {
 		log.WithField("reasons", reasons).Debug("Updating NRS due to IP allocation changes")
 	}
+	// Log the time when refresh is about to be attempted; this stands for the
+	// moment we start heading to UpdateStatus.
+	log.WithFields(logrus.Fields{
+		"releaseIPs": n.lastReleaseIPs,
+		"sinceEnter": time.Since(n.lastReleaseHandshakeStart).String(),
+	}).Info("release-handshake: before refreshNode")
 	if err := n.refreshNode(); err != nil {
 		log.WithError(err).Warning("Unable to update NetResourceSet custom resource")
 		n.refreshTrigger.TriggerWithReason("retry after error")
@@ -463,7 +480,17 @@ func (n *nodeStore) refreshNode() error {
 
 	var err error
 	cceClient := k8s.CCEClient()
+	start := time.Now()
 	_, err = cceClient.CceV2().NetResourceSets().UpdateStatus(context.TODO(), node, metav1.UpdateOptions{})
+	end := time.Now()
+	// Log the end-to-end timing from enter evaluation -> trigger -> UpdateStatus
+	log.WithFields(logrus.Fields{
+		"node":          node.Name,
+		"releaseIPs":    n.lastReleaseIPs,
+		"enterToUpdate": end.Sub(n.lastReleaseHandshakeStart).String(),
+		"updateLatency": end.Sub(start).String(),
+		"error":         err,
+	}).Info("release-handshake: UpdateStatus completed")
 
 	return err
 }

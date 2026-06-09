@@ -27,7 +27,7 @@ func (s *ENIStatus) AppendVPCStatus(vpcStatus VPCENIStatus) {
 
 		change := ENIStatusChange{
 			StatusChange: StatusChange{
-				Code: "ok",
+				Code: StatusOK,
 				Time: metav1.Now(),
 			},
 			VPCStatus: vpcStatus,
@@ -55,7 +55,7 @@ func (s *ENIStatus) AppendCCEENIStatus(status CCEENIStatus) {
 	}
 	change := ENIStatusChange{
 		StatusChange: StatusChange{
-			Code:    "ok",
+			Code:    StatusOK,
 			Message: string(status),
 			Time:    metav1.Now(),
 		},

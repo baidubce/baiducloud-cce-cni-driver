@@ -8,7 +8,21 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.2 [暂未发布]
+#### 2.13.4[暂未发布]
+1. [Oprimize] 支持 RDMA 场景下，在申请 rdmaroce 类型网卡 ip 时遭遇 cce-network-operator 意外重启，导致 RDMA 网卡 ip 泄露与其网卡所在节点的 cce-network-agent 无法就绪问题
+2. [Bug] 修复 eni 异常状态下由于状态码不一致导致下无法写入 nrs 的status的情况
+3. [Optimize] 支持 RDMA 场景下，在 RDMA 网卡意外掉卡时，弹性网卡 ENI 的使用在重启节点或者重启节点操作系统网络守护进程时不受影响
+4. [Bug] 修复当用户手动挂载弹性网卡后，网络组件无法申请新的弹性网卡的问题
+5. [Feature] 新增子网IP使用情况监控指标，提供细粒度的子网资源可观测性，支持按集群ID、子网ID、可用区等维度进行标签分类
+   - `cce_subnet_ips_count`: 统计子网总IP数量
+   - `cce_subnet_ips_available`: 统计子网可用IP数量
+   - `cce_subnet_ips_used`: 统计子网被容器实际使用的IP数量
+6. [Bug] 修复容器网络释放IP，部分IP卡在中间状态导致节点分配IP失败的问题。
+7. [Bug] 修复virtio-pci目录创建没有权限的问题。
+8. [Bug] 修复 ERI 全生命周期管理全局开关不生效的问题
+
+
+#### 2.13.3 [2024/09/24]
 1. [Feature] VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 2. [Feature] VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 3. [Optimize] 为节点设置 ccesubnetUnavailable 的状态以描述当前节点子网资源状态

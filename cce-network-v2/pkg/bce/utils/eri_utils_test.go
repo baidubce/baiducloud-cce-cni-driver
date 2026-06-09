@@ -55,19 +55,18 @@ func (m *eriMockMetaClient) GetLocalIPv4() (string, error)                      
 func (m *eriMockMetaClient) GetRegion() (string, error)                               { return "", nil }
 func (m *eriMockMetaClient) GetLinkMask(macAddress, ipAddress string) (string, error) { return "", nil }
 
-func TestHasERIManagementLabel_GivenNilNode_WhenCalled_ThenReturnFalseFalse(t *testing.T) {
+func TestEnableERI_GivenNilNode_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
 	var k8sNode *corev1.Node = nil
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, true)
 
 	// Then
-	assert.False(t, hasLabel)
-	assert.False(t, isEnabled)
+	assert.False(t, result)
 }
 
-func TestHasERIManagementLabel_GivenNodeWithNilLabels_WhenCalled_ThenReturnFalseFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithNilLabels_WhenCalled_ThenReturnGlobalConfig(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -76,15 +75,12 @@ func TestHasERIManagementLabel_GivenNodeWithNilLabels_WhenCalled_ThenReturnFalse
 		},
 	}
 
-	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
-
-	// Then
-	assert.False(t, hasLabel)
-	assert.False(t, isEnabled)
+	// When & Then
+	assert.True(t, EnableERI(k8sNode, true))
+	assert.False(t, EnableERI(k8sNode, false))
 }
 
-func TestHasERIManagementLabel_GivenNodeWithNoERILabel_WhenCalled_ThenReturnFalseFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithNoERILabel_WhenCalled_ThenReturnGlobalConfig(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -95,15 +91,12 @@ func TestHasERIManagementLabel_GivenNodeWithNoERILabel_WhenCalled_ThenReturnFals
 		},
 	}
 
-	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
-
-	// Then
-	assert.False(t, hasLabel)
-	assert.False(t, isEnabled)
+	// When & Then
+	assert.True(t, EnableERI(k8sNode, true))
+	assert.False(t, EnableERI(k8sNode, false))
 }
 
-func TestHasERIManagementLabel_GivenNodeWithERILabelTrue_WhenCalled_ThenReturnTrueTrue(t *testing.T) {
+func TestEnableERI_GivenNodeWithERILabelTrue_WhenCalled_ThenReturnTrue(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -115,14 +108,13 @@ func TestHasERIManagementLabel_GivenNodeWithERILabelTrue_WhenCalled_ThenReturnTr
 	}
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, false)
 
 	// Then
-	assert.True(t, hasLabel)
-	assert.True(t, isEnabled)
+	assert.True(t, result)
 }
 
-func TestHasERIManagementLabel_GivenNodeWithERILabelFalse_WhenCalled_ThenReturnTrueFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithERILabelFalse_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -134,14 +126,13 @@ func TestHasERIManagementLabel_GivenNodeWithERILabelFalse_WhenCalled_ThenReturnT
 	}
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, true)
 
 	// Then
-	assert.True(t, hasLabel)
-	assert.False(t, isEnabled)
+	assert.False(t, result)
 }
 
-func TestHasERIManagementLabel_GivenNodeWithERILabelInvalidValue_WhenCalled_ThenReturnTrueFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithERILabelInvalidValue_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -153,14 +144,13 @@ func TestHasERIManagementLabel_GivenNodeWithERILabelInvalidValue_WhenCalled_Then
 	}
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, true)
 
 	// Then
-	assert.True(t, hasLabel)
-	assert.False(t, isEnabled)
+	assert.False(t, result)
 }
 
-func TestHasERIManagementLabel_GivenNodeWithERILabelEmptyString_WhenCalled_ThenReturnTrueFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithERILabelEmptyString_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -172,14 +162,13 @@ func TestHasERIManagementLabel_GivenNodeWithERILabelEmptyString_WhenCalled_ThenR
 	}
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, true)
 
 	// Then
-	assert.True(t, hasLabel)
-	assert.False(t, isEnabled)
+	assert.False(t, result)
 }
 
-func TestHasERIManagementLabel_GivenNodeWithERILabelUpperCaseTrue_WhenCalled_ThenReturnTrueFalse(t *testing.T) {
+func TestEnableERI_GivenNodeWithERILabelUpperCaseTrue_WhenCalled_ThenReturnFalse(t *testing.T) {
 	// Given
 	k8sNode := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -191,11 +180,10 @@ func TestHasERIManagementLabel_GivenNodeWithERILabelUpperCaseTrue_WhenCalled_The
 	}
 
 	// When
-	hasLabel, isEnabled := HasERIManagementLabel(k8sNode)
+	result := EnableERI(k8sNode, true)
 
 	// Then
-	assert.True(t, hasLabel)
-	assert.False(t, isEnabled)
+	assert.False(t, result)
 }
 
 // Note: The following tests are commented out because they would cause log.Fatal
@@ -358,6 +346,109 @@ func TestHasAvailableERIQuota_GivenLargeERIQuota_WhenCalled_ThenReturnTrue(t *te
 
 	// Then
 	assert.True(t, result)
+}
+
+// Table-driven tests for EnableERI
+func TestEnableERI_TableDriven(t *testing.T) {
+	type TestArgs struct {
+		node   *corev1.Node
+		global bool
+	}
+	type TestCase struct {
+		Name string
+		Args TestArgs
+		Want bool
+	}
+
+	cases := []TestCase{
+		{
+			Name: "Given_NilNode_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   nil,
+				global: true,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_NilLabels_And_GlobalTrue_When_EnableERI_Then_True",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1", Labels: nil}},
+				global: true,
+			},
+			Want: true,
+		},
+		{
+			Name: "Given_NilLabels_And_GlobalFalse_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1", Labels: nil}},
+				global: false,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_NoERILabel_And_GlobalTrue_When_EnableERI_Then_True",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n2", Labels: map[string]string{"other": "v"}}},
+				global: true,
+			},
+			Want: true,
+		},
+		{
+			Name: "Given_NoERILabel_And_GlobalFalse_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n2", Labels: map[string]string{"other": "v"}}},
+				global: false,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_ERILabelTrue_When_EnableERI_Then_True",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n3", Labels: map[string]string{k8s.LabelERIManagement: k8s.ValueStringTrue}}},
+				global: false,
+			},
+			Want: true,
+		},
+		{
+			Name: "Given_ERILabelFalse_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n4", Labels: map[string]string{k8s.LabelERIManagement: "false"}}},
+				global: true,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_ERILabelInvalid_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n5", Labels: map[string]string{k8s.LabelERIManagement: "invalid"}}},
+				global: true,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_ERILabelEmpty_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n6", Labels: map[string]string{k8s.LabelERIManagement: ""}}},
+				global: true,
+			},
+			Want: false,
+		},
+		{
+			Name: "Given_ERILabelUpperTRUE_When_EnableERI_Then_False",
+			Args: TestArgs{
+				node:   &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n7", Labels: map[string]string{k8s.LabelERIManagement: "TRUE"}}},
+				global: true,
+			},
+			Want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			got := EnableERI(tc.Args.node, tc.Args.global)
+			assert.Equal(t, tc.Want, got)
+		})
+	}
 }
 
 // Mock metadata client for GetERIManagedLabelSelector testing

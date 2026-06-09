@@ -28,17 +28,23 @@ import (
 	nodeTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/node/types"
 )
 
-// HasERIManagementLabel checks if the node has ERI management label and returns both existence and value
-// This function is decoupled from Daemon and can be used as a utility function
-func HasERIManagementLabel(k8sNode *corev1.Node) (bool, bool) {
+// EnableERI determines if ERI management should be enabled based on node label or global config
+// Returns true if ERI management should be enabled, false otherwise
+func EnableERI(k8sNode *corev1.Node, globalConfig bool) bool {
 	if k8sNode == nil {
 		log.Error("K8s node is nil")
-		return false, false
+		return false
 	}
 
 	if k8sNode.Labels == nil {
 		log.Debug("Node has no labels")
-		return false, false
+		// If no labels exist, use global configuration
+		log.WithFields(logrus.Fields{
+			"hasLabel":     false,
+			"globalConfig": globalConfig,
+			"nodeName":     k8sNode.Name,
+		}).Info("ERI management determined by global configuration")
+		return globalConfig
 	}
 
 	labelValue, hasLabel := k8sNode.Labels[k8s.LabelERIManagement]
@@ -49,7 +55,24 @@ func HasERIManagementLabel(k8sNode *corev1.Node) (bool, bool) {
 		"nodeName":   k8sNode.Name,
 	}).Info("Checked ERI management label")
 
-	return hasLabel, hasLabel && labelValue == k8s.ValueStringTrue
+	if hasLabel {
+		// If label exists, use label value to determine ERI management
+		isEnabled := labelValue == k8s.ValueStringTrue
+		log.WithFields(logrus.Fields{
+			"hasLabel":  hasLabel,
+			"isEnabled": isEnabled,
+			"nodeName":  k8sNode.Name,
+		}).Info("ERI management determined by node label")
+		return isEnabled
+	}
+
+	// If no label exists, use global configuration
+	log.WithFields(logrus.Fields{
+		"hasLabel":     hasLabel,
+		"globalConfig": globalConfig,
+		"nodeName":     k8sNode.Name,
+	}).Info("ERI management determined by global configuration")
+	return globalConfig
 }
 
 // HasAvailableERIQuota checks if there is available ERI quota

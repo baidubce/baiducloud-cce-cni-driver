@@ -356,6 +356,15 @@ var (
 
 	// SubnetIPsGuage is the gauge of available IPs in subnet and borrowed IPs by eni
 	SubnetIPsGuage = NoOpGaugeVec
+
+	// SubnetIPsCount is the gauge of total IP count in subnet
+	SubnetIPsCount = NoOpGaugeVec
+
+	// SubnetIPsAvailable is the gauge of available IP count in subnet
+	SubnetIPsAvailable = NoOpGaugeVec
+
+	// SubnetIPsUsed is the gauge of used IP count by containers in subnet
+	SubnetIPsUsed = NoOpGaugeVec
 )
 
 type Configuration struct {
@@ -385,6 +394,9 @@ type Configuration struct {
 	KubernetesCNPStatusCompletionEnabled bool
 	IpamEventEnabled                     bool
 	SubnetIPsGuageEnabled                bool
+	SubnetIPsCountEnabled                bool
+	SubnetIPsAvailableEnabled            bool
+	SubnetIPsUsedEnabled                 bool
 
 	VersionMetric                        bool
 	APILimiterProcessHistoryDuration     bool
@@ -428,6 +440,9 @@ func DefaultMetrics() map[string]struct{} {
 		Namespace + "_controller_handler_duration_milliseconds":                         {},
 		Namespace + "_ipam_error_counter":                                               {},
 		Namespace + "_subnet_ips_guage":                                                 {},
+		Namespace + "_subnet_ips_count":                                                 {},
+		Namespace + "_subnet_ips_available":                                             {},
+		Namespace + "_subnet_ips_used":                                                  {},
 	}
 }
 
@@ -605,6 +620,33 @@ func CreateConfiguration(metricsEnabled []string) (Configuration, []prometheus.C
 			}, []string{LabelKind, "eniid", "sbnid", "owner"})
 			collectors = append(collectors, SubnetIPsGuage)
 			c.SubnetIPsGuageEnabled = true
+
+		case Namespace + "_subnet_ips_count":
+			SubnetIPsCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: Namespace,
+				Name:      "subnet_ips_count",
+				Help:      "Total number of IP addresses in a subnet",
+			}, []string{"clusterID", "subnetID", "region"})
+			collectors = append(collectors, SubnetIPsCount)
+			c.SubnetIPsCountEnabled = true
+
+		case Namespace + "_subnet_ips_available":
+			SubnetIPsAvailable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: Namespace,
+				Name:      "subnet_ips_available",
+				Help:      "Number of available IP addresses in a subnet",
+			}, []string{"clusterID", "subnetID", "region"})
+			collectors = append(collectors, SubnetIPsAvailable)
+			c.SubnetIPsAvailableEnabled = true
+
+		case Namespace + "_subnet_ips_used":
+			SubnetIPsUsed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: Namespace,
+				Name:      "subnet_ips_used",
+				Help:      "Number of IP addresses used by containers in a subnet",
+			}, []string{"clusterID", "subnetID", "region"})
+			collectors = append(collectors, SubnetIPsUsed)
+			c.SubnetIPsUsedEnabled = true
 
 		case Namespace + "_version":
 			VersionMetric = prometheus.NewGaugeVec(prometheus.GaugeOpts{

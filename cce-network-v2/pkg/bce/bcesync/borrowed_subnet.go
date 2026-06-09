@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"sync"
 
+	"net"
+
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ip"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s"
 	ccev1 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v1"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
@@ -11,6 +14,7 @@ import (
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging/logfields"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/math"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -29,6 +33,38 @@ const (
 
 	EniTypeSubnet = "subnet"
 )
+
+// getClusterInfoFromSubnet returns clusterID and region from subnet structure
+func getClusterInfoFromSubnet(subnet *ccev1.Subnet) (string, string) {
+	clusterID := "default-cluster"
+	if option.Config.ClusterID != "" {
+		clusterID = option.Config.ClusterID
+	}
+
+	// Get region from subnet's availability zone
+	region := subnet.Spec.AvailabilityZone
+	if region == "" {
+		region = "unknown"
+	}
+
+	return clusterID, region
+}
+
+// calculateSubnetIPCount calculates total IP count from CIDR
+func calculateSubnetIPCount(cidr string) int64 {
+	if cidr == "" {
+		return 0
+	}
+
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.WithField("cidr", cidr).WithError(err).Warning("Failed to parse CIDR")
+		return 0
+	}
+
+	count := ip.CountIPsInCIDR(ipNet)
+	return count.Int64()
+}
 
 // bsm is a global map of borrowed subnets
 type bsm struct {
@@ -102,6 +138,17 @@ func resyncBSM() error {
 		metrics.SubnetIPsGuage.WithLabelValues(IPKindAvailable, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.Status.AvailableIPNum))
 		metrics.SubnetIPsGuage.WithLabelValues(IPKindBorrowed, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.BorrowedIPsCount))
 		metrics.SubnetIPsGuage.WithLabelValues(IPKindBorrowedAvail, EniTypeSubnet, id, EniTypeSubnet).Set(float64(bs.BorrowedAvailableIPsCount))
+
+		// Report new subnet metrics - get region from subnet AZ
+		clusterID, region := getClusterInfoFromSubnet(bs.Subnet)
+
+		// Calculate total IP count from CIDR
+		totalIPCount := calculateSubnetIPCount(bs.Spec.CIDR)
+
+		metrics.SubnetIPsCount.WithLabelValues(clusterID, id, region).Set(float64(totalIPCount - 1))
+
+		// Report available IP count
+		metrics.SubnetIPsAvailable.WithLabelValues(clusterID, id, region).Set(float64(bs.Status.AvailableIPNum))
 	}
 	GlobalBSM().mutex.Lock()
 	GlobalBSM().subnets = subnets

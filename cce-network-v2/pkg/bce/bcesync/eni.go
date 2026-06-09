@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
@@ -156,8 +157,38 @@ func (es *eniSyncher) Init(ctx context.Context) error {
 func (es *eniSyncher) StartENISyncer(ctx context.Context, updater syncer.ENIUpdater) syncer.ENIEventHandler {
 	es.remoteSyncer.setENIUpdater(updater)
 	es.updater = updater
-	es.syncManager.Run()
-	eniLog.WithField(taskLogField, eniControllerName).Infof("ENISyncher is running")
+
+	// Execute sync only once at startup to reduce QPS
+	// Previously this was running periodically every 60 seconds causing high QPS
+	// when multiple clusters are running simultaneously
+	// This is the primary startup sync - no additional sync calls are needed elsewhere
+
+	// Retry startup sync with exponential backoff (3 attempts: 1s, 2s, 4s)
+	// Block operator startup if all attempts fail
+	err := wait.ExponentialBackoffWithContext(ctx,
+		wait.Backoff{
+			Duration: time.Second,
+			Factor:   2.0,
+			Steps:    3},
+		func() (bool, error) {
+			if err := es.syncManager.RunOnce(ctx); err != nil {
+				eniLog.WithError(err).Warn("startup ENI sync failed, retrying...")
+				return false, nil // retry
+			}
+			eniLog.Info("startup ENI sync succeeded")
+			return true, nil // success
+		})
+
+	if err != nil {
+		eniLog.WithError(err).Fatal("startup ENI sync failed after 3 attempts, blocking operator startup")
+	}
+
+	// Periodic sync is disabled to reduce QPS pressure on VPC APIs
+	// If periodic sync is needed in the future, uncomment the line below and implement
+	// intelligent sync mechanism based on events rather than fixed intervals
+	// es.syncManager.Run()
+
+	eniLog.WithField(taskLogField, eniControllerName).Infof("ENISyncher startup sync completed (periodic sync disabled)")
 	return es
 }
 

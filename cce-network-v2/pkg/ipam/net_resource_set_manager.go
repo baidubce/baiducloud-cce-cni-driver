@@ -32,6 +32,8 @@ import (
 	v2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/lock"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/logging"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/metrics"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/trigger"
 )
 
@@ -90,8 +92,8 @@ type NetResourceOperations interface {
 	PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ReleaseAction
 
 	// ReleaseIPs is called after invoking PrepareIPRelease and needs to
-	// perform the release of IPs.
-	ReleaseIPs(ctx context.Context, release *ReleaseAction) error
+	// perform the release of IPs. Returns the list of successfully released IPs.
+	ReleaseIPs(ctx context.Context, release *ReleaseAction) ([]string, error)
 
 	// GetMaximumAllocatableIPv4 returns the maximum amount of IPv4 addresses
 	// that can be allocated to the instance
@@ -448,17 +450,39 @@ type resyncStats struct {
 	nodes               int
 	nodesAtCapacity     int
 	nodesInDeficit      int
+	subnetUsedCounts    map[string]int
+	subnetAZs           map[string]string
 }
 
 func (n *NetResourceSetManager) resyncNode(ctx context.Context, nr *NetResource, stats *resyncStats, syncTime time.Time) {
 	if nr == nil {
 		return
 	}
+
+	startTime := time.Now()
+	log.WithFields(logrus.Fields{
+		"node":     nr.name,
+		"syncTime": syncTime.Format(time.RFC3339Nano),
+	}).Info("resync: starting node resync")
+
+	var allocationNeeded bool
+	var releaseNeeded bool
+
+	defer func() {
+		log.WithFields(logrus.Fields{
+			"node":             nr.name,
+			"allocationNeeded": allocationNeeded,
+			"releaseNeeded":    releaseNeeded,
+			"recalcDuration":   time.Since(startTime).String(),
+		}).Info("resync: node recalculation completed")
+	}()
+
 	nr.SetRunning()
 	nr.updateLastResync(syncTime)
 	nr.recalculate()
-	allocationNeeded := nr.allocationNeeded()
-	releaseNeeded := nr.releaseNeeded()
+	allocationNeeded = nr.allocationNeeded()
+	releaseNeeded = nr.releaseNeeded()
+
 	if allocationNeeded || releaseNeeded {
 		nr.poolMaintainer.Trigger()
 	}
@@ -472,6 +496,13 @@ func (n *NetResourceSetManager) resyncNode(ctx context.Context, nr *NetResource,
 	stats.totalNeeded += nodeStats.NeededIPs
 	stats.remainingInterfaces += nodeStats.RemainingInterfaces
 	stats.nodes++
+
+	if nodeStats.SubnetInfos != nil {
+		for subnetID, subnetInfo := range nodeStats.SubnetInfos {
+			stats.subnetUsedCounts[subnetID] += subnetInfo.UsedCount
+			stats.subnetAZs[subnetID] = subnetInfo.AZ
+		}
+	}
 
 	if allocationNeeded {
 		stats.nodesInDeficit++
@@ -491,7 +522,10 @@ func (n *NetResourceSetManager) resyncNode(ctx context.Context, nr *NetResource,
 // watermarks. Any updates to the node resource are synchronized to the
 // Kubernetes apiserver.
 func (n *NetResourceSetManager) Resync(ctx context.Context, syncTime time.Time) {
-	stats := resyncStats{}
+	stats := resyncStats{
+		subnetUsedCounts: make(map[string]int),
+		subnetAZs:        make(map[string]string),
+	}
 	sem := semaphore.NewWeighted(n.parallelWorkers)
 
 	start := time.Now()
@@ -543,5 +577,9 @@ func (n *NetResourceSetManager) Resync(ctx context.Context, syncTime time.Time) 
 
 	for poolID, quota := range n.instancesAPI.GetPoolQuota() {
 		n.metricsAPI.SetAvailableIPsPerSubnet(string(poolID), quota.AvailabilityZone, quota.AvailableIPs)
+	}
+
+	for subnetID, count := range stats.subnetUsedCounts {
+		metrics.SubnetIPsUsed.WithLabelValues(option.Config.ClusterID, subnetID, stats.subnetAZs[subnetID]).Set(float64(count))
 	}
 }

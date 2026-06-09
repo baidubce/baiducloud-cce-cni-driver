@@ -83,7 +83,7 @@ spec:
             - mountPath: /sys
               readOnly: true 
               name: sys
-            - mountPath: /sys/bus/pci/drivers/virtio-pci
+            - mountPath: /sys/bus/pci/drivers
               readOnly:  false
               name: virtio-pci-dir
             - mountPath: /usr-host
@@ -149,7 +149,7 @@ spec:
             type: ""
           name: sys
         - hostPath:
-            path: /sys/bus/pci/drivers/virtio-pci
+            path: /sys/bus/pci/drivers
             type: ""
           name: virtio-pci-dir
         - hostPath:

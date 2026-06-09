@@ -2152,7 +2152,7 @@ func TestReleaseIPs(t *testing.T) {
 			node, release := tt.setupFunc(t)
 
 			ctx := context.Background()
-			err := node.ReleaseIPs(ctx, release)
+			_, err := node.ReleaseIPs(ctx, release)
 
 			assert.NoError(t, err, "ReleaseIPs should not return error for nil or empty release action")
 		})

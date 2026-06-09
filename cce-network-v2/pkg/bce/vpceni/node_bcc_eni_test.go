@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/api/v1/models"
 	hpcapi "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api/hpc"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
 	ccev2 "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/k8s/apis/cce.baidubce.com/v2"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/option"
@@ -749,4 +751,117 @@ func TestCreateNameForENI(t *testing.T) {
 		assert.NoError(t, err, "Regex matching error")
 		assert.True(t, matched, "The created ENI name should match the format: 'name/6-character suffix'")
 	})
+}
+
+// ############################################################
+// createInterface Related Tests
+// ############################################################
+
+// TestBccNetworkResourceSet_createInterface_GivenCooldownTime_WhenCreateInterface_ThenReturnError 测试冷却时间逻辑
+func TestBccNetworkResourceSet_createInterface_GivenCooldownTime_WhenCreateInterface_ThenReturnError(t *testing.T) {
+	// Given
+	n := &bccNetworkResourceSet{
+		bceNetworkResourceSet: &bceNetworkResourceSet{
+			nextCreateENITime: &time.Time{},
+		},
+	}
+	// 设置冷却时间为未来时间
+	futureTime := time.Now().Add(1 * time.Hour)
+	n.nextCreateENITime = &futureTime
+
+	ctx := context.Background()
+	allocation := &ipam.AllocationAction{}
+	scopedLog := logrus.NewEntry(logrus.New())
+
+	// When
+	interfaceNum, msg, err := n.createInterface(ctx, allocation, scopedLog)
+
+	// Then
+	assert.Equal(t, 0, interfaceNum)
+	assert.Contains(t, msg, "unable to create new ENI: cooling down")
+	assert.Error(t, err)
+}
+
+// TestBccNetworkResourceSet_createInterface_GivenNoENIQuota_WhenCreateInterface_ThenReturnError 测试ENI配额为空的情况
+func TestBccNetworkResourceSet_createInterface_GivenNoENIQuota_WhenCreateInterface_ThenReturnError(t *testing.T) {
+	// Given
+	n := &bccNetworkResourceSet{
+		bceNetworkResourceSet: &bceNetworkResourceSet{
+			k8sObj: &ccev2.NetResourceSet{},
+		},
+	}
+
+	ctx := context.Background()
+	allocation := &ipam.AllocationAction{}
+	scopedLog := logrus.NewEntry(logrus.New())
+
+	// When
+	interfaceNum, msg, err := n.createInterface(ctx, allocation, scopedLog)
+
+	// Then
+	assert.Equal(t, 0, interfaceNum)
+	assert.Equal(t, errUnableToGetEniQuota, msg)
+	assert.Error(t, err)
+}
+
+// Mock types for testing createInterface
+type mockENIQuota struct {
+	mock.Mock
+}
+
+func (m *mockENIQuota) GetMaxENI() int {
+	args := m.Called()
+	return args.Int(0)
+}
+
+func (m *mockENIQuota) GetMaxIP() int {
+	args := m.Called()
+	return args.Int(0)
+}
+
+func (m *mockENIQuota) SetMaxENI(max int) {
+	m.Called(max)
+}
+
+func (m *mockENIQuota) SetMaxIP(max int) {
+	m.Called(max)
+}
+
+type mockInstancesManager struct {
+	mock.Mock
+}
+
+func (m *mockInstancesManager) ForeachInstanceReadyOnNode(instanceID, nodeName string, fn ipamTypes.InterfaceIterator) error {
+	args := m.Called(instanceID, nodeName, fn)
+	return args.Error(0)
+}
+
+func (m *mockInstancesManager) ForeachInstance(instanceID string, fn ipamTypes.InterfaceIterator) error {
+	args := m.Called(instanceID, fn)
+	return args.Error(0)
+}
+
+func (m *mockInstancesManager) GetInstancesManager() *ipamTypes.InstanceMap {
+	args := m.Called()
+	return args.Get(0).(*ipamTypes.InstanceMap)
+}
+
+func (m *mockInstancesManager) UpdateENI(ctx context.Context, eni *ccev2.ENI, scopedLog *logrus.Entry) error {
+	args := m.Called(ctx, eni, scopedLog)
+	return args.Error(0)
+}
+
+func (m *mockInstancesManager) DeleteENI(ctx context.Context, eniID string, scopedLog *logrus.Entry) error {
+	args := m.Called(ctx, eniID, scopedLog)
+	return args.Error(0)
+}
+
+func (m *mockInstancesManager) GetPoolQuota() ipamTypes.PoolQuotaMap {
+	args := m.Called()
+	return args.Get(0).(ipamTypes.PoolQuotaMap)
+}
+
+func (m *mockInstancesManager) Resync(ctx context.Context, t time.Time) time.Time {
+	args := m.Called(ctx, t)
+	return args.Get(0).(time.Time)
 }

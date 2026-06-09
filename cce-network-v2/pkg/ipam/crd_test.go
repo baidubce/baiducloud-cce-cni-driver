@@ -160,3 +160,123 @@ func (s *IPAMSuite) TestMarkForReleaseNoAllocate(c *C) {
 	sharedNetResourceSetStore.updateLocalNodeResource(cn)
 	c.Assert(string(cn.Status.IPAM.ReleaseIPs["1.1.1.3"]), checker.Equals, ipamOption.IPAMDoNotRelease)
 }
+
+// TestStaleReleasedIPHandling 测试stale released IP的处理逻辑
+func (e *IPAMSuite) TestStaleReleasedIPHandling(c *C) {
+	// Given - 创建包含IP池和释放IP状态的NetResourceSet
+	cn := newCCENode("node1", addressing.MustNewCIDRFromString("1.1.0.0/16"), "1.1.1.0/24")
+	cn.Spec.IPAM.Pool = ipamTypes.AllocationMap{
+		"1.1.1.1": {Resource: "foo"},
+		"1.1.1.2": {Resource: "foo"},
+		"1.1.1.3": {Resource: "foo"}, // 这个IP在pool中但标记为released
+		"1.1.1.4": {Resource: "foo"},
+	}
+	cn.Status.IPAM.ReleaseIPs = map[string]string{
+		"1.1.1.3": ipamOption.IPAMReleased, // Stale released IP that's back in pool
+		"1.1.1.5": ipamOption.IPAMReleased, // Properly released IP not in pool
+	}
+
+	// When - 调用updateLocalNodeResource处理stale released IP
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
+
+	// Then - 验证stale released IP被重置为ready-for-release状态
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["1.1.1.3"]), checker.Equals, ipamOption.IPAMReadyForRelease)
+
+	// 验证不在pool中的released IP被正确删除
+	_, exists := cn.Status.IPAM.ReleaseIPs["1.1.1.5"]
+	c.Assert(exists, checker.Equals, false)
+
+	// 验证其他IP状态不受影响
+	c.Assert(len(cn.Status.IPAM.ReleaseIPs), checker.Equals, 1)
+	c.Assert(cn.Status.IPAM.ReleaseIPs["1.1.1.3"], checker.Equals, ipamOption.IPAMReadyForRelease)
+}
+
+// TestUpdateLocalNodeResource_MultipleStaleReleasedIPs 测试多个stale released IP的处理
+func (e *IPAMSuite) TestUpdateLocalNodeResource_MultipleStaleReleasedIPs(c *C) {
+	// Given - 创建包含多个stale released IP的NetResourceSet
+	cn := newCCENode("node2", addressing.MustNewCIDRFromString("2.2.0.0/16"), "2.2.1.0/24")
+	cn.Spec.IPAM.Pool = ipamTypes.AllocationMap{
+		"2.2.1.1": {Resource: "eni-1"},
+		"2.2.1.2": {Resource: "eni-1"},
+		"2.2.1.3": {Resource: "eni-2"},
+		"2.2.1.4": {Resource: "eni-2"},
+	}
+	cn.Status.IPAM.ReleaseIPs = map[string]string{
+		"2.2.1.1": ipamOption.IPAMReleased,       // Stale released IP
+		"2.2.1.3": ipamOption.IPAMReleased,       // Another stale released IP
+		"2.2.1.5": ipamOption.IPAMReleased,       // Properly released IP not in pool
+		"2.2.1.6": ipamOption.IPAMMarkForRelease, // Different status, should not change
+	}
+
+	// When
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
+
+	// Then - 验证所有stale released IP都被重置
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["2.2.1.1"]), checker.Equals, ipamOption.IPAMReadyForRelease)
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["2.2.1.3"]), checker.Equals, ipamOption.IPAMReadyForRelease)
+
+	// 验证不在pool中的released IP被删除
+	_, exists := cn.Status.IPAM.ReleaseIPs["2.2.1.5"]
+	c.Assert(exists, checker.Equals, false)
+
+	// 验证其他状态的IP不受影响
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["2.2.1.6"]), checker.Equals, ipamOption.IPAMMarkForRelease)
+
+	// 验证最终状态
+	c.Assert(len(cn.Status.IPAM.ReleaseIPs), checker.Equals, 3)
+}
+
+// TestUpdateLocalNodeResource_EmptyPoolWithReleasedIPs 测试空IP池但有released IP的情况
+func (e *IPAMSuite) TestUpdateLocalNodeResource_EmptyPoolWithReleasedIPs(c *C) {
+	// Given - 创建空IP池但有released IP的NetResourceSet
+	cn := newCCENode("node3", addressing.MustNewCIDRFromString("3.3.0.0/16"), "3.3.1.0/24")
+	cn.Spec.IPAM.Pool = nil // Empty pool
+	cn.Status.IPAM.ReleaseIPs = map[string]string{
+		"3.3.1.1": ipamOption.IPAMReleased,
+		"3.3.1.2": ipamOption.IPAMReleased,
+	}
+
+	// When
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
+
+	// Then - 验证所有released IP都被删除（因为不在pool中）
+	c.Assert(len(cn.Status.IPAM.ReleaseIPs), checker.Equals, 0)
+}
+
+// TestUpdateLocalNodeResource_MixedIPStates 测试混合IP状态的处理
+func (e *IPAMSuite) TestUpdateLocalNodeResource_MixedIPStates(c *C) {
+	// Given - 创建包含各种状态IP的NetResourceSet
+	cn := newCCENode("node4", addressing.MustNewCIDRFromString("4.4.0.0/16"), "4.4.1.0/24")
+	cn.Spec.IPAM.Pool = ipamTypes.AllocationMap{
+		"4.4.1.1": {Resource: "eni-1"},
+		"4.4.1.2": {Resource: "eni-1"},
+	}
+	cn.Status.IPAM.ReleaseIPs = map[string]string{
+		"4.4.1.1": ipamOption.IPAMReleased,        // Stale released IP
+		"4.4.1.2": ipamOption.IPAMMarkForRelease,  // Marked for release
+		"4.4.1.3": ipamOption.IPAMReleased,        // Properly released IP not in pool
+		"4.4.1.4": ipamOption.IPAMReadyForRelease, // Ready for release not in pool
+		"4.4.1.5": ipamOption.IPAMDoNotRelease,    // Do not release not in pool
+	}
+
+	// When
+	sharedNetResourceSetStore.updateLocalNodeResource(cn)
+
+	// Then
+	// Stale released IP should be reset to ready-for-release
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["4.4.1.1"]), checker.Equals, ipamOption.IPAMReadyForRelease)
+
+	// Marked for release IP in pool should remain unchanged
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["4.4.1.2"]), checker.Equals, ipamOption.IPAMMarkForRelease)
+
+	// IPs not in pool with released status should be removed
+	_, exists := cn.Status.IPAM.ReleaseIPs["4.4.1.3"]
+	c.Assert(exists, checker.Equals, false)
+
+	// Other states not in pool should remain as they don't match the removed conditions
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["4.4.1.4"]), checker.Equals, ipamOption.IPAMReadyForRelease)
+	c.Assert(string(cn.Status.IPAM.ReleaseIPs["4.4.1.5"]), checker.Equals, ipamOption.IPAMDoNotRelease)
+
+	// Verify final count
+	c.Assert(len(cn.Status.IPAM.ReleaseIPs), checker.Equals, 4)
+}

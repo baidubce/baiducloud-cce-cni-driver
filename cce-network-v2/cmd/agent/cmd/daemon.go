@@ -458,15 +458,8 @@ func (d *Daemon) shouldEnableERIManagement() bool {
 		return false
 	}
 
-	// Check if node has ERI management label
-	hasLabel, isEnabled := bceutils.HasERIManagementLabel(k8sNode)
-	if !hasLabel {
-		log.Info("Node does not have ERI management label")
-		return false
-	}
-
-	if !isEnabled {
-		log.Info("ERI management label is set but not enabled")
+	// Check if ERI management should be enabled based on node label or global config
+	if !bceutils.EnableERI(k8sNode, option.Config.EnableERIManagement) {
 		return false
 	}
 

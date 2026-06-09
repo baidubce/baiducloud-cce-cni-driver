@@ -854,6 +854,16 @@ var (
 	_ ipam.CNIIPAMServer = &EndpointAllocator{}
 )
 
+// deleteEndpointSafely deletes endpoint and ignores NotFound error if endpoint already deleted
+func (e *EndpointAllocator) deleteEndpointSafely(ep *ccev2.CCEEndpoint) error {
+	err := e.cceEndpointClient.CCEEndpoints(ep.Namespace).Delete(context.TODO(), ep.Name, metav1.DeleteOptions{})
+	// ignore not found error if endpoint already deleted
+	if kerrors.IsNotFound(err) {
+		err = nil
+	}
+	return err
+}
+
 // tryDeleteEndpointAfterPodDeleted The garbage collection dynamic endpoint first recycles the pre allocated
 // IP address of the node, and then deletes the object. If the IP cannot be recycled,
 // the corresponding object will also be kept continuously
@@ -881,7 +891,7 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		psts, err := e.pstsLister.PodSubnetTopologySpreads(ep.Namespace).Get(ep.Spec.Network.IPAllocation.PSTSName)
 		if kerrors.IsNotFound(err) {
 			logEntry.Warnf("cep will be deleted when psts %s not found", ep.Spec.Network.IPAllocation.PSTSName)
-			goto deleteObj
+			return e.deleteEndpointSafely(ep)
 		}
 		if err != nil {
 			logEntry.WithError(err).Errorf("failed to get psts %s", ep.Spec.Network.IPAllocation.PSTSName)
@@ -891,7 +901,7 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		if pststrategy.EnableReuseIPPSTS(psts) {
 			return nil
 		}
-		goto deleteObj
+		return e.deleteEndpointSafely(ep)
 	}
 
 	defer func() {
@@ -924,8 +934,6 @@ func (e *EndpointAllocator) tryDeleteEndpointAfterPodDeleted(ep *ccev2.CCEEndpoi
 		}
 	}
 
-deleteObj:
-	// delete endpoint
 	// remove finalizer first
 	ep.Finalizers = []string{}
 	_, err = e.cceEndpointClient.CCEEndpoints(ep.Namespace).Update(context.TODO(), ep, metav1.UpdateOptions{})

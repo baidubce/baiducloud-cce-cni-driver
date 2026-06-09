@@ -27,6 +27,7 @@ import (
 
 	operatorOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/option"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/operator/watchers"
+	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/bce/api"
 	"github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/defaults"
 	ipamOption "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/option"
 	ipamTypes "github.com/baidubce/baiducloud-cce-cni-driver/cce-network-v2/pkg/ipam/types"
@@ -129,6 +130,12 @@ type NetResource struct {
 	logLimiter logging.Limiter
 }
 
+// SubnetInfo contains subnet usage and availability zone information
+type SubnetInfo struct {
+	UsedCount int
+	AZ        string
+}
+
 // Statistics represent the IP allocation statistics of a node
 type Statistics struct {
 	// UsedIPs is the number of IPs currently in use
@@ -149,6 +156,9 @@ type Statistics struct {
 	// allocated or have not yet exhausted the instance specific quota of
 	// addresses
 	RemainingInterfaces int
+
+	// SubnetInfos maps subnetID to subnet information
+	SubnetInfos map[string]SubnetInfo
 }
 
 // IsRunning returns true if the node is considered to be running
@@ -303,31 +313,56 @@ func getPendingPodCount(nodeName string) (int, error) {
 }
 
 func calculateNeededIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAllocate, burstableENIIPs int) (neededIPs int) {
-	neededIPs = preAllocate - (availableIPs - usedIPs)
 
+	// Step 1: Basic calculation based on pre-allocate
+	freeIPs := availableIPs - usedIPs
+	neededIPs = preAllocate - freeIPs
+
+	// Step 2: Consider minimum allocation
 	if minAllocate > 0 {
-		neededIPs = math.IntMax(neededIPs, minAllocate-availableIPs)
+		minNeededIPs := minAllocate - availableIPs
+		originalNeededIPs := neededIPs
+		neededIPs = math.IntMax(neededIPs, minNeededIPs)
+
+		log.WithFields(logrus.Fields{
+			"function":          "calculateNeededIPs",
+			"file":              "pkg/ipam/net_resource.go",
+			"minNeededIPs":      minNeededIPs,
+			"originalNeededIPs": originalNeededIPs,
+			"newNeededIPs":      neededIPs,
+			"calculation":       fmt.Sprintf("max(original(%d), minAllocate(%d) - availableIPs(%d)) = %d", originalNeededIPs, minAllocate, availableIPs, neededIPs),
+		}).Debug("calculateNeededIPs: applied minimum allocation constraint")
 	}
 
-	// Ensure that the total number of IP addresses applied for each time is not less than the IP
-	// capacity of ENI if use burstableMehrfachENI
+	// Step 3: Apply burstable ENI constraint
 	if neededIPs > 0 && burstableENIIPs > 0 {
 		neededIPs = burstableENIIPs
-	}
-	// If maxAllocate is set (> 0) and neededIPs is higher than the
-	// maxAllocate value, we only return the amount of IPs that can
-	// still be allocated
-	if maxAllocate > 0 && (availableIPs+neededIPs) > maxAllocate {
-		neededIPs = maxAllocate - availableIPs
+
 	}
 
+	// Step 4: Apply maximum allocation constraint
+	if maxAllocate > 0 && (availableIPs+neededIPs) > maxAllocate {
+		neededIPs = maxAllocate - availableIPs
+
+	}
+
+	// Step 5: Ensure non-negative result
 	if neededIPs < 0 {
 		neededIPs = 0
 	}
+
 	return
 }
 
-func calculateExcessIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAboveWatermark, burstableMehrfachENI int) (excessIPs int) {
+func calculateExcessIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAboveWatermark, burstableMehrfachENI, readyForReleaseCount int) (excessIPs int) {
+	// If it is found that there are IPs marked as ready-for-release,
+	// it is considered that there must be IPs that need to be released in this calculation,
+	// and the quantity is consistent with the input parameters
+	// So there is no need for further calculation process
+	if readyForReleaseCount > 0 {
+		return readyForReleaseCount
+	}
+
 	// If burstableMehrfachENI is set, we do not need to calculate excessIPs
 	if burstableMehrfachENI > 0 {
 		return 0
@@ -390,6 +425,7 @@ func (n *NetResource) UpdatedResource(resource *v2.NetResourceSet) bool {
 	if resource == nil {
 		return false
 	}
+	log.WithField(fieldName, resource.Name).Debugf("UpdatedResource: %+v", resource.Name)
 	resource = resource.DeepCopy()
 
 	n.ops.UpdatedNode(resource)
@@ -420,17 +456,34 @@ func (n *NetResource) resourceAttached() (attached bool) {
 func (n *NetResource) recalculate() {
 	// Skip any recalculation if the NetResourceSet resource does not exist yet
 	if !n.resourceAttached() {
+		n.logger().WithFields(logrus.Fields{
+			"function": "recalculate",
+			"file":     "pkg/ipam/net_resource.go",
+			"nodeName": n.name,
+		}).Debug("NetResource.recalculate: resource not attached, skipping recalculation")
 		return
 	}
-	scopedLog := n.logger()
+
+	scopedLog := n.logger().WithFields(logrus.Fields{
+		"function": "recalculate",
+		"file":     "pkg/ipam/net_resource.go",
+		"nodeName": n.name,
+	})
 
 	a, err := n.ops.ResyncInterfacesAndIPs(context.TODO(), scopedLog)
+
+	scopedLog.WithFields(logrus.Fields{
+		"allocationMapSize": len(a),
+		"hasError":          err != nil,
+	}).Debug("NetResource.recalculate: ResyncInterfacesAndIPs completed")
 
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
 	if err != nil {
-		scopedLog.Warning("Instance not found! Please delete corresponding netresourceset if instance has already been deleted.")
+		scopedLog.WithFields(logrus.Fields{
+			"error": err,
+		}).Warning("NetResource.recalculate: Instance not found! Please delete corresponding netresourceset if instance has already been deleted.")
 		// Avoid any further action
 		n.stats.NeededIPs = 0
 		n.stats.ExcessIPs = 0
@@ -438,42 +491,109 @@ func (n *NetResource) recalculate() {
 	}
 
 	n.available = a
+	scopedLog.WithFields(logrus.Fields{
+		"availableIPsCount": len(n.available),
+	}).Debug("NetResource.recalculate: updated available IPs")
+
 	n.stats.UsedIPs = 0
-	for ipstr := range n.resource.Status.IPAM.Used {
-		ip := net.ParseIP(ipstr)
-		if ip == nil || ip.To4() != nil {
-			n.stats.UsedIPs++
-		}
+	n.stats.SubnetInfos = make(map[string]SubnetInfo)
+
+	// Get node's AZ from ENI spec as fallback
+	if n.resource.Spec.ENI != nil && n.resource.Spec.ENI.AvailabilityZone != "" {
+		subnetZone := api.TransAvailableZoneToZoneName(operatorOption.Config.BCECloudContry, operatorOption.Config.BCECloudRegion, n.resource.Spec.ENI.AvailabilityZone)
+		n.collectSubnetUsage(subnetZone)
 	}
+
+	scopedLog.WithFields(logrus.Fields{
+		"usedIPsCount":      n.stats.UsedIPs,
+		"totalUsedIPsInCRD": len(n.resource.Status.IPAM.Used),
+	}).Debug("NetResource.recalculate: counted used IPs")
 
 	// Get used IP count with prefixes included
 	usedIPForExcessCalc := n.stats.UsedIPs
 	if n.ops.IsPrefixDelegated() {
 		usedIPForExcessCalc = n.ops.GetUsedIPWithPrefixes()
+		scopedLog.WithFields(logrus.Fields{
+			"isPrefixDelegated":   true,
+			"usedIPForExcessCalc": usedIPForExcessCalc,
+			"originalUsedIPs":     n.stats.UsedIPs,
+		}).Debug("NetResource.recalculate: using prefix delegated IP count for excess calculation")
 	}
 
 	availableIPv4Count := 0
+	readyForReleaseCount := 0
 
 	for ipstr := range n.available {
 		ip := net.ParseIP(ipstr)
 		if ip == nil || ip.To4() != nil {
-			availableIPv4Count++
+			// Exclude IPs that are in ready-for-release state from available count
+			// NOTE: We are already holding n.mutex.Lock() in recalculate(), so call the non-locking variant
+			if !n.isIPInReadyForReleaseStateLocked(ipstr) {
+				availableIPv4Count++
+			} else {
+				readyForReleaseCount++
+			}
 		}
 	}
 	n.stats.AvailableIPs = availableIPv4Count
 
-	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate(), n.getMaxIPBurstableIPCount())
-	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark(), n.getMaxIPBurstableIPCount())
+	scopedLog.WithFields(logrus.Fields{
+		"availableIPv4Count":   availableIPv4Count,
+		"readyForReleaseCount": readyForReleaseCount,
+		"totalAvailableIPs":    len(n.available),
+	}).Debug("NetResource.recalculate: calculated available IPv4 count")
+
+	// Parameters for calculation
+	preAllocate := n.getPreAllocate()
+	minAllocate := n.getMinAllocate()
+	maxAllocate := n.getMaxAllocate()
+	maxAboveWatermark := n.getMaxAboveWatermark()
+	burstableIPCount := n.getMaxIPBurstableIPCount()
+
+	scopedLog.WithFields(logrus.Fields{
+		"preAllocate":       preAllocate,
+		"minAllocate":       minAllocate,
+		"maxAllocate":       maxAllocate,
+		"maxAboveWatermark": maxAboveWatermark,
+		"burstableIPCount":  burstableIPCount,
+	}).Debug("NetResource.recalculate: parameters for IP calculation")
+
+	n.stats.NeededIPs = calculateNeededIPs(n.stats.AvailableIPs, n.stats.UsedIPs, preAllocate, minAllocate, maxAllocate, burstableIPCount)
+	n.stats.ExcessIPs = calculateExcessIPs(n.stats.AvailableIPs, usedIPForExcessCalc, preAllocate, minAllocate, maxAboveWatermark, burstableIPCount, readyForReleaseCount)
 
 	scopedLog.WithFields(logrus.Fields{
 		"available":                 n.stats.AvailableIPs,
 		"used":                      n.stats.UsedIPs,
+		"usedIPForExcessCalc":       usedIPForExcessCalc,
 		"toAlloc":                   n.stats.NeededIPs,
 		"toRelease":                 n.stats.ExcessIPs,
 		"waitingForPoolMaintenance": n.waitingForPoolMaintenance,
 		"resyncNeeded":              n.resyncNeeded,
-		"maxBurstableIPs":           n.getMaxIPBurstableIPCount(),
-	}).Debug("Recalculated needed addresses")
+		"maxBurstableIPs":           burstableIPCount,
+	}).Debug("NetResource.recalculate: completed recalculation")
+}
+
+// collectSubnetUsage collects subnet usage information from allocated IPs
+func (n *NetResource) collectSubnetUsage(nodeAZ string) {
+	for ipstr, allocationIP := range n.resource.Status.IPAM.Used {
+		ip := net.ParseIP(ipstr)
+		if ip == nil || ip.To4() != nil {
+			n.stats.UsedIPs++
+
+			// Count by subnet
+			subnetID := allocationIP.SubnetID
+			if subnetID == "" {
+				// If SubnetID is not set, use "unknown" as fallback
+				subnetID = "unknown"
+			}
+			// Get or create subnet info
+			subnetInfo := n.stats.SubnetInfos[subnetID]
+			subnetInfo.UsedCount++
+
+			subnetInfo.AZ = nodeAZ
+			n.stats.SubnetInfos[subnetID] = subnetInfo
+		}
+	}
 }
 
 // allocationNeeded returns true if this node requires IPs to be allocated
@@ -837,25 +957,33 @@ func (n *NetResource) handleIPRelease(ctx context.Context, a *maintenanceAction)
 			"selectedPoolID":    a.release.PoolID,
 		})
 		scopedLog.Info("Releasing excess IPs from node")
-		err := n.ops.ReleaseIPs(ctx, a.release)
-		if err == nil {
-			n.manager.metricsAPI.AddIPRelease(string(a.release.PoolID), int64(len(a.release.IPsToRelease)))
 
-			// Remove the IPs from ipsMarkedForRelease
-			n.mutex.Lock()
-			for _, ip := range ipsToRelease {
-				delete(n.ipsMarkedForRelease, ip)
-				n.ipReleaseStatus[ip] = ipamOption.IPAMReleased
-			}
-			n.mutex.Unlock()
-			return true, nil
+		// Call the underlying implementation (which now includes BCE-specific retry logic in node_super.go)
+		successfullyReleasedIPs, err := n.ops.ReleaseIPs(ctx, a.release)
+		if err != nil {
+			n.manager.metricsAPI.IncAllocationAttempt("ip unassignment failed", string(a.release.PoolID))
+			scopedLog.WithError(err).Error("IP release failed")
+			return false, fmt.Errorf("failed to release IPs: %w", err)
 		}
-		n.manager.metricsAPI.IncAllocationAttempt("ip unassignment failed", string(a.release.PoolID))
+
+		// Update metrics and status only for successfully released IPs
+		actualReleasedCount := len(successfullyReleasedIPs)
+		n.manager.metricsAPI.AddIPRelease(string(a.release.PoolID), int64(actualReleasedCount))
+
+		// Only mark actually released IPs as IPAMReleased
+		n.mutex.Lock()
+		for _, ip := range successfullyReleasedIPs {
+			delete(n.ipsMarkedForRelease, ip)
+			delete(n.ipReleaseStatus, ip)
+		}
+		n.mutex.Unlock()
+
 		scopedLog.WithFields(logrus.Fields{
-			"selectedInterface":  a.release.InterfaceID,
-			"releasingAddresses": len(a.release.IPsToRelease),
-		}).WithError(err).Warning("Unable to unassign IPs from interface")
-		return false, err
+			"releasedIPs":   actualReleasedCount,
+			"requestedIPs":  len(ipsToRelease),
+			"successfulIPs": successfullyReleasedIPs,
+		}).Info("IP release completed successfully")
+		return true, nil
 	}
 	return false, nil
 }
@@ -1155,4 +1283,11 @@ func (n *NetResource) update(origNode, node *v2.NetResourceSet, attempts int, st
 	}
 
 	return err
+}
+
+// isIPInReadyForReleaseStateLocked assumes that the outer layer already
+// holds an n.mutex (write lock or read lock) and will not repeat locking
+func (n *NetResource) isIPInReadyForReleaseStateLocked(ip string) bool {
+	_, exists := n.ipReleaseStatus[ip]
+	return exists
 }

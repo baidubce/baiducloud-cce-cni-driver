@@ -69,7 +69,7 @@ func (provider *BCERDMAAllocatorProvider) Init(ctx context.Context) error {
 	hpasClient := bceoption.BCEHPASClient()
 	provider.bceClient = bceClient
 	provider.eriClient = client.NewEriClient(bceClient, hpasClient)
-	provider.hpcClient = client.NewHpcClient(bceClient)
+	provider.hpcClient = client.NewHpcClient(bceClient, hpasClient)
 	provider.hpasClient = hpasClient
 	provider.manager = newInstancesManager(provider.bceClient, provider.hpasClient, provider.eriClient, provider.hpcClient, provider.enilister, provider.sbnlister, watchers.CCEEndpointClient)
 	return nil

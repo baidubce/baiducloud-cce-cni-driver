@@ -146,12 +146,12 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 	return r
 }
 
-func (n *Node) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) error {
+func (n *Node) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) ([]string, error) {
 	var ipToRelease = make(map[string][]string)
 	for _, ip := range release.IPsToRelease {
 		allocated := n.manager.IPPool.GetIP(n.subnetID, ip)
 		if allocated == nil {
-			return fmt.Errorf("can not find allocated ip %s", ip)
+			return nil, fmt.Errorf("can not find allocated ip %s", ip)
 		}
 		ipToRelease[allocated.VPC] = append(ipToRelease[allocated.VPC], ip)
 	}
@@ -160,7 +160,7 @@ func (n *Node) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) erro
 		err := n.manager.api.BatchReleaseIP(ctx, api.BatchReleaseIPRequest{IPs: ips, VPC: vpc})
 		if err != nil {
 			log.WithField("ipsCount", len(ipToRelease)).WithError(err).Error("failed to release ips")
-			return err
+			return nil, err
 		}
 		log.WithField("ipsCount", len(ipToRelease)).Info("release ips success")
 	}
@@ -170,7 +170,8 @@ func (n *Node) ReleaseIPs(ctx context.Context, release *ipam.ReleaseAction) erro
 	for _, ip := range release.IPsToRelease {
 		n.manager.IPPool.DeleteByIP(n.subnetID, ip)
 	}
-	return nil
+	// Return all requested IPs as successfully released since we don't have partial failure handling here
+	return release.IPsToRelease, nil
 }
 
 func (n *Node) GetMaximumAllocatableIPv4() int {

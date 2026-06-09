@@ -144,20 +144,34 @@ func (es *remoteVpcEniSyncher) useENIMachine() bool {
 //	isExisted: true: eni object is existed, false: eni object is not existed.
 //	result: the ENI object if it is created or existed, nil otherwise.
 func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted bool, result *ccev2.ENI) {
+	// 初始化基础 scopeLog，避免重复初始化
+	scopeLog := eniLog.WithFields(logrus.Fields{
+		"eniID": eni.EniId,
+		"vpcID": eni.VpcId,
+	})
+
 	old, err := es.updater.Lister().Get(eni.EniId)
 	if err != nil && !kerrors.IsNotFound(err) {
 		return false, nil
 	}
 	if old != nil {
+		// 校对现有ENI的spec中的IP是否和IaaS的一致
+		isSynced, err := es.validateAndSyncENIIPs(old, eni)
+		if err != nil {
+			scopeLog.WithError(err).Error("ENI IP consistency validated and sync failed")
+		} else if isSynced {
+			scopeLog.Info("ENI IP consistency validated and synced successfully")
+		} else {
+			scopeLog.Info("ENI IP consistency validated and no sync needed")
+		}
 		return true, old
 	}
 
 	if eni.Status == string(ccev2.VPCENIStatusDetaching) || eni.Status == string(ccev2.VPCENIStatusDeleted) {
 		return
 	}
-	scopeLog := eniLog.WithFields(logrus.Fields{
-		"eniID":      eni.EniId,
-		"vpcID":      eni.VpcId,
+	// 基于基础 scopeLog 扩展更多字段
+	scopeLog = scopeLog.WithFields(logrus.Fields{
 		"eniName":    eni.Name,
 		"instanceID": eni.InstanceId,
 		"status":     eni.Status,
@@ -229,4 +243,77 @@ func (es *remoteVpcEniSyncher) createExternalENI(eni *enisdk.Eni) (isExisted boo
 	}
 	es.eventRecorder.Eventf(resource, corev1.EventTypeNormal, "CreateExternalENISuccess", "create external ENI %s on nrs %s success", eni.EniId, resource.Name)
 	return true, result
+}
+
+// validateAndSyncENIIPs 校对现有ENI的spec中的IP是否和IaaS的一致，如不一致则同步
+func (es *remoteVpcEniSyncher) validateAndSyncENIIPs(existingENI *ccev2.ENI, iaasENI *enisdk.Eni) (bool, error) {
+	scopeLog := eniLog.WithFields(logrus.Fields{
+		"eniID": existingENI.Name,
+		"vpcID": existingENI.Spec.ENI.VpcID,
+	})
+
+	// 比较K8s ENI CRD中的IP集合
+	k8sIPs := make(map[string]bool)
+	for _, ip := range existingENI.Spec.ENI.PrivateIPSet {
+		k8sIPs[ip.PrivateIPAddress] = true
+	}
+	for _, ip := range existingENI.Spec.ENI.IPV6PrivateIPSet {
+		k8sIPs[ip.PrivateIPAddress] = true
+	}
+
+	// 比较IaaS中的IP集合
+	iaasIPs := make(map[string]bool)
+	for _, ip := range iaasENI.PrivateIpSet {
+		iaasIPs[ip.PrivateIpAddress] = true
+	}
+	for _, ip := range iaasENI.Ipv6PrivateIpSet {
+		iaasIPs[ip.PrivateIpAddress] = true
+	}
+
+	// 检查是否存在不一致
+	var inconsistencies []string
+	needsUpdate := false
+
+	// IPs in K8s but not in IaaS
+	for ip := range k8sIPs {
+		if !iaasIPs[ip] {
+			inconsistencies = append(inconsistencies, fmt.Sprintf("IP %s exists in K8s but not in IaaS", ip))
+			needsUpdate = true
+		}
+	}
+
+	// IPs in IaaS but not in K8s
+	for ip := range iaasIPs {
+		if !k8sIPs[ip] {
+			inconsistencies = append(inconsistencies, fmt.Sprintf("IP %s exists in IaaS but not in K8s", ip))
+			needsUpdate = true
+		}
+	}
+
+	if !needsUpdate {
+		scopeLog.Debug("ENI IP sets are consistent")
+		return false, nil
+	}
+
+	// 记录不一致并进行同步
+	scopeLog.WithField("inconsistencies", inconsistencies).Warning("ENI IP inconsistencies detected, syncing from IaaS")
+
+	// 更新ENI CRD，使用IaaS数据作为权威数据源
+	updatedENI := existingENI.DeepCopy()
+	updatedENI.Spec.ENI.PrivateIPSet = ToModelPrivateIP(iaasENI.PrivateIpSet, iaasENI.VpcId, iaasENI.SubnetId)
+	updatedENI.Spec.ENI.IPV6PrivateIPSet = ToModelPrivateIP(iaasENI.Ipv6PrivateIpSet, iaasENI.VpcId, iaasENI.SubnetId)
+
+	// 更新ENI CRD
+	_, err := es.updater.Update(updatedENI)
+	if err != nil {
+		scopeLog.WithError(err).Error("Failed to sync ENI IPs from IaaS")
+		return false, err
+	}
+
+	scopeLog.WithFields(logrus.Fields{
+		"syncedIPv4Count": len(iaasENI.PrivateIpSet),
+		"syncedIPv6Count": len(iaasENI.Ipv6PrivateIpSet),
+	}).Info("Successfully synced ENI IPs from IaaS")
+
+	return true, nil
 }

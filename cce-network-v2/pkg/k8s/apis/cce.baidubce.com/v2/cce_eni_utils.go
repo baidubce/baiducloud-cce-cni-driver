@@ -68,7 +68,6 @@ func (s *ENIStatus) AppendCCEENIStatus(status CCEENIStatus) {
 		s.CCEStatusChangeLog = s.CCEStatusChangeLog[len(s.CCEStatusChangeLog)-9:]
 		s.CCEStatusChangeLog = append(s.CCEStatusChangeLog, change)
 	}
-	return
 }
 
 func FiltePrimaryAddress(IPs []*models.PrivateIP) []*models.PrivateIP {

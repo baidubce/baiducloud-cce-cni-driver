@@ -273,7 +273,7 @@ ccedConfig:
   ippool-pre-allocate: 2
   ippool-max-above-watermark: 2
   # 自动释放超限的IP，默认不开启释放（开启 burstable ENI 的节点默认默认不会开启 IP 释放）
-  release-excess-ips: true
+  release-excess-ips: false
   excess-ip-release-delay: 180
 
   cce-endpoint-gc-interval: 20s

@@ -408,8 +408,8 @@ func (eh *eniInitFactory) OnUpdateENI(oldObj, newObj *ccev2.ENI) error {
 			// Only set to ReadyOnNode when InterfaceIndex is not 0
 			(&resource.Status).AppendCCEENIStatus(ccev2.ENIMSGMissingInumber)
 		}
-		// What ever the reason is, need update status
-		isNeedUpdateStatus = true
+		isNeedUpdateStatus = (resource.Status.CCEStatus != newObj.Status.CCEStatus)
+
 		return eh.updateENIStatus(resource, isNeedUpdateStatus, scopedLog)
 	}
 	return nil

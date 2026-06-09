@@ -8,12 +8,12 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.2 [暂未发布]
-1. [Feature] VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
-2. [Feature] VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
-3. [Optimize] 为节点设置 ccesubnetUnavailable 的状态以描述当前节点子网资源状态
 
-#### 2.13.1 [暂未发布]
+#### 2.13.2 [20250826]
+1. [Bug] 修复 webhook 托管模式下 psts 无法创建的问题
+2. [Bug] 增加判断，避免 agent update 重复的 eni 状态
+
+#### 2.13.1 [20250821]
 1. [Bug] 修改 veth pair 名称生成规则，从使用容器ID变回使用pod名生成veth名，解决 calico 使用 network policy 不通的问题
 
 #### 2.13.0 (2024/08/01)

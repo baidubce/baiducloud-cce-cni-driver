@@ -248,6 +248,30 @@ func ensureEnisInCacheForIP(t *testing.T, enis []*ccev2.ENI) {
 	}
 }
 
+func ensureCEPsInCacheForIP(t *testing.T, ceps []*ccev2.CCEEndpoint) {
+	t.Helper()
+
+	ctx := context.Background()
+	informer := k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer()
+	store := informer.GetStore()
+
+	for _, cep := range ceps {
+		if cep == nil {
+			continue
+		}
+		if _, err := k8s.CCEClient().CceV2().CCEEndpoints(cep.Namespace).Get(ctx, cep.Name, metav1.GetOptions{}); err != nil {
+			if _, err := k8s.CCEClient().CceV2().CCEEndpoints(cep.Namespace).Create(ctx, cep, metav1.CreateOptions{}); err != nil && !kerrors.IsAlreadyExists(err) {
+				t.Fatalf("create cep failed: %v", err)
+			}
+		}
+		if err := store.Add(cep); err != nil {
+			if err := store.Update(cep); err != nil {
+				t.Fatalf("cache cep failed: %v", err)
+			}
+		}
+	}
+}
+
 func TestBCCNetworkResourceSetPrepareIPAllocation(t *testing.T) {
 	t.Run("secondary eni mode returns available ips", func(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
@@ -539,14 +563,6 @@ func TestBCCNetworkResourceSetReleaseIPsPrimaryENIMode(t *testing.T) {
 }
 
 func TestBCCNetworkResourceSetAllocateIPCrossSubnet(t *testing.T) {
-	t.Run("primary eni with secondary mode not supported", func(t *testing.T) {
-		env := setupBCCNodeTestEnv(t)
-		env.node.usePrimaryENIWithSecondaryMode = true
-
-		_, _, err := env.node.allocateIPCrossSubnet(context.Background(), "sbn-cross")
-		assert.Error(t, err)
-	})
-
 	t.Run("primary ip mode not supported", func(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
 		env.node.usePrimaryENIWithSecondaryMode = false
@@ -593,17 +609,49 @@ func TestBCCNetworkResourceSetAllocateIPCrossSubnet(t *testing.T) {
 			assert.Equal(t, "sbn-cross", result[0].SubnetID)
 		}
 	})
+
+	t.Run("primary eni with secondary mode allocates cross subnet ipv4", func(t *testing.T) {
+		env := setupBCCNodeTestEnv(t)
+		env.node.usePrimaryENIWithSecondaryMode = true
+		env.k8sObj.Spec.ENI.UseMode = string(ccev2.ENIUseModePrimaryWithSecondaryIP)
+		prevIPv6 := operatorOption.Config.EnableIPv6
+		operatorOption.Config.EnableIPv6 = false
+		t.Cleanup(func() {
+			operatorOption.Config.EnableIPv6 = prevIPv6
+		})
+
+		quota := newCustomerIPQuota(log, k8s.WatcherClient(), env.k8sObj.Name, env.k8sObj.Spec.InstanceID, env.manager.bceclientd)
+		quota.SetMaxENI(0)
+		quota.SetMaxIP(3)
+		env.base.eniQuota = quota
+		env.base.lastResyncEniQuotaTime = time.Now()
+
+		sbn := ccemock.NewMockSubnet("sbn-primary-cross", "10.0.7.0/24")
+		sbn.Spec.VPCID = env.k8sObj.Spec.ENI.VpcID
+		assert.NoError(t, ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{sbn}))
+
+		eni, err := ccemock.NewMockEni(env.k8sObj.Name, env.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 1)
+		if !assert.NoError(t, err) {
+			return
+		}
+		eni.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
+
+		env.mockCloud.EXPECT().
+			BatchAddPrivateIpCrossSubnet(gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-primary-cross"), gomock.Any(), gomock.Eq(1), gomock.Eq(false)).
+			Return([]string{"10.0.7.10"}, nil)
+
+		result, eniID, err := env.node.allocateIPCrossSubnet(context.Background(), "sbn-primary-cross")
+		if assert.NoError(t, err) {
+			assert.Equal(t, eni.Spec.ENI.ID, eniID)
+			assert.Len(t, result, 1)
+			assert.Equal(t, "10.0.7.10", result[0].PrivateIPAddress)
+			assert.Equal(t, "sbn-primary-cross", result[0].SubnetID)
+		}
+	})
 }
 
 func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
-	t.Run("primary eni with secondary mode not supported", func(t *testing.T) {
-		env := setupBCCNodeTestEnv(t)
-		env.node.usePrimaryENIWithSecondaryMode = true
-
-		_, err := env.node.reuseIPs(context.Background(), []*models.PrivateIP{{PrivateIPAddress: "10.0.0.40", SubnetID: "sbn-1"}}, "default/pod", "")
-		assert.Error(t, err)
-	})
-
 	t.Run("empty ip list returns error", func(t *testing.T) {
 		env := setupBCCNodeTestEnv(t)
 		env.node.usePrimaryENIWithSecondaryMode = false
@@ -629,13 +677,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 				},
 			},
 		}
-		assert.NoError(t, ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
-			result, err := k8s.CCEClient().CceV2().CCEEndpoints("default").Create(ctx, endpoint, metav1.CreateOptions{})
-			if err != nil {
-				return nil
-			}
-			return []metav1.Object{result}
-		}))
+		ensureCEPsInCacheForIP(t, []*ccev2.CCEEndpoint{endpoint})
 
 		eni := &ccev2.ENI{
 			ObjectMeta: metav1.ObjectMeta{
@@ -686,13 +728,7 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 				},
 			},
 		}
-		assert.NoError(t, ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
-			result, err := k8s.CCEClient().CceV2().CCEEndpoints("default").Create(ctx, endpoint, metav1.CreateOptions{})
-			if err != nil {
-				return nil
-			}
-			return []metav1.Object{result}
-		}))
+		ensureCEPsInCacheForIP(t, []*ccev2.CCEEndpoint{endpoint})
 
 		quota := newCustomerIPQuota(log, k8s.WatcherClient(), env.k8sObj.Name, env.k8sObj.Spec.InstanceID, env.manager.bceclientd)
 		quota.SetMaxENI(1)
@@ -718,6 +754,62 @@ func TestBCCNetworkResourceSetReuseIPs(t *testing.T) {
 
 		ipset := []*models.PrivateIP{{PrivateIPAddress: reuseIP, SubnetID: "sbn-alloc"}}
 		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod", "")
+		assert.NoError(t, err)
+		assert.Equal(t, eni.Spec.ENI.ID, eniID)
+	})
+
+	t.Run("primary eni with secondary mode reuses ip via cross subnet allocation", func(t *testing.T) {
+		env := setupBCCNodeTestEnv(t)
+		env.node.usePrimaryENIWithSecondaryMode = true
+		env.k8sObj.Spec.ENI.UseMode = string(ccev2.ENIUseModePrimaryWithSecondaryIP)
+		reuseIP := "10.0.8.10"
+
+		endpoint := &ccev2.CCEEndpoint{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pod-primary-secondary",
+				Namespace: "default",
+			},
+			Status: ccev2.EndpointStatus{
+				Networking: &ccev2.EndpointNetworking{
+					Addressing: ccev2.AddressPairList{
+						&ccev2.AddressPair{IP: reuseIP},
+					},
+				},
+			},
+		}
+		assert.NoError(t, ccemock.EnsureObjectToInformer(t, k8s.CCEClient().Informers.Cce().V2().CCEEndpoints().Informer(), func(ctx context.Context) []metav1.Object {
+			result, err := k8s.CCEClient().CceV2().CCEEndpoints("default").Create(ctx, endpoint, metav1.CreateOptions{})
+			if err != nil {
+				return nil
+			}
+			return []metav1.Object{result}
+		}))
+
+		quota := newCustomerIPQuota(log, k8s.WatcherClient(), env.k8sObj.Name, env.k8sObj.Spec.InstanceID, env.manager.bceclientd)
+		quota.SetMaxENI(0)
+		quota.SetMaxIP(3)
+		env.base.eniQuota = quota
+		env.base.lastResyncEniQuotaTime = time.Now()
+
+		sbn := ccemock.NewMockSubnet("sbn-primary-reuse", "10.0.8.0/24")
+		sbn.Spec.VPCID = env.k8sObj.Spec.ENI.VpcID
+		assert.NoError(t, ccemock.EnsureSubnetsToInformer(t, []*ccev1.Subnet{sbn}))
+
+		eni, err := ccemock.NewMockEni(env.k8sObj.Name, env.k8sObj.Spec.InstanceID, sbn.Name, sbn.Spec.CIDR, 1)
+		if !assert.NoError(t, err) {
+			return
+		}
+		eni.Spec.UseMode = ccev2.ENIUseModePrimaryWithSecondaryIP
+		ensureEnisInCacheForIP(t, []*ccev2.ENI{eni})
+
+		env.mockCloud.EXPECT().
+			BatchAddPrivateIpCrossSubnetWithClientToken(
+				gomock.Any(), gomock.Eq(eni.Spec.ENI.ID), gomock.Eq("sbn-primary-reuse"), gomock.Eq([]string{reuseIP}), gomock.Eq(1), gomock.Eq(false), gomock.Any(),
+			).
+			Return([]string{reuseIP}, nil)
+
+		ipset := []*models.PrivateIP{{PrivateIPAddress: reuseIP, SubnetID: "sbn-primary-reuse"}}
+		eniID, err := env.node.reuseIPs(context.Background(), ipset, "default/pod-primary-secondary", "")
 		assert.NoError(t, err)
 		assert.Equal(t, eni.Spec.ENI.ID, eniID)
 	})

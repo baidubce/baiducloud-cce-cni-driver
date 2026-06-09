@@ -8,7 +8,10 @@ v2 版本新架构，支持 VPC-ENI 辅助 IP 和 VPC 路由。版本发布历�
 3. VPC-ENI 模式，新增弹性网卡辅助 IP 节点移出集群时，自动删除弹性网卡 ENI 功能，通过 configmap cce-network-v2-config 配置参数 release-enis 开启或关闭该功能
 4. VPC-ENI 模式，新增主网卡辅助 IP 节点移出集群时，自动回收主网卡辅助 IP 功能
 
-#### 2.13.11 [未发布]
+#### 2.13.12 [未发布]
+1. [Feature] 主网卡辅助 ip 模式支持使用 psts
+
+#### 2.13.11 [20260507]
 1. [Feature] 网卡改名时初始化 mtu，避免虚机设置了错误的 mtu
 2. [Bug] 修复 pod host 侧veth mac 地址变化的bug
 

@@ -672,9 +672,6 @@ func (n *bccNetworkResourceSet) releaseIPsPrimaryENIMode(ctx context.Context, re
 
 // AllocateIPCrossSubnet implements realNodeInf
 func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID string) (result []*models.PrivateIP, eniID string, err error) {
-	if n.usePrimaryENIWithSecondaryMode {
-		return nil, "", fmt.Errorf("primary interface with secondary IP mode not support allocate ip cross subnet")
-	}
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return nil, "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
@@ -778,9 +775,6 @@ func (n *bccNetworkResourceSet) allocateIPCrossSubnet(ctx context.Context, sbnID
 
 // ReuseIPs implements realNodeInf
 func (n *bccNetworkResourceSet) reuseIPs(ctx context.Context, ips []*models.PrivateIP, owner, clientToken string) (eniID string, err error) {
-	if n.usePrimaryENIWithSecondaryMode {
-		return "", fmt.Errorf("primary interface with secondary IP mode not support reuse ip")
-	}
 	if n.k8sObj.Spec.ENI.UseMode == string(ccev2.ENIUseModePrimaryIP) {
 		return "", fmt.Errorf("allocate ip cross subnet not support primary ip mode")
 	}
